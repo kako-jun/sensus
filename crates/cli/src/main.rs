@@ -78,8 +78,20 @@ struct Cli {
     filter: Filter,
 
     /// Filter strength in 0.0..=1.0 (0.0 = original, 1.0 = full effect).
-    #[arg(short, long, default_value_t = 1.0)]
+    #[arg(short, long, default_value_t = 1.0, value_parser = parse_strength)]
     strength: f32,
+}
+
+/// Parse the `--strength` argument and reject values outside `0.0..=1.0`
+/// or NaN early, before any I/O. core 側の clamp は防御的に残してある。
+fn parse_strength(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=1.0).contains(&v) {
+        return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
 }
 
 /// CLI-internal error type. Keeps the `main` ↔ `run` boundary explicit so
