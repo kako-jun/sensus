@@ -93,6 +93,13 @@ enum RunError {
         source: image::ImageError,
     },
 
+    #[error("sensus: failed to save output {path:?}: {source}")]
+    OutputSave {
+        path: PathBuf,
+        #[source]
+        source: image::ImageError,
+    },
+
     /// A filter was selected but not yet implemented in core.
     #[error("{0}")]
     NotImplemented(String),
@@ -114,8 +121,6 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), RunError> {
-    // #1 scaffold: filters are not implemented yet. Read the input so the
-    // path is validated, then delegate to sensus_core::apply.
     let img = image::open(&cli.input).map_err(|source| RunError::InputOpen {
         path: cli.input.clone(),
         source,
@@ -124,13 +129,17 @@ fn run(cli: Cli) -> Result<(), RunError> {
     let (width, height) = (img.width(), img.height());
 
     match sensus_core::apply(cli.filter.to_core(), img, cli.strength) {
-        Ok(_out) => {
-            // Phase 1 以降で実装される枝。現状は到達しない。
+        Ok(out) => {
+            out.save(&cli.output)
+                .map_err(|source| RunError::OutputSave {
+                    path: cli.output.clone(),
+                    source,
+                })?;
             Ok(())
         }
         Err(CoreError::NotImplemented(filter)) => {
             let msg = format!(
-                "sensus: filter {:?} (strength {:.2}) is not implemented yet (scaffold #1).\n\
+                "sensus: filter {:?} (strength {:.2}) is not implemented yet.\n\
                  sensus: input {}x{} {:?} -> output {:?}\n\
                  sensus: see https://github.com/kako-jun/sensus for roadmap.",
                 filter, cli.strength, width, height, cli.input, cli.output
