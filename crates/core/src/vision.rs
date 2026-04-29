@@ -100,9 +100,15 @@ fn linear_to_srgb(c: f32) -> f32 {
 }
 
 /// `[0.0, 1.0]` に clamp してから 8 bit に丸めて保存する。
+///
+/// NaN は明示的に 0 として扱う（saturating cast の暗黙挙動に依存しない）。
 #[inline]
 fn pack_u8(c: f32) -> u8 {
-    (c.clamp(0.0, 1.0) * 255.0).round() as u8
+    if c.is_nan() {
+        0
+    } else {
+        (c.clamp(0.0, 1.0) * 255.0).round() as u8
+    }
 }
 
 /// Protanopia (1 型 2 色覚, L 錐体欠損 / 赤盲) シミュレーション。
@@ -110,21 +116,21 @@ fn pack_u8(c: f32) -> u8 {
 /// `strength` を Machado 2009 severity (0.0..=1.0) として扱い、範囲外は clamp する。
 /// `0.0` は元画像と同一、`1.0` で完全 dichromacy。
 pub fn protanopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
-    apply_lms_matrix(img, &PROTANOPIA, strength)
+    apply_machado_matrix(img, &PROTANOPIA, strength)
 }
 
 /// Deuteranopia (2 型 2 色覚, M 錐体欠損 / 緑盲) シミュレーション。
 ///
 /// `strength` の意味は [`protanopia`] と同じ。
 pub fn deuteranopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
-    apply_lms_matrix(img, &DEUTERANOPIA, strength)
+    apply_machado_matrix(img, &DEUTERANOPIA, strength)
 }
 
 /// Tritanopia (3 型 2 色覚, S 錐体欠損 / 青盲) シミュレーション。
 ///
 /// `strength` の意味は [`protanopia`] と同じ。
 pub fn tritanopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
-    apply_lms_matrix(img, &TRITANOPIA, strength)
+    apply_machado_matrix(img, &TRITANOPIA, strength)
 }
 
 /// Achromatopsia (全色盲) シミュレーション。
@@ -133,7 +139,14 @@ pub fn tritanopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// `strength = 1.0` で完全グレースケール (R == G == B)。`strength = 0.0` で原画像。
 /// 中間値は linear sRGB 空間で線形補間。
 pub fn achromatopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
-    let strength = strength.clamp(0.0, 1.0);
+    // NaN strength は identity（元画像）として扱う。
+    // f32::NAN.clamp(0.0, 1.0) は NaN のままだが、上流で 0.0 に置換しているので
+    // silent な全画素 0 出力にはならない。
+    let strength = if strength.is_nan() {
+        0.0
+    } else {
+        strength.clamp(0.0, 1.0)
+    };
     let mut rgba = img.to_rgba8();
 
     // strength == 0.0 のショートカット（元画像と完全一致を保証）。
@@ -164,12 +177,22 @@ pub fn achromatopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 
 /// linear sRGB 上で 3x3 行列を掛けたシミュレーション結果と原色を、
 /// strength で linear blend する内部実装。
-fn apply_lms_matrix(
+///
+/// 行列は LMS 空間のものではなく、Machado 2009 がプリ計算した
+/// linear sRGB → simulated linear sRGB の severity = 1.0 行列。
+fn apply_machado_matrix(
     img: DynamicImage,
     matrix: &[[f32; 3]; 3],
     strength: f32,
 ) -> Result<DynamicImage> {
-    let strength = strength.clamp(0.0, 1.0);
+    // NaN strength は identity（元画像）として扱う。
+    // f32::NAN.clamp(0.0, 1.0) は NaN のままだが、上流で 0.0 に置換しているので
+    // silent な全画素 0 出力にはならない。
+    let strength = if strength.is_nan() {
+        0.0
+    } else {
+        strength.clamp(0.0, 1.0)
+    };
     let mut rgba: RgbaImage = img.to_rgba8();
 
     if strength == 0.0 {
@@ -298,12 +321,44 @@ mod tests {
     #[test]
     fn nan_strength_does_not_panic() {
         let input = pixel(200, 50, 30, 255);
-        // f32::NaN.clamp(0.0, 1.0) は NaN を返さず、Rust の clamp は max を返す。
-        // ここでは panic しないことだけを確認する（regression guard）。
+        // NaN strength は identity（元画像）として扱う契約。panic しない・
+        // silent corruption しないことを確認する（regression guard）。
         let _ = protanopia(input.clone(), f32::NAN).unwrap();
         let _ = deuteranopia(input.clone(), f32::NAN).unwrap();
         let _ = tritanopia(input.clone(), f32::NAN).unwrap();
         let _ = achromatopsia(input, f32::NAN).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // NaN strength は identity（元画像と byte-exact 一致）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn protanopia_nan_strength_returns_identity() {
+        let input = pixel(255, 0, 0, 200);
+        let out = protanopia(input.clone(), f32::NAN).unwrap();
+        assert_eq!(read_rgba(&out), [255, 0, 0, 200]);
+    }
+
+    #[test]
+    fn deuteranopia_nan_strength_returns_identity() {
+        let input = pixel(255, 0, 0, 200);
+        let out = deuteranopia(input.clone(), f32::NAN).unwrap();
+        assert_eq!(read_rgba(&out), [255, 0, 0, 200]);
+    }
+
+    #[test]
+    fn tritanopia_nan_strength_returns_identity() {
+        let input = pixel(255, 0, 0, 200);
+        let out = tritanopia(input.clone(), f32::NAN).unwrap();
+        assert_eq!(read_rgba(&out), [255, 0, 0, 200]);
+    }
+
+    #[test]
+    fn achromatopsia_nan_strength_returns_identity() {
+        let input = pixel(255, 0, 0, 200);
+        let out = achromatopsia(input.clone(), f32::NAN).unwrap();
+        assert_eq!(read_rgba(&out), [255, 0, 0, 200]);
     }
 
     // ---------------------------------------------------------------
@@ -330,7 +385,7 @@ mod tests {
     #[test]
     fn achromatopsia_pure_red_luma_matches_bt709() {
         // 純赤 (linear 1.0, 0, 0) の Y = 0.2126
-        // sRGB に戻して 8bit 化: linear_to_srgb(0.2126) ≈ 0.4986 → 127
+        // sRGB に戻して 8bit 化: linear_to_srgb(0.2126) ≈ 0.4984 → 127
         let input = pixel(255, 0, 0, 255);
         let [r, g, b, _] = read_rgba(&achromatopsia(input, 1.0).unwrap());
         assert_eq!(r, 127);
@@ -340,7 +395,7 @@ mod tests {
 
     #[test]
     fn achromatopsia_pure_green_luma_matches_bt709() {
-        // 純緑の Y = 0.7152、sRGB ≈ 0.8632、8bit ≈ 220
+        // 純緑の Y = 0.7152、sRGB ≈ 0.8625、8bit ≈ 220
         let input = pixel(0, 255, 0, 255);
         let [r, _, _, _] = read_rgba(&achromatopsia(input, 1.0).unwrap());
         assert_eq!(r, 220);
@@ -348,7 +403,7 @@ mod tests {
 
     #[test]
     fn achromatopsia_pure_blue_luma_matches_bt709() {
-        // 純青の Y = 0.0722、sRGB ≈ 0.2998、8bit ≈ 76
+        // 純青の Y = 0.0722、sRGB ≈ 0.2979、8bit ≈ 76
         let input = pixel(0, 0, 255, 255);
         let [r, _, _, _] = read_rgba(&achromatopsia(input, 1.0).unwrap());
         assert_eq!(r, 76);
@@ -432,6 +487,63 @@ mod tests {
             assert!((g as i16 - 128).abs() <= 8, "G={g}");
             assert!((b as i16 - 128).abs() <= 8, "B={b}");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // matrix 系: severity=1.0 で Machado 2009 が示す byte-exact 値に一致
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn protanopia_red_severity_1_matches_machado_2009() {
+        let img = pixel(255, 0, 0, 255);
+        let out = protanopia(img, 1.0).unwrap();
+        let raw = out.to_rgba8().into_raw();
+        assert_eq!(
+            &raw[..3],
+            &[109, 95, 0],
+            "protanopia(red, 1.0) per Machado 2009"
+        );
+        assert_eq!(raw[3], 255, "alpha preserved");
+    }
+
+    #[test]
+    fn deuteranopia_red_severity_1_matches_machado_2009() {
+        let img = pixel(255, 0, 0, 255);
+        let out = deuteranopia(img, 1.0).unwrap();
+        let raw = out.to_rgba8().into_raw();
+        assert_eq!(
+            &raw[..3],
+            &[163, 144, 0],
+            "deuteranopia(red, 1.0) per Machado 2009"
+        );
+        assert_eq!(raw[3], 255, "alpha preserved");
+    }
+
+    #[test]
+    fn tritanopia_blue_severity_1_matches_machado_2009() {
+        let img = pixel(0, 0, 255, 255);
+        let out = tritanopia(img, 1.0).unwrap();
+        let raw = out.to_rgba8().into_raw();
+        assert_eq!(
+            &raw[..3],
+            &[0, 107, 150],
+            "tritanopia(blue, 1.0) per Machado 2009"
+        );
+        assert_eq!(raw[3], 255, "alpha preserved");
+    }
+
+    #[test]
+    fn achromatopsia_red_severity_1_matches_bt709_luma() {
+        // 純赤 (255, 0, 0) は BT.709 photopic luminance で (127, 127, 127)
+        let img = pixel(255, 0, 0, 255);
+        let out = achromatopsia(img, 1.0).unwrap();
+        let raw = out.to_rgba8().into_raw();
+        assert_eq!(
+            &raw[..3],
+            &[127, 127, 127],
+            "achromatopsia(red, 1.0) per BT.709 photopic luminance"
+        );
+        assert_eq!(raw[3], 255, "alpha preserved");
     }
 
     // ---------------------------------------------------------------
