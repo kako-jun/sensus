@@ -16,10 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Gaussian. `strength = 1.0` corresponds to the clinical maxima -6 D /
   +4 D / +3 D add / -3 CD respectively, mapped to a `min(W, H)`-relative
   radius assuming a 4 mm mesopic pupil and a 30° image FOV at ~50 cm
-  viewing distance (Smith–Helmholtz small-angle approximation,
-  `angular_blur ≈ pupil × |D|`). `astigmatism()` accepts an explicit
-  `axis_deg` (sharp meridian, medical convention); the elliptical kernel's
-  long / blurred axis is at `axis_deg + 90°`. Alpha is preserved.
+  viewing distance. The Smith–Helmholtz small-angle approximation
+  `θ ≈ pupil(m) × |D|` returns angular *diameter*, so the disk radius is
+  `θ / 2`. `astigmatism()` is **1D directional blur** (pure cylindrical
+  lens / line spread function), not an elliptical disk: a cylindrical
+  refractive error focuses light to a line, so the optically correct
+  point-spread is one-dimensional in the meridian perpendicular to the
+  cylinder axis. The kernel's short axis is sub-pixel
+  (`MIN_BLUR_RADIUS_PX = 0.5 px`), making the implementation a 1-row
+  directional box filter. `axis_deg` denotes the sharp meridian (medical
+  convention); the blurred direction is at `axis_deg + 90°`. Alpha is
+  preserved.
   Implementation uses precomputed per-row spans + a horizontal prefix
   sum so the cost is `O(W × H × kernel_height)` (≈ 1 s for myopia at
   1024 × 1024, well under the 5 s target).

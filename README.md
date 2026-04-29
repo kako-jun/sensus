@@ -27,7 +27,7 @@ see [`docs/roadmap.md`](docs/roadmap.md) for what is implemented today.
 | `myopia`               | ✅ implemented | 2 (#4) | Disk blur, -6 D max |
 | `hyperopia`            | ✅ implemented | 2 (#4) | Disk blur, +4 D max |
 | `presbyopia`           | ✅ implemented | 2 (#4) | Disk blur, +3 D add max |
-| `astigmatism`          | ✅ implemented | 2 (#4) | Elliptical disk blur, configurable axis |
+| `astigmatism`          | ✅ implemented | 2 (#4) | 1D directional blur (pure cylindrical lens), configurable axis |
 | `glaucoma` / `macular-degeneration` / `hemianopia` / `tunnel-vision` | planned | 3 (#5) | Visual field defects |
 | `cataract` / `floaters` / `photophobia` / `night-blindness` | planned | 3 (#6) | Light & transparency |
 
@@ -129,8 +129,11 @@ vision deficiency in linear sRGB space using the
 (BT.601 luma coefficients are designed for NTSC CRTs and are colorimetrically
 wrong for sRGB images.)
 Phase 2 (refraction) applies an optically correct **disk blur** in linear
-sRGB — pupil 4 mm × diopter, `min(W, H)`-relative radius, edge-replicated
-borders. See `docs/overview.md` for the full derivation.
+sRGB — radius derived from `0.5 × pupil_diameter × |D|` (Smith–Helmholtz
+gives angular *diameter*, so the radius is half), `min(W, H)`-relative,
+edge-replicated borders. `astigmatism` is **1D directional blur** (pure
+cylindrical lens / line spread function), not an elliptical disk — see
+`docs/overview.md` for the full derivation.
 
 The same function signatures can be applied frame-by-frame for video, or
 chained together via `sensus_core::pipeline` (Phase 4).

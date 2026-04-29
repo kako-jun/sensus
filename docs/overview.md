@@ -124,23 +124,33 @@ defocus using a **disk (pillbox) blur** in linear sRGB space:
 
 ### Diopter → pixel-radius mapping
 
-The angular blur produced by `D` diopters of defocus is
-`pupil_diameter × |D|` radians (small-angle / Smith–Helmholtz
-approximation). With a 4 mm mesopic pupil and an assumed image FOV of 30°
-(viewing a print at ~50 cm), `strength = 1.0` corresponds to:
+The angular **diameter** of the circle of confusion produced by `D`
+diopters of defocus is `pupil_diameter(m) × |D|` radians (small-angle /
+Smith–Helmholtz approximation — note this is *diameter*, not radius).
+The disk **radius** used for convolution is therefore half of that:
 
-| Filter | Clinical maximum | Disk radius (`min(W, H)` ratio) |
-|---|---|---|
-| `myopia` | -6 D | 5.0% |
-| `hyperopia` | +4 D | 3.3% |
-| `presbyopia` | +3 D add | 2.5% |
-| `astigmatism` | -3 CD (cylinder) | 2.5% (long axis only) |
+```
+radius_rad = 0.5 × pupil_diameter(m) × |D|_max
+radius_ratio = radius_rad / image_fov_rad
+```
+
+With a 4 mm mesopic pupil (`pupil = 0.004 m`) and an assumed image FOV
+of 30° ≈ 0.5236 rad (viewing a ~25 cm print at ~50 cm), `strength = 1.0`
+corresponds to:
+
+| Filter | Clinical maximum | θ_diameter | radius (rad) | `min(W, H)` ratio |
+|---|---|---|---|---|
+| `myopia` | -6 D | 0.024 rad | 0.012 | 0.023 (2.3%) |
+| `hyperopia` | +4 D | 0.016 rad | 0.008 | 0.015 (1.5%) |
+| `presbyopia` | +3 D add | 0.012 rad | 0.006 | 0.011 (1.1%) |
+| `astigmatism` | -3 CD (cylinder) | 0.012 rad | 0.006 | 0.011 (long axis only) |
 
 Intermediate `strength` values scale the radius linearly. Below ~0.5 px
 the filter is identity (sub-pixel blur is not perceptible). The
 "clinical maximum" column is the upper bound the slider represents — the
-real distribution of refractive error is wider, but sensus is a slider
-toy, not a diagnostic instrument.
+real distribution of refractive error is wider, but sensus prioritises
+optical fidelity (radius derived from physical optics) over visual
+exaggeration.
 
 ### Two-dimensional limitation
 
@@ -153,14 +163,32 @@ applies a uniform blur to the whole frame. Calling `myopia(img, 1.0)`,
 in radius (not in spatial selectivity). A future extension could accept
 a depth map and produce depth-aware defocus.
 
-### Astigmatism axis convention
+### Astigmatism: pure cylindrical lens (1D directional blur)
+
+A pure cylindrical refractive error focuses light to a *line* on the
+retina (Sturm's conoid: one meridian focuses, the orthogonal one does
+not). The optically correct point-spread is therefore a **line spread
+function**, i.e. **1D directional blur** in the meridian perpendicular
+to the cylinder axis — *not* an elliptical disk.
+
+In sensus the kernel is built as an ellipse where the short axis is
+clamped to the sub-pixel floor (`MIN_BLUR_RADIUS_PX = 0.5 px`); this
+makes the kernel degenerate into a 1-row directional box filter, which
+is the discrete approximation of the line spread function.
 
 `vision::astigmatism(img, strength, axis_deg)` follows the medical
 convention where `axis_deg` denotes the **sharp meridian** (the
 orientation of the cylinder lens that corrects the astigmatism). The
-ellipse's *long axis* (i.e. the blurred direction) is therefore at
-`axis_deg + 90°`. Default `axis = 90°` corresponds to with-the-rule
-astigmatism (vertical lines sharp, horizontal lines blurred).
+blurred direction is therefore at `axis_deg + 90°`. Default
+`axis = 90°` corresponds to with-the-rule astigmatism (vertical lines
+sharp, horizontal lines blurred). `axis_deg` is normalised
+modulo 180° (`rem_euclid`); only `NaN` falls back to the 90° default.
+
+Real clinical astigmatism is almost always *compound* (cylinder + a
+spherical refractive error), so both meridians are blurred to differing
+degrees. sensus models the **pure cylinder** in isolation; compound
+astigmatism is expressed by chaining `Astigmatism + Myopia` (or
+`+ Hyperopia`) through the upcoming pipeline (Issue #10).
 
 `apply(Filter::Astigmatism, ...)` always uses the default 90° axis;
 callers that need a different axis should call `vision::astigmatism()`
