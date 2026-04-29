@@ -12,9 +12,6 @@ readme = "../../README.md"
 keywords = ["accessibility", "image", "color-vision", "vision", "hearing"]
 categories = ["graphics", "multimedia", "accessibility"]
 
-[lib]
-crate-type = ["rlib"]
-
 [dependencies]
 image = { workspace = true, features = ["png"] }
 thiserror = { workspace = true }
