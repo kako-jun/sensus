@@ -237,3 +237,37 @@ fn cli_axis_out_of_range_is_rejected() {
         "expected no output PNG when CLI rejects args"
     );
 }
+
+#[test]
+fn cli_axis_with_non_astigmatism_filter_warns() {
+    // myopia + --axis 45 は astigmatism でないので silent ignore せず
+    // stderr に warning を出す。実行自体は成功 (exit 0 + 出力 PNG 生成)。
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    let output = dir.path().join("out.png");
+    write_pixel_png(&input, [120, 120, 120, 255]);
+
+    let out = cargo_run()
+        .args([
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--filter",
+            "myopia",
+            "--strength",
+            "0.5",
+            "--axis",
+            "45",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "expected exit 0");
+    assert!(output.exists(), "expected output PNG to be written");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--axis"),
+        "expected warning about --axis on stderr, got: {stderr}"
+    );
+}

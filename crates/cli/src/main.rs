@@ -162,6 +162,15 @@ fn run(cli: Cli) -> Result<(), RunError> {
     // astigmatism のみ CLI から軸を渡せるよう特別扱いする。他フィルタは
     // 既定軸の apply() ファサード経由 (同じ動作・他フィルタでは axis は無視)。
     let core_filter = cli.filter.to_core();
+
+    // --axis を明示指定 (≠ default 90.0) したのに対象が astigmatism でない場合、
+    // silent に無視せず stderr で警告する。
+    if !matches!(core_filter, CoreFilter::Astigmatism) && cli.axis != 90.0 {
+        eprintln!(
+            "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
+        );
+    }
+
     let result = match core_filter {
         CoreFilter::Astigmatism => sensus_core::vision::astigmatism(img, cli.strength, cli.axis),
         f => sensus_core::apply(f, img, cli.strength),
