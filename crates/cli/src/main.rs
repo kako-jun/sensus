@@ -80,6 +80,12 @@ struct Cli {
     /// Filter strength in 0.0..=1.0 (0.0 = original, 1.0 = full effect).
     #[arg(short, long, default_value_t = 1.0, value_parser = parse_strength)]
     strength: f32,
+
+    /// Astigmatism axis in degrees (0.0..=180.0). Only used with
+    /// `--filter astigmatism`. Default `90.0` (with-the-rule astigmatism:
+    /// vertical sharp, horizontal blurred).
+    #[arg(long, default_value_t = 90.0, value_parser = parse_axis)]
+    axis: f32,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -90,6 +96,19 @@ fn parse_strength(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=1.0).contains(&v) {
         return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse the `--axis` argument (astigmatism cylinder axis in degrees) and
+/// reject values outside `0.0..=180.0` or NaN early. 軸の周期は 180° なので
+/// それより広い範囲は意味的に冗長 (誤入力の可能性が高い) として弾く。
+fn parse_axis(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=180.0).contains(&v) {
+        return Err(format!("axis must be in 0.0..=180.0 degrees, got {v}"));
     }
     Ok(v)
 }
@@ -140,7 +159,15 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
     let (width, height) = (img.width(), img.height());
 
-    match sensus_core::apply(cli.filter.to_core(), img, cli.strength) {
+    // astigmatism のみ CLI から軸を渡せるよう特別扱いする。他フィルタは
+    // 既定軸の apply() ファサード経由 (同じ動作・他フィルタでは axis は無視)。
+    let core_filter = cli.filter.to_core();
+    let result = match core_filter {
+        CoreFilter::Astigmatism => sensus_core::vision::astigmatism(img, cli.strength, cli.axis),
+        f => sensus_core::apply(f, img, cli.strength),
+    };
+
+    match result {
         Ok(out) => {
             out.save(&cli.output)
                 .map_err(|source| RunError::OutputSave {
