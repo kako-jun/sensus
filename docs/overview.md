@@ -76,6 +76,31 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 See [`roadmap.md`](roadmap.md) for the per-phase implementation plan.
 
+## Color vision algorithm (Phase 1, #2)
+
+Color vision deficiency simulation uses the
+[Machado, Oliveira & Fernandes 2009][machado] physiologically-based model
+(IEEE TVCG, DOI: [10.1109/TVCG.2009.113][doi]). The implementation:
+
+- Operates entirely in **linear sRGB** — input pixels are gamma-decoded,
+  the simulation is computed, and the result is gamma-encoded back to
+  sRGB. Naïve implementations that multiply matrices against gamma-encoded
+  sRGB are color-scientifically incorrect.
+- Applies the published **severity = 1.0** matrix and uses
+  `lerp(original, simulated, strength)` in linear space for intermediate
+  `strength` values. This is the linearised approximation of anomalous
+  trichromacy that Machado suggests and that DaltonLens et al. adopt.
+- Treats `achromatopsia` as a separate path: cone tristimulus values do
+  not apply (the cones are dysfunctional), so the filter computes the
+  CIE photopic luminance `Y = 0.2126·R + 0.7152·G + 0.0722·B` (BT.709
+  primaries, linear) and blends towards `(Y, Y, Y)`. BT.601 luma
+  (`0.299/0.587/0.114`, NTSC CRT) is **not** used — it is wrong for
+  sRGB content.
+- Preserves the alpha channel.
+
+[machado]: https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
+[doi]: https://doi.org/10.1109/TVCG.2009.113
+
 ## Non-goals
 
 - **WebAssembly** — sensus is consumed by native apps; a wasm build adds
