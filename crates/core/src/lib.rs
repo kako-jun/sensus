@@ -53,12 +53,18 @@ pub enum Filter {
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
 ///
-/// Phase 1〜3 で各フィルタを順次実装する。現状は scaffold (#1) のため、
-/// すべてのバリアントが [`Error::NotImplemented`] を返す。
+/// Phase 1 (#2) で色覚特性 4 種を実装済み。Phase 2 以降のフィルタは
+/// 引き続き [`Error::NotImplemented`] を返す。
 pub fn apply(
     filter: Filter,
-    _img: image::DynamicImage,
-    _strength: f32,
+    img: image::DynamicImage,
+    strength: f32,
 ) -> Result<image::DynamicImage> {
-    Err(Error::NotImplemented(filter))
+    match filter {
+        Filter::Protanopia => vision::protanopia(img, strength),
+        Filter::Deuteranopia => vision::deuteranopia(img, strength),
+        Filter::Tritanopia => vision::tritanopia(img, strength),
+        Filter::Achromatopsia => vision::achromatopsia(img, strength),
+        other => Err(Error::NotImplemented(other)),
+    }
 }
