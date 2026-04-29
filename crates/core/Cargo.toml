@@ -1,0 +1,17 @@
+[package]
+name = "sensus-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Sensory perception simulation core: vision and hearing filters for accessibility and education"
+readme = "../../README.md"
+keywords = ["accessibility", "image", "color-vision", "vision", "hearing"]
+categories = ["graphics", "multimedia", "accessibility"]
+
+[dependencies]
+image = { workspace = true, features = ["png"] }
+thiserror = { workspace = true }
