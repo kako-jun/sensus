@@ -1,6 +1,6 @@
 # sensus - Sensory Perception Simulation
 
-五感（主に視覚・聴覚）の特性シミュレーションを行う Rust crate。色覚特性、ぼやけ、視野欠損、聴覚異常などのフィルタを画像/音声に適用する。`image::DynamicImage` を入出力とする。universal-experience（Tauri / Flutter）から内部ライブラリとして利用される。
+五感（主に視覚・聴覚）の特性シミュレーションを行う Rust crate。色覚特性、ぼやけ、視野欠損、聴覚異常などのフィルタを画像/音声に適用する。`image::DynamicImage` を入出力とする。universal-experience（Flutter）から内部ライブラリとして利用される。
 
 ## ビルド・テスト
 
@@ -53,7 +53,7 @@ sensus/
 
 ## 主要な設計判断
 
-- **WASM ターゲットは持たない** — sensus の主クライアントは universal-experience（Tauri / Flutter の native）。Web GUI はやらない方針なので、wasm32 用の getrandom 等の追加依存は避ける
+- **WASM ターゲットは持たない** — sensus の主クライアントは universal-experience（Flutter の native）。Web GUI はやらない方針なので、wasm32 用の getrandom 等の追加依存は避ける
 - **入出力は `image::DynamicImage` で統一** — orber と同じ規約。動画はフレーム単位で同関数を呼ぶ
 - **CLI は scaffold（#1）では未実装メッセージで `exit(2)`** — Phase 1（#2）で `--filter deuteranopia` から実装を埋める
 - **フィルタは純粋関数** — 内部 RNG 状態を持たない。乱数が必要な場合は `seed` パラメータを明示的に受け取る（飛蚊症など）
@@ -73,5 +73,5 @@ sensus/
 
 ## 関連プロジェクト
 
-- [universal-experience](https://github.com/kako-jun/universal-experience) — sensus を内蔵する Tauri / Flutter アプリ
+- [universal-experience](https://github.com/kako-jun/universal-experience) — sensus を内蔵する Flutter アプリ
 - [orber](https://github.com/kako-jun/orber) — 同じ workspace 構成・同じ `image::DynamicImage` 規約のテンプレート元

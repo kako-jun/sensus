@@ -44,7 +44,7 @@ sensus/
 ```
 
 WebAssembly is **not** a target — sensus is consumed by native apps
-(Tauri / Flutter), most prominently
+(Flutter), most prominently
 [universal-experience](https://github.com/kako-jun/universal-experience).
 Web frontends are out of scope.
 

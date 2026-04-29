@@ -37,6 +37,14 @@ for symptoms worth taking seriously.
 
 ## Install
 
+crates.io 公開は v0.1.0 から（[#12](https://github.com/kako-jun/sensus/issues/12)）。それまでは git からインストールしてください:
+
+```sh
+cargo install --git https://github.com/kako-jun/sensus
+```
+
+v0.1.0 以降は通常通り:
+
 ```sh
 cargo install sensus
 ```
@@ -65,7 +73,14 @@ Run `sensus --help` for the full list of filter names.
 ## Library usage
 
 `sensus-core` is the pure-logic crate (no I/O). Take a `DynamicImage` in,
-get a `DynamicImage` out:
+get a `DynamicImage` out.
+
+```toml
+# Cargo.toml
+[dependencies]
+# crates.io 公開（v0.1.0）まではgit依存で
+sensus-core = { git = "https://github.com/kako-jun/sensus" }
+```
 
 ```rust
 use image::DynamicImage;
