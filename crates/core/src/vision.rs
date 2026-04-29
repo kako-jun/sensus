@@ -10,19 +10,30 @@
 //!
 //! Phase 2 (Issue #4) では焦点・屈折 4 種を実装する:
 //!
-//! - [`myopia`]      — 近視 (-6D 上限相当)
-//! - [`hyperopia`]   — 遠視 (+4D 上限相当)
-//! - [`presbyopia`]  — 老眼 (+3D add 相当)
-//! - [`astigmatism`] — 乱視 (-3CD 上限相当, 軸方向はシャープ)
+//! - [`myopia`]      — 近視 (-6D 上限相当, 等方 disk blur)
+//! - [`hyperopia`]   — 遠視 (+4D 上限相当, 等方 disk blur)
+//! - [`presbyopia`]  — 老眼 (+3D add 相当, 等方 disk blur)
+//! - [`astigmatism`] — 乱視 (純粋 cylinder lens, -3CD 上限相当の **方向性 blur**)
 //!
-//! いずれも光学的に正しい **disk blur (pillbox kernel)** を linear sRGB 空間で
-//! 適用する。Gaussian は実際の defocus blur ではないため採用しない（瞳孔は円形
-//! であり、点光源の retina 上の像は circle of confusion = 円となる）。
+//! myopia / hyperopia / presbyopia は光学的に正しい等方 **disk blur
+//! (pillbox kernel)** を linear sRGB 空間で適用する。Gaussian は実際の defocus
+//! blur ではないため採用しない（瞳孔は円形であり、点光源の retina 上の像は
+//! circle of confusion = 円となる）。
+//!
+//! astigmatism は **isolated cylinder error** のシミュレーションで、純粋
+//! cylinder lens は line focus (焦線) を作るため光学的には **1D directional
+//! blur** が正しい。実装上は楕円カーネルの短軸を sub-pixel まで縮退させて
+//! 1D box フィルタとして畳み込む。臨床現場で多い合併乱視 (cylinder + sphere)
+//! は両経線にぼけがあるが、これは Phase 4 (#10) pipeline で
+//! `Myopia + Astigmatism` のような合成として扱う前提で、本フィルタ単体では
+//! 表現しない。
 //!
 //! ディオプター → 画素半径の換算は以下の前提による:
-//! pupil_diameter (4 mm, mesopic 標準) × |D| ≈ angular blur (rad)。
-//! 視距離 50 cm / FOV 30° を想定し、画像の `min(width, height)` に対する比率で
-//! 表現する。詳細は各関数の `MAX_RADIUS_RATIO` 定数のコメントを参照。
+//! Smith-Helmholtz 近似 `θ_diameter (rad) ≈ pupil_diameter(m) × |D|` は
+//! **角直径 (CoC 円盤の直径)** を返すので、半径は `θ_diameter / 2`。
+//! pupil 4 mm = 0.004 m (mesopic 標準), 視距離 50 cm / FOV 30° を想定し、
+//! 画像の `min(width, height)` に対する比率で表現する。詳細は各関数の
+//! `MAX_RADIUS_RATIO` 定数のコメントを参照。
 //!
 //! # アルゴリズム
 //!
@@ -242,29 +253,54 @@ fn apply_machado_matrix(
 // Phase 2: focus / refraction (disk blur in linear sRGB)
 // ---------------------------------------------------------------------
 
-/// strength=1.0 における近視 (-6D 相当) の disk 半径比 (min(W,H) 比)。
+/// strength=1.0 における近視 (-6D 相当) の disk **半径** 比 (min(W,H) 比)。
 ///
-/// 根拠: pupil 4 mm × 6 D = angular blur 0.024 rad ≈ 1.37°。視距離 50 cm /
-/// FOV 30° 前提で 1.37 / 30 ≒ 4.6% → 約 5% に丸める。
-const MYOPIA_MAX_RADIUS_RATIO: f32 = 0.050;
+/// 導出: Smith-Helmholtz 近似 `θ_diameter ≈ pupil(m) × |D|`（angular **diameter**）
+///   - pupil = 4 mm = 0.004 m（mesopic 標準）
+///   - max diopter = 6 D（強度近視の入口）
+///   - θ_diameter = 0.004 × 6 = 0.024 rad ≈ 1.375°
+///   - radius (rad) = θ_diameter / 2 = 0.012 rad
+///
+/// 画像 FOV = 30° ≈ 0.5236 rad（視距離 50 cm の典型的写真鑑賞）と仮定:
+///   ratio = 0.012 / 0.5236 ≈ 0.02292 → 0.023 に丸める
+const MYOPIA_MAX_RADIUS_RATIO: f32 = 0.023;
 
-/// strength=1.0 における遠視 (+4D 相当) の disk 半径比 (min(W,H) 比)。
+/// strength=1.0 における遠視 (+4D 相当) の disk **半径** 比 (min(W,H) 比)。
 ///
-/// 根拠: pupil 4 mm × 4 D = 0.016 rad ≈ 0.916°、FOV 30° の約 3.05%。
-/// 余裕を持って 3.3% を上限とする。
-const HYPEROPIA_MAX_RADIUS_RATIO: f32 = 0.033;
+/// 導出: Smith-Helmholtz 近似 `θ_diameter ≈ pupil(m) × |D|`
+///   - pupil = 0.004 m, max diopter = 4 D
+///   - θ_diameter = 0.004 × 4 = 0.016 rad ≈ 0.917°
+///   - radius (rad) = 0.008 rad
+///
+/// FOV 30° (0.5236 rad) 前提で:
+///   ratio = 0.008 / 0.5236 ≈ 0.01528 → 0.015 に丸める
+const HYPEROPIA_MAX_RADIUS_RATIO: f32 = 0.015;
 
-/// strength=1.0 における老眼 (+3D add 相当) の disk 半径比 (min(W,H) 比)。
+/// strength=1.0 における老眼 (+3D add 相当) の disk **半径** 比 (min(W,H) 比)。
 ///
-/// 根拠: pupil 4 mm × 3 D = 0.012 rad ≈ 0.687°、FOV 30° の約 2.29%。
-/// 2.5% を上限とする。
-const PRESBYOPIA_MAX_RADIUS_RATIO: f32 = 0.025;
+/// 導出: Smith-Helmholtz 近似 `θ_diameter ≈ pupil(m) × |D|`
+///   - pupil = 0.004 m, max diopter = 3 D
+///   - θ_diameter = 0.004 × 3 = 0.012 rad ≈ 0.687°
+///   - radius (rad) = 0.006 rad
+///
+/// FOV 30° (0.5236 rad) 前提で:
+///   ratio = 0.006 / 0.5236 ≈ 0.01146 → 0.011 に丸める
+const PRESBYOPIA_MAX_RADIUS_RATIO: f32 = 0.011;
 
-/// strength=1.0 における乱視 (-3CD 相当) の長軸 (ボケ方向) 半径比。
+/// strength=1.0 における乱視 (-3CD 相当) の **ボケ方向** 半径比 (min(W,H) 比)。
 ///
-/// 根拠: pupil 4 mm × 3 D = 0.012 rad ≈ 0.687°、FOV 30° の約 2.29%。
-/// 2.5% を長軸上限、短軸はシャープ (0.5px ベース) とする。
-const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.025;
+/// 純粋 cylinder lens の line focus は 1D directional blur となるため、
+/// 楕円カーネルの長軸 (ボケ方向) のみが意味を持つ。短軸は sub-pixel に縮退して
+/// 1D box フィルタになる。
+///
+/// 導出: Smith-Helmholtz 近似 `θ_diameter ≈ pupil(m) × |D|`
+///   - pupil = 0.004 m, max cylinder diopter = 3 CD
+///   - θ_diameter = 0.004 × 3 = 0.012 rad ≈ 0.687°
+///   - radius (rad) = 0.006 rad
+///
+/// FOV 30° (0.5236 rad) 前提で:
+///   ratio = 0.006 / 0.5236 ≈ 0.01146 → 0.011 に丸める
+const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
 
 /// 識別不能とみなす最小半径 (px)。1px 未満のぼけは視認できないため identity。
 const MIN_BLUR_RADIUS_PX: f32 = 0.5;
@@ -396,8 +432,11 @@ fn ellipse_blur(
     // pad_left × / pad_right × で個別に加算する。
     let mut prefix: Vec<[f64; 3]> = vec![[0.0; 3]; (w as usize) + 1];
 
+    // y_out ループ外で 1 回だけ alloc し、各 y で zero-fill して再利用。
+    let mut row_sums: Vec<[f32; 3]> = vec![[0.0; 3]; w as usize];
+
     for y_out in 0..h {
-        let mut row_sums: Vec<[f32; 3]> = vec![[0.0; 3]; w as usize];
+        row_sums.iter_mut().for_each(|s| *s = [0.0; 3]);
 
         for (i, &(lo, hi)) in spans.rows.iter().enumerate() {
             let sy = (y_out + dy_min + i as i32).clamp(0, h - 1) as usize;
@@ -526,10 +565,15 @@ pub fn presbyopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// **シャープに見える経線方向** (cylinder lens の柱方向) を指す医学的慣習。
 /// 実装上、楕円カーネルの **長軸 (ボケ方向)** は `axis_deg + 90°` 方向となる。
 ///
-/// strength=1.0 で約 -3CD 相当 (長軸半径 ≈ 2.5% × min(W,H))。短軸は
-/// `MIN_BLUR_RADIUS_PX` (0.5 px) で base sharpness を保つ。
-/// `axis_deg` が NaN または範囲外の場合は 90° (with-the-rule) にフォールバック。
-/// alpha は保持。
+/// strength=1.0 で約 -3CD 相当 (長軸半径 ≈ 1.1% × min(W,H))。
+///
+/// 純粋 cylinder lens の line focus は **1D directional blur** が物理的に正しい。
+/// 短軸は `MIN_BLUR_RADIUS_PX` (0.5 px) で sub-pixel に縮退するため、
+/// 楕円カーネルは事実上ボケ方向の 1D box フィルタとして動作する。
+///
+/// `axis_deg` は `rem_euclid(180.0)` で 180° 周期に正規化される
+/// (`360.0` → `0.0`、`-45.0` → `135.0`)。NaN の場合のみ既定値 90°
+/// (with-the-rule) にフォールバックする。alpha は保持。
 pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -537,20 +581,14 @@ pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<Dy
     let height = rgba.height();
     let min_dim = width.min(height) as f32;
 
-    // 軸の正規化: NaN や範囲外は 90° にフォールバック。
+    // 軸の正規化: NaN は 90° にフォールバック、有限値は 180° 周期で正規化。
     let axis_norm = if axis_deg.is_nan() {
         90.0
     } else {
-        // 軸の周期は 180°
-        let a = axis_deg.rem_euclid(180.0);
-        if !(0.0..=180.0).contains(&a) {
-            90.0
-        } else {
-            a
-        }
+        axis_deg.rem_euclid(180.0)
     };
 
-    let a_radius = (s * ASTIGMATISM_MAX_RADIUS_RATIO * min_dim).max(MIN_BLUR_RADIUS_PX * 0.5);
+    let a_radius = s * ASTIGMATISM_MAX_RADIUS_RATIO * min_dim;
     let b_radius = MIN_BLUR_RADIUS_PX; // short axis (sharp side)
 
     if s == 0.0 || a_radius < MIN_BLUR_RADIUS_PX {
@@ -1042,11 +1080,13 @@ mod tests {
 
     #[test]
     fn myopia_spreads_single_dot() {
-        // 41x41 画像中央に white dot。strength=1.0 → 半径 ≈ 0.05 * 41 ≒ 2.05 px。
-        let input = center_white_dot(41);
+        // 81x81 画像中央に white dot。strength=1.0 → 半径 ≈ 0.023 * 81 ≒ 1.86 px。
+        // disk は (0,0) と上下左右と斜め 4 隅 (dx²+dy² ≤ 3.46) で 9 pixel。
+        // 中心ピクセルの白 (1/9) ≈ 28 → 0 < center < 255 の範囲に入る。
+        let input = center_white_dot(81);
         let out = myopia(input.clone(), 1.0).unwrap().to_rgba8();
-        let cx = 20;
-        let cy = 20;
+        let cx = 40;
+        let cy = 40;
         let center = out.get_pixel(cx, cy);
         // 中心は disk の平均化で white より小さく、しかし R==G==B のまま。
         assert_eq!(center[0], center[1], "center R==G");
@@ -1110,7 +1150,8 @@ mod tests {
         //     → 縦線が左右に「滲む」
         //   - axis=0  (horizontal sharp): 横方向はシャープ、縦方向にボケる
         //     → 縦線はあまり滲まない（縦は元から sharp、横方向のボケはほぼ生じない）
-        let size = 81_u32;
+        // 201x201 で長軸半径 ≈ 0.011 * 201 ≒ 2.21 px、1D box ~5 px 幅。
+        let size = 201_u32;
         let input = vertical_line(size);
         let cx = size / 2;
         let cy = size / 2;
@@ -1120,7 +1161,7 @@ mod tests {
 
         // axis=90 (横方向ボケ): 中央行で縦線から左右に離れた点も明るくなる
         // axis=0  (縦方向ボケ): 中央行で同じ位置はほぼ黒のまま（縦線の幅は変わらない）
-        // 中央線から 1px 横に離れた点を比較
+        // 中央線から 2px 横に離れた点を比較
         let off_x = cx + 2;
         let h_off = blur_h.get_pixel(off_x, cy)[0] as i32;
         let v_off = blur_v.get_pixel(off_x, cy)[0] as i32;
@@ -1210,5 +1251,53 @@ mod tests {
         }
         let out = astigmatism(input, 1.0, 45.0).unwrap();
         assert_eq!((out.width(), out.height()), (31, 17));
+    }
+
+    // ---------------------------------------------------------------
+    // astigmatism: byte-exact な軸直交性
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn astigmatism_axes_are_orthogonal_byte_exact() {
+        // 縦線に axis=90 (横方向ボケ) を適用した結果を 90° 回転すると、
+        // 横線に axis=0 (縦方向ボケ) を適用した結果と byte-exact で一致するはず。
+        let size = 201_u32;
+        let v_input = vertical_line(size);
+        let h_input = horizontal_line(size);
+
+        let bv = astigmatism(v_input, 1.0, 90.0).unwrap().to_rgba8();
+        let bh = astigmatism(h_input, 1.0, 0.0).unwrap().to_rgba8();
+
+        for y in 0..size {
+            for x in 0..size {
+                assert_eq!(
+                    bv.get_pixel(x, y),
+                    bh.get_pixel(y, x),
+                    "axis=90 vertical line at ({x},{y}) should equal axis=0 horizontal line rotated"
+                );
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 性能リグレッションガード (--ignored)
+    // ---------------------------------------------------------------
+
+    #[test]
+    #[ignore = "perf check; run with `cargo test -- --ignored`"]
+    fn myopia_1024_full_strength_under_5s() {
+        use std::time::Instant;
+        let img = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            1024,
+            1024,
+            image::Rgba([128, 128, 128, 255]),
+        ));
+        let start = Instant::now();
+        let _ = myopia(img, 1.0).unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_secs_f32() < 5.0,
+            "1024×1024 myopia s=1.0 took {elapsed:?}, target < 5s"
+        );
     }
 }
