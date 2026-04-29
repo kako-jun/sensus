@@ -1,0 +1,25 @@
+[package]
+name = "sensus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CLI for sensus: simulate sensory perception (color blindness, low vision, hearing loss) on images"
+documentation = "https://docs.rs/sensus"
+readme = "../../README.md"
+keywords = ["accessibility", "image", "color-vision", "vision", "cli"]
+categories = ["command-line-utilities", "graphics", "multimedia", "accessibility"]
+exclude = [".github/", "target/"]
+
+[[bin]]
+name = "sensus"
+path = "src/main.rs"
+
+[dependencies]
+sensus-core = { path = "../core", version = "0.0.1" }
+clap = { workspace = true }
+image = { workspace = true, default-features = true }
+thiserror = { workspace = true }
