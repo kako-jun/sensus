@@ -56,6 +56,7 @@ sensus/
 - **WASM ターゲットは持たない** — sensus の主クライアントは universal-experience（Flutter の native）。Web GUI はやらない方針なので、wasm32 用の getrandom 等の追加依存は避ける
 - **入出力は `image::DynamicImage` で統一** — orber と同じ規約。動画はフレーム単位で同関数を呼ぶ
 - **CLI は scaffold（#1）では未実装メッセージで `exit(2)`** — Phase 1（#2）で `--filter deuteranopia` から実装を埋める
+- **色覚特性は linear sRGB + Machado 2009 severity=1.0 行列 + linear blend** — gamma 適用済み sRGB に直接行列を掛けない。中間 strength は linear 空間で補間する。`achromatopsia` だけは LMS 経路を捨てて BT.709 photopic luminance（NTSC 用 BT.601 ではない）でグレースケール化する
 - **フィルタは純粋関数** — 内部 RNG 状態を持たない。乱数が必要な場合は `seed` パラメータを明示的に受け取る（飛蚊症など）
 - **`strength` は 0.0..=1.0 に正規化** — 0.0 = 元画像、1.0 = フル効果
 - **clap derive を採用** — 引数定義はコード生成で簡潔に。`Filter` enum を `ValueEnum` で公開する

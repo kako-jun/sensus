@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 1 color vision deficiency filters** (#2): `protanopia`,
+  `deuteranopia`, `tritanopia`, `achromatopsia`. Implemented in linear
+  sRGB space. `protanopia` / `deuteranopia` / `tritanopia` use the
+  Machado, Oliveira & Fernandes 2009 severity = 1.0 matrices
+  (DOI: [10.1109/TVCG.2009.113](https://doi.org/10.1109/TVCG.2009.113))
+  and blend towards the original in linear space for intermediate
+  `strength` values. `achromatopsia` uses CIE photopic luminance with
+  BT.709 primaries (`0.2126 R + 0.7152 G + 0.0722 B`); BT.601 is
+  intentionally avoided. Alpha is preserved.
+- `sensus_core::apply()` now dispatches the four Phase 1 filters and only
+  returns `Error::NotImplemented` for the remaining variants.
+- CLI now writes the transformed image to `--output` on success
+  (exit code `0`) for any implemented filter.
 - Cargo workspace scaffold with two crates: `sensus-core` (pure logic) and
   `sensus` (CLI binary). `sensus-core` is centralized in
   `[workspace.dependencies]`. (#1)

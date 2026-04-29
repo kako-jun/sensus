@@ -1,3 +1,5 @@
-//! Filter composition pipeline.
+//! 多段フィルタ合成（Issue #10）。
 //!
-//! Phase 4 (Issue #10) で複数フィルタを重ねる仕組みを実装する。
+//! 注意: 現状 vision フィルタは f32 で実装。pipeline で複数フィルタを連鎖すると
+//! 8bit ↔ f32 round-trip が累積するため、Issue #10 着手時に f32 → f64 への
+//! 切り替えを再検討する余地がある。

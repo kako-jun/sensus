@@ -78,8 +78,20 @@ struct Cli {
     filter: Filter,
 
     /// Filter strength in 0.0..=1.0 (0.0 = original, 1.0 = full effect).
-    #[arg(short, long, default_value_t = 1.0)]
+    #[arg(short, long, default_value_t = 1.0, value_parser = parse_strength)]
     strength: f32,
+}
+
+/// Parse the `--strength` argument and reject values outside `0.0..=1.0`
+/// or NaN early, before any I/O. core 側の clamp は防御的に残してある。
+fn parse_strength(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=1.0).contains(&v) {
+        return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
 }
 
 /// CLI-internal error type. Keeps the `main` ↔ `run` boundary explicit so
@@ -88,6 +100,13 @@ struct Cli {
 enum RunError {
     #[error("sensus: failed to open input {path:?}: {source}")]
     InputOpen {
+        path: PathBuf,
+        #[source]
+        source: image::ImageError,
+    },
+
+    #[error("sensus: failed to save output {path:?}: {source}")]
+    OutputSave {
         path: PathBuf,
         #[source]
         source: image::ImageError,
@@ -114,8 +133,6 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), RunError> {
-    // #1 scaffold: filters are not implemented yet. Read the input so the
-    // path is validated, then delegate to sensus_core::apply.
     let img = image::open(&cli.input).map_err(|source| RunError::InputOpen {
         path: cli.input.clone(),
         source,
@@ -124,13 +141,17 @@ fn run(cli: Cli) -> Result<(), RunError> {
     let (width, height) = (img.width(), img.height());
 
     match sensus_core::apply(cli.filter.to_core(), img, cli.strength) {
-        Ok(_out) => {
-            // Phase 1 以降で実装される枝。現状は到達しない。
+        Ok(out) => {
+            out.save(&cli.output)
+                .map_err(|source| RunError::OutputSave {
+                    path: cli.output.clone(),
+                    source,
+                })?;
             Ok(())
         }
         Err(CoreError::NotImplemented(filter)) => {
             let msg = format!(
-                "sensus: filter {:?} (strength {:.2}) is not implemented yet (scaffold #1).\n\
+                "sensus: filter {:?} (strength {:.2}) is not implemented yet.\n\
                  sensus: input {}x{} {:?} -> output {:?}\n\
                  sensus: see https://github.com/kako-jun/sensus for roadmap.",
                 filter, cli.strength, width, height, cli.input, cli.output

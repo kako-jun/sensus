@@ -13,23 +13,25 @@ educational tools, and apps like
 Pre-release scaffold (`v0.0.x`). Filters are landing one phase at a time —
 see [`docs/roadmap.md`](docs/roadmap.md) for what is implemented today.
 
-## Filters (planned)
+## Filters
 
 ### Vision
 
-- **Color vision deficiency** — protanopia / deuteranopia / tritanopia /
-  achromatopsia, with an adjustable strength (0.0 – 1.0). Tetrachromacy
-  exploration is also on the roadmap.
-- **Refraction & focus** — myopia, hyperopia, astigmatism, presbyopia.
-- **Visual field defects** — glaucoma (peripheral loss), macular
-  degeneration (central loss), hemianopia, tunnel vision.
-- **Light & transparency** — cataract, floaters, photophobia, night
-  blindness.
+| Filter | Status | Phase | Notes |
+|---|---|---|---|
+| `protanopia`           | ✅ implemented | 1 (#2) | L-cone loss (red-blind), Machado 2009 |
+| `deuteranopia`         | ✅ implemented | 1 (#2) | M-cone loss (green-blind), Machado 2009 |
+| `tritanopia`           | ✅ implemented | 1 (#2) | S-cone loss (blue-blind), Machado 2009 |
+| `achromatopsia`        | ✅ implemented | 1 (#2) | Total color blindness, BT.709 luma |
+| `tetrachromacy`        | planned | 1+ (#3) | Four-cone exploration |
+| `myopia` / `hyperopia` / `astigmatism` / `presbyopia` | planned | 2 (#4) | Refraction & focus |
+| `glaucoma` / `macular-degeneration` / `hemianopia` / `tunnel-vision` | planned | 3 (#5) | Visual field defects |
+| `cataract` / `floaters` / `photophobia` / `night-blindness` | planned | 3 (#6) | Light & transparency |
 
-### Hearing (later)
+### Hearing (Phase 4)
 
-- Hearing loss curves, pitch shift, and balance / vertigo simulation
-  applied to audio buffers.
+- Hearing loss curves, pitch shift, balance / vertigo simulation applied
+  to audio buffers (#7, #8, #9).
 
 Each filter ships with a short note on **when to see a doctor** — sensus is
 designed both as an empathy / education tool and as an early-warning primer
@@ -56,8 +58,16 @@ macOS (Intel & Apple Silicon), and Windows are also attached to each
 ## CLI usage
 
 ```sh
+# Phase 1: color vision deficiency simulation (works today)
 sensus -i photo.png -o photo-deuteranopia.png --filter deuteranopia --strength 1.0
+sensus -i photo.png -o photo-grayscale.png    --filter achromatopsia --strength 1.0
+sensus -i photo.png -o photo-mild-protan.png  --filter protanopia    --strength 0.5
 ```
+
+The above commands return exit code 0 and write the transformed image to
+`-o`. Filters not yet implemented (`myopia`, `glaucoma`, etc.) exit with
+code 2 and a "not implemented" message — see
+[`docs/roadmap.md`](docs/roadmap.md) for status.
 
 Flags:
 
@@ -84,14 +94,26 @@ sensus-core = { git = "https://github.com/kako-jun/sensus" }
 
 ```rust
 use image::DynamicImage;
-use sensus_core::vision; // Phase 1: vision filters land here.
+use sensus_core::{apply, vision, Filter};
 
-fn shift(img: DynamicImage) -> DynamicImage {
-    // Phase 1 (Issue #2) で公開される API:
-    // vision::deuteranopia(img, /* strength */ 1.0)
-    img
+fn examples(img: DynamicImage) -> sensus_core::Result<()> {
+    // Direct call (most ergonomic for a known filter):
+    let _full   = vision::deuteranopia(img.clone(), 1.0)?;
+    let _mild   = vision::deuteranopia(img.clone(), 0.5)?;
+    let _gray   = vision::achromatopsia(img.clone(), 1.0)?;
+
+    // Or via the dispatching facade (handy when the filter is dynamic):
+    let _shifted = apply(Filter::Protanopia, img, 1.0)?;
+    Ok(())
 }
 ```
+
+`strength` is clamped to `[0.0, 1.0]`. Filters in Phase 1 simulate color
+vision deficiency in linear sRGB space using the
+[Machado 2009](https://doi.org/10.1109/TVCG.2009.113) model;
+`achromatopsia` uses the BT.709 photopic luminance.
+(BT.601 luma coefficients are designed for NTSC CRTs and are colorimetrically
+wrong for sRGB images.)
 
 The same function signatures can be applied frame-by-frame for video, or
 chained together via `sensus_core::pipeline` (Phase 4).
