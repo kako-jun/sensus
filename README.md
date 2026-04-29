@@ -112,6 +112,8 @@ fn examples(img: DynamicImage) -> sensus_core::Result<()> {
 vision deficiency in linear sRGB space using the
 [Machado 2009](https://doi.org/10.1109/TVCG.2009.113) model;
 `achromatopsia` uses the BT.709 photopic luminance.
+(BT.601 luma coefficients are designed for NTSC CRTs and are colorimetrically
+wrong for sRGB images.)
 
 The same function signatures can be applied frame-by-frame for video, or
 chained together via `sensus_core::pipeline` (Phase 4).

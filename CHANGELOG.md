@@ -22,8 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returns `Error::NotImplemented` for the remaining variants.
 - CLI now writes the transformed image to `--output` on success
   (exit code `0`) for any implemented filter.
-
-
+- Cargo workspace scaffold with two crates: `sensus-core` (pure logic) and
   `sensus` (CLI binary). `sensus-core` is centralized in
   `[workspace.dependencies]`. (#1)
 - `sensus_core::Filter` enum (17 variants covering all planned vision
