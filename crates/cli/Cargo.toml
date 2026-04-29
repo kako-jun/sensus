@@ -19,7 +19,7 @@ name = "sensus"
 path = "src/main.rs"
 
 [dependencies]
-sensus-core = { path = "../core", version = "0.0.1" }
+sensus-core = { workspace = true }
 clap = { workspace = true }
 image = { workspace = true, default-features = true }
 thiserror = { workspace = true }

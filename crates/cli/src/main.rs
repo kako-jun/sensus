@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
+use sensus_core::{Error as CoreError, Filter as CoreFilter};
+use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Filter {
@@ -34,6 +36,31 @@ enum Filter {
     NightBlindness,
 }
 
+impl Filter {
+    /// Map the CLI-facing enum (clap derive) to the core enum.
+    fn to_core(self) -> CoreFilter {
+        match self {
+            Filter::Protanopia => CoreFilter::Protanopia,
+            Filter::Deuteranopia => CoreFilter::Deuteranopia,
+            Filter::Tritanopia => CoreFilter::Tritanopia,
+            Filter::Achromatopsia => CoreFilter::Achromatopsia,
+            Filter::Tetrachromacy => CoreFilter::Tetrachromacy,
+            Filter::Myopia => CoreFilter::Myopia,
+            Filter::Hyperopia => CoreFilter::Hyperopia,
+            Filter::Astigmatism => CoreFilter::Astigmatism,
+            Filter::Presbyopia => CoreFilter::Presbyopia,
+            Filter::Glaucoma => CoreFilter::Glaucoma,
+            Filter::MacularDegeneration => CoreFilter::MacularDegeneration,
+            Filter::Hemianopia => CoreFilter::Hemianopia,
+            Filter::TunnelVision => CoreFilter::TunnelVision,
+            Filter::Cataract => CoreFilter::Cataract,
+            Filter::Floaters => CoreFilter::Floaters,
+            Filter::Photophobia => CoreFilter::Photophobia,
+            Filter::NightBlindness => CoreFilter::NightBlindness,
+        }
+    }
+}
+
 /// sensus — simulate sensory perception on images.
 #[derive(Debug, Parser)]
 #[command(name = "sensus", version, about, long_about = None)]
@@ -55,31 +82,64 @@ struct Cli {
     strength: f32,
 }
 
+/// CLI-internal error type. Keeps the `main` ↔ `run` boundary explicit so
+/// integration tests can drive `run` directly without poking `process::exit`.
+#[derive(Debug, Error)]
+enum RunError {
+    #[error("sensus: failed to open input {path:?}: {source}")]
+    InputOpen {
+        path: PathBuf,
+        #[source]
+        source: image::ImageError,
+    },
+
+    /// A filter was selected but not yet implemented in core.
+    #[error("{0}")]
+    NotImplemented(String),
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
-
-    // #1 scaffold: filters are not implemented yet. Read the input so the
-    // path is validated, then bail out with a clear "not implemented" message.
-    let img = match image::open(&cli.input) {
-        Ok(img) => img,
-        Err(err) => {
-            eprintln!("sensus: failed to open input {:?}: {err}", cli.input);
-            return ExitCode::from(1);
+    match run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(RunError::NotImplemented(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::from(2)
         }
-    };
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    eprintln!(
-        "sensus: filter {:?} (strength {:.2}) is not implemented yet (scaffold #1).",
-        cli.filter, cli.strength
-    );
-    eprintln!(
-        "sensus: input {}x{} {:?} -> output {:?}",
-        img.width(),
-        img.height(),
-        cli.input,
-        cli.output
-    );
-    eprintln!("sensus: see https://github.com/kako-jun/sensus for roadmap.");
+fn run(cli: Cli) -> Result<(), RunError> {
+    // #1 scaffold: filters are not implemented yet. Read the input so the
+    // path is validated, then delegate to sensus_core::apply.
+    let img = image::open(&cli.input).map_err(|source| RunError::InputOpen {
+        path: cli.input.clone(),
+        source,
+    })?;
 
-    ExitCode::from(2)
+    let (width, height) = (img.width(), img.height());
+
+    match sensus_core::apply(cli.filter.to_core(), img, cli.strength) {
+        Ok(_out) => {
+            // Phase 1 以降で実装される枝。現状は到達しない。
+            Ok(())
+        }
+        Err(CoreError::NotImplemented(filter)) => {
+            let msg = format!(
+                "sensus: filter {:?} (strength {:.2}) is not implemented yet (scaffold #1).\n\
+                 sensus: input {}x{} {:?} -> output {:?}\n\
+                 sensus: see https://github.com/kako-jun/sensus for roadmap.",
+                filter, cli.strength, width, height, cli.input, cli.output
+            );
+            Err(RunError::NotImplemented(msg))
+        }
+        Err(CoreError::Image(err)) => Err(RunError::InputOpen {
+            path: cli.input.clone(),
+            source: err,
+        }),
+    }
 }
