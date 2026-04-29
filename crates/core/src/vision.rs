@@ -543,7 +543,7 @@ pub fn myopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 
 /// Hyperopia (遠視) シミュレーション。
 ///
-/// strength=1.0 で約 +4D 相当の defocus blur (disk 半径 ≈ 3.3% × min(W,H))。
+/// strength=1.0 で約 +4D 相当の defocus blur (disk 半径 ≈ 1.5% × min(W,H))。
 /// myopia と同様、2D 画像には深度がないため画面全体の uniform blur となる
 /// (現実の hyperopia は近方ほどボケが強い)。alpha は保持。
 pub fn hyperopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
@@ -554,7 +554,7 @@ pub fn hyperopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// Presbyopia (老眼) シミュレーション。
 ///
 /// strength=1.0 で約 +3D add 相当の near-vision defocus blur (disk 半径 ≈
-/// 2.5% × min(W,H))。視距離 50 cm 想定で、近距離の対象を見るときに発生する
+/// 1.1% × min(W,H))。視距離 50 cm 想定で、近距離の対象を見るときに発生する
 /// uniform blur として扱う。alpha は保持。
 pub fn presbyopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let r = radius_from_strength(&img, strength, PRESBYOPIA_MAX_RADIUS_RATIO);
@@ -1211,7 +1211,7 @@ mod tests {
     #[test]
     fn myopia_is_more_blurred_than_hyperopia_at_full_strength() {
         // 中央 white dot を myopia / hyperopia でぼかしたとき、
-        // myopia (-6D, ratio 0.05) のほうが hyperopia (+4D, ratio 0.033) より
+        // myopia (-6D, ratio 0.023) のほうが hyperopia (+4D, ratio 0.015) より
         // 中心輝度が低い (より広い disk で平均化されるため)。
         let input = center_white_dot(101);
         let m = myopia(input.clone(), 1.0).unwrap().to_rgba8();
