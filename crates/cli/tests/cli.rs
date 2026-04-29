@@ -95,7 +95,8 @@ fn cli_unimplemented_filter_returns_exit_2() {
             "-o",
             output.to_str().unwrap(),
             "--filter",
-            "myopia",
+            // tetrachromacy は Phase 1+ 未実装。Phase 2 (myopia 等) は実装済み。
+            "tetrachromacy",
         ])
         .status()
         .unwrap();
@@ -135,5 +136,138 @@ fn cli_strength_above_one_is_rejected_at_cli_layer() {
     assert!(
         !output.exists(),
         "expected no output PNG when CLI rejects args"
+    );
+}
+
+// ----------------------------------------------------------------------
+// Phase 2 (#4): focus / refraction integration tests
+// ----------------------------------------------------------------------
+
+/// Helper: write a small RGBA PNG large enough to give the disk blur
+/// kernel something to chew on.
+fn write_solid_png(path: &std::path::Path, w: u32, h: u32, rgba: [u8; 4]) {
+    let img = image::RgbaImage::from_pixel(w, h, image::Rgba(rgba));
+    img.save(path).expect("write test PNG");
+}
+
+#[test]
+fn cli_myopia_writes_output_png() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    let output = dir.path().join("out.png");
+    write_solid_png(&input, 32, 32, [200, 50, 30, 255]);
+
+    let status = cargo_run()
+        .args([
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--filter",
+            "myopia",
+            "--strength",
+            "1.0",
+        ])
+        .status()
+        .unwrap();
+
+    assert!(status.success(), "expected exit 0 for myopia filter");
+    assert!(output.exists(), "expected output PNG to be written");
+}
+
+#[test]
+fn cli_astigmatism_with_axis_writes_output_png() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    let output = dir.path().join("out.png");
+    write_solid_png(&input, 32, 32, [200, 50, 30, 255]);
+
+    let status = cargo_run()
+        .args([
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--filter",
+            "astigmatism",
+            "--strength",
+            "1.0",
+            "--axis",
+            "45",
+        ])
+        .status()
+        .unwrap();
+
+    assert!(
+        status.success(),
+        "expected exit 0 for astigmatism with --axis"
+    );
+    assert!(output.exists(), "expected output PNG to be written");
+}
+
+#[test]
+fn cli_axis_out_of_range_is_rejected() {
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    let output = dir.path().join("out.png");
+    write_solid_png(&input, 16, 16, [255, 0, 0, 255]);
+
+    let status = cargo_run()
+        .args([
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--filter",
+            "astigmatism",
+            "--strength",
+            "1.0",
+            "--axis",
+            "200",
+        ])
+        .status()
+        .unwrap();
+
+    assert!(
+        !status.success(),
+        "expected non-zero exit for out-of-range axis"
+    );
+    assert!(
+        !output.exists(),
+        "expected no output PNG when CLI rejects args"
+    );
+}
+
+#[test]
+fn cli_axis_with_non_astigmatism_filter_warns() {
+    // myopia + --axis 45 は astigmatism でないので silent ignore せず
+    // stderr に warning を出す。実行自体は成功 (exit 0 + 出力 PNG 生成)。
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    let output = dir.path().join("out.png");
+    write_pixel_png(&input, [120, 120, 120, 255]);
+
+    let out = cargo_run()
+        .args([
+            "-i",
+            input.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--filter",
+            "myopia",
+            "--strength",
+            "0.5",
+            "--axis",
+            "45",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "expected exit 0");
+    assert!(output.exists(), "expected output PNG to be written");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--axis"),
+        "expected warning about --axis on stderr, got: {stderr}"
     );
 }

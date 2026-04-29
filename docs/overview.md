@@ -101,6 +101,99 @@ Color vision deficiency simulation uses the
 [machado]: https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
 [doi]: https://doi.org/10.1109/TVCG.2009.113
 
+## Focus / refraction algorithm (Phase 2, #4)
+
+`myopia`, `hyperopia`, `presbyopia`, and `astigmatism` simulate refractive
+defocus using a **disk (pillbox) blur** in linear sRGB space:
+
+- A point light source falling out of focus on the retina images as a
+  **circle of confusion** (CoC), not a Gaussian. The eye's pupil acts as
+  the aperture, so the impulse response of a defocused eye is the shape
+  of the pupil — a uniform-density disk to first approximation. Gaussian
+  blur is a good *de-noising* prior but is **not** what a defocused eye
+  produces; sensus uses disk blur for physical correctness.
+- All four filters operate in **linear sRGB** (decode → blur → re-encode).
+  Convolving gamma-encoded sRGB darkens midtones and is wrong.
+- Alpha is preserved (the filter affects color only).
+- For each output pixel, the kernel is averaged over the input region with
+  **edge replication** at image borders. The implementation precomputes
+  per-row spans of the disk / ellipse and a horizontal prefix sum so the
+  total cost is `O(W × H × kernel_height)` rather than the naive
+  `O(W × H × R²)` — roughly 1 second for `myopia` (`R ≈ 51 px`) on a
+  1024 × 1024 image.
+
+### Diopter → pixel-radius mapping
+
+The angular **diameter** of the circle of confusion produced by `D`
+diopters of defocus is `pupil_diameter(m) × |D|` radians (small-angle /
+Smith–Helmholtz approximation — note this is *diameter*, not radius).
+The disk **radius** used for convolution is therefore half of that:
+
+```
+radius_rad = 0.5 × pupil_diameter(m) × |D|_max
+radius_ratio = radius_rad / image_fov_rad
+```
+
+With a 4 mm mesopic pupil (`pupil = 0.004 m`) and an assumed image FOV
+of 30° ≈ 0.5236 rad (viewing a ~25 cm print at ~50 cm), `strength = 1.0`
+corresponds to:
+
+| Filter | Clinical maximum | θ_diameter | radius (rad) | `min(W, H)` ratio |
+|---|---|---|---|---|
+| `myopia` | -6 D | 0.024 rad | 0.012 | 0.023 (2.3%) |
+| `hyperopia` | +4 D | 0.016 rad | 0.008 | 0.015 (1.5%) |
+| `presbyopia` | +3 D add | 0.012 rad | 0.006 | 0.011 (1.1%) |
+| `astigmatism` | -3 CD (cylinder) | 0.012 rad | 0.006 | 0.011 (long axis only) |
+
+Intermediate `strength` values scale the radius linearly. Below ~0.5 px
+the filter is identity (sub-pixel blur is not perceptible). The
+"clinical maximum" column is the upper bound the slider represents — the
+real distribution of refractive error is wider, but sensus prioritises
+optical fidelity (radius derived from physical optics) over visual
+exaggeration.
+
+### Two-dimensional limitation
+
+Real refractive defocus depends on *distance to the object*: with myopia,
+distant objects are blurred while near objects stay sharp; with
+presbyopia, near objects blur while distant ones stay sharp. Because
+sensus operates on flat 2D images with no depth channel, the filter
+applies a uniform blur to the whole frame. Calling `myopia(img, 1.0)`,
+`hyperopia(img, 1.0)`, and `presbyopia(img, 1.0)` therefore differ only
+in radius (not in spatial selectivity). A future extension could accept
+a depth map and produce depth-aware defocus.
+
+### Astigmatism: pure cylindrical lens (1D directional blur)
+
+A pure cylindrical refractive error focuses light to a *line* on the
+retina (Sturm's conoid: one meridian focuses, the orthogonal one does
+not). The optically correct point-spread is therefore a **line spread
+function**, i.e. **1D directional blur** in the meridian perpendicular
+to the cylinder axis — *not* an elliptical disk.
+
+In sensus the kernel is built as an ellipse where the short axis is
+clamped to the sub-pixel floor (`MIN_BLUR_RADIUS_PX = 0.5 px`); this
+makes the kernel degenerate into a 1-row directional box filter, which
+is the discrete approximation of the line spread function.
+
+`vision::astigmatism(img, strength, axis_deg)` follows the medical
+convention where `axis_deg` denotes the **sharp meridian** (the
+orientation of the cylinder lens that corrects the astigmatism). The
+blurred direction is therefore at `axis_deg + 90°`. Default
+`axis = 90°` corresponds to with-the-rule astigmatism (vertical lines
+sharp, horizontal lines blurred). `axis_deg` is normalised
+modulo 180° (`rem_euclid`); only `NaN` falls back to the 90° default.
+
+Real clinical astigmatism is almost always *compound* (cylinder + a
+spherical refractive error), so both meridians are blurred to differing
+degrees. sensus models the **pure cylinder** in isolation; compound
+astigmatism is expressed by chaining `Astigmatism + Myopia` (or
+`+ Hyperopia`) through the upcoming pipeline (Issue #10).
+
+`apply(Filter::Astigmatism, ...)` always uses the default 90° axis;
+callers that need a different axis should call `vision::astigmatism()`
+directly.
+
 ## Non-goals
 
 - **WebAssembly** — sensus is consumed by native apps; a wasm build adds
