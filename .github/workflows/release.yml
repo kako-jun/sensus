@@ -36,7 +36,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p sensus
+        run: cargo build --release --target ${{ matrix.target }} -p sensus --locked
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
