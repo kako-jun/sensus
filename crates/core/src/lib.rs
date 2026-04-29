@@ -53,8 +53,11 @@ pub enum Filter {
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
 ///
-/// Phase 1 (#2) で色覚特性 4 種を実装済み。Phase 2 以降のフィルタは
-/// 引き続き [`Error::NotImplemented`] を返す。
+/// Phase 1 (#2) で色覚特性 4 種、Phase 2 (#4) で焦点・屈折 4 種を実装済み。
+/// 残りのフィルタは引き続き [`Error::NotImplemented`] を返す。
+///
+/// `Astigmatism` は軸 90°（with-the-rule）の既定値で適用される。任意の軸を
+/// 指定したい場合は [`vision::astigmatism`] を直接呼ぶこと。
 pub fn apply(
     filter: Filter,
     img: image::DynamicImage,
@@ -65,6 +68,10 @@ pub fn apply(
         Filter::Deuteranopia => vision::deuteranopia(img, strength),
         Filter::Tritanopia => vision::tritanopia(img, strength),
         Filter::Achromatopsia => vision::achromatopsia(img, strength),
+        Filter::Myopia => vision::myopia(img, strength),
+        Filter::Hyperopia => vision::hyperopia(img, strength),
+        Filter::Presbyopia => vision::presbyopia(img, strength),
+        Filter::Astigmatism => vision::astigmatism(img, strength, 90.0),
         other => Err(Error::NotImplemented(other)),
     }
 }
