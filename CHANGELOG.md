@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 2 focus / refraction filters** (#4): `myopia`, `hyperopia`,
+  `presbyopia`, `astigmatism`. All implemented as **disk (pillbox) blur**
+  in linear sRGB — Gaussian is intentionally rejected because the
+  defocused eye images a point source as a *circle of confusion*, not a
+  Gaussian. `strength = 1.0` corresponds to the clinical maxima -6 D /
+  +4 D / +3 D add / -3 CD respectively, mapped to a `min(W, H)`-relative
+  radius assuming a 4 mm mesopic pupil and a 30° image FOV at ~50 cm
+  viewing distance (Smith–Helmholtz small-angle approximation,
+  `angular_blur ≈ pupil × |D|`). `astigmatism()` accepts an explicit
+  `axis_deg` (sharp meridian, medical convention); the elliptical kernel's
+  long / blurred axis is at `axis_deg + 90°`. Alpha is preserved.
+  Implementation uses precomputed per-row spans + a horizontal prefix
+  sum so the cost is `O(W × H × kernel_height)` (≈ 1 s for myopia at
+  1024 × 1024, well under the 5 s target).
+- CLI gains an `--axis` flag (range `0.0..=180.0`, default `90.0`) for
+  astigmatism. Other filters ignore it. `apply(Filter::Astigmatism, …)`
+  always uses the default 90° axis; library users who need a custom axis
+  call `vision::astigmatism()` directly.
 - **Phase 1 color vision deficiency filters** (#2): `protanopia`,
   `deuteranopia`, `tritanopia`, `achromatopsia`. Implemented in linear
   sRGB space. `protanopia` / `deuteranopia` / `tritanopia` use the

@@ -101,6 +101,71 @@ Color vision deficiency simulation uses the
 [machado]: https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
 [doi]: https://doi.org/10.1109/TVCG.2009.113
 
+## Focus / refraction algorithm (Phase 2, #4)
+
+`myopia`, `hyperopia`, `presbyopia`, and `astigmatism` simulate refractive
+defocus using a **disk (pillbox) blur** in linear sRGB space:
+
+- A point light source falling out of focus on the retina images as a
+  **circle of confusion** (CoC), not a Gaussian. The eye's pupil acts as
+  the aperture, so the impulse response of a defocused eye is the shape
+  of the pupil — a uniform-density disk to first approximation. Gaussian
+  blur is a good *de-noising* prior but is **not** what a defocused eye
+  produces; sensus uses disk blur for physical correctness.
+- All four filters operate in **linear sRGB** (decode → blur → re-encode).
+  Convolving gamma-encoded sRGB darkens midtones and is wrong.
+- Alpha is preserved (the filter affects color only).
+- For each output pixel, the kernel is averaged over the input region with
+  **edge replication** at image borders. The implementation precomputes
+  per-row spans of the disk / ellipse and a horizontal prefix sum so the
+  total cost is `O(W × H × kernel_height)` rather than the naive
+  `O(W × H × R²)` — roughly 1 second for `myopia` (`R ≈ 51 px`) on a
+  1024 × 1024 image.
+
+### Diopter → pixel-radius mapping
+
+The angular blur produced by `D` diopters of defocus is
+`pupil_diameter × |D|` radians (small-angle / Smith–Helmholtz
+approximation). With a 4 mm mesopic pupil and an assumed image FOV of 30°
+(viewing a print at ~50 cm), `strength = 1.0` corresponds to:
+
+| Filter | Clinical maximum | Disk radius (`min(W, H)` ratio) |
+|---|---|---|
+| `myopia` | -6 D | 5.0% |
+| `hyperopia` | +4 D | 3.3% |
+| `presbyopia` | +3 D add | 2.5% |
+| `astigmatism` | -3 CD (cylinder) | 2.5% (long axis only) |
+
+Intermediate `strength` values scale the radius linearly. Below ~0.5 px
+the filter is identity (sub-pixel blur is not perceptible). The
+"clinical maximum" column is the upper bound the slider represents — the
+real distribution of refractive error is wider, but sensus is a slider
+toy, not a diagnostic instrument.
+
+### Two-dimensional limitation
+
+Real refractive defocus depends on *distance to the object*: with myopia,
+distant objects are blurred while near objects stay sharp; with
+presbyopia, near objects blur while distant ones stay sharp. Because
+sensus operates on flat 2D images with no depth channel, the filter
+applies a uniform blur to the whole frame. Calling `myopia(img, 1.0)`,
+`hyperopia(img, 1.0)`, and `presbyopia(img, 1.0)` therefore differ only
+in radius (not in spatial selectivity). A future extension could accept
+a depth map and produce depth-aware defocus.
+
+### Astigmatism axis convention
+
+`vision::astigmatism(img, strength, axis_deg)` follows the medical
+convention where `axis_deg` denotes the **sharp meridian** (the
+orientation of the cylinder lens that corrects the astigmatism). The
+ellipse's *long axis* (i.e. the blurred direction) is therefore at
+`axis_deg + 90°`. Default `axis = 90°` corresponds to with-the-rule
+astigmatism (vertical lines sharp, horizontal lines blurred).
+
+`apply(Filter::Astigmatism, ...)` always uses the default 90° axis;
+callers that need a different axis should call `vision::astigmatism()`
+directly.
+
 ## Non-goals
 
 - **WebAssembly** — sensus is consumed by native apps; a wasm build adds
