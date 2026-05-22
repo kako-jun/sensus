@@ -910,6 +910,63 @@ pub fn floaters(
 }
 
 // ---------------------------------------------------------------
+// Phase 1+: 四色型色覚 (Issue #3) — tetrachromacy
+// ---------------------------------------------------------------
+
+/// 四色型色覚（Tetrachromacy）可視化。
+///
+/// RGB 画像は分光情報を失っているため完全な四色型シミュレーションは不可能。
+/// 三色型がメタメリズムを起こしやすい赤-緑中間帯（約 560 nm 付近）の微細な
+/// 色差を誇張することで、「四色型が見えているはずの差異」を近似可視化する。
+///
+/// ## アルゴリズム
+///
+/// 1. linear sRGB に変換（gamma 解除）
+/// 2. opponent channel を計算:
+///    - `rg = R - G`（赤-緑対立軸）
+///    - `yb = 0.5*(R+G) - B`（黄-青対立軸）
+/// 3. opponent channel を `strength` でスケールして元の色に加算（誇張）:
+///    - `R_out = R + strength * rg * k`
+///    - `G_out = G - strength * rg * k`
+///    - `B_out = B + strength * yb * k * 0.5`（黄青は控えめ）
+///    - `k = 0.5`（誇張係数）
+/// 4. clamp(0.0, 1.0)
+/// 5. linear → sRGB に戻す（gamma 再適用）
+/// 6. alpha は保持
+///
+/// `strength = 0.0` は元画像と完全一致。`strength = 1.0` で最大誇張。
+pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    const K: f32 = 0.5;
+
+    for px in rgba.pixels_mut() {
+        let r = srgb_to_linear(px[0] as f32 / 255.0);
+        let g = srgb_to_linear(px[1] as f32 / 255.0);
+        let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+        let rg = r - g;
+        let yb = 0.5 * (r + g) - b;
+
+        let nr = r + strength * rg * K;
+        let ng = g - strength * rg * K;
+        let nb = b + strength * yb * K * 0.5;
+
+        px[0] = pack_u8(linear_to_srgb(nr.clamp(0.0, 1.0)));
+        px[1] = pack_u8(linear_to_srgb(ng.clamp(0.0, 1.0)));
+        px[2] = pack_u8(linear_to_srgb(nb.clamp(0.0, 1.0)));
+        // alpha (px[3]) はそのまま保持
+    }
+
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
+// ---------------------------------------------------------------
 // Phase 3a: 視野異常 (Issue #5) — glaucoma / macular_degeneration / hemianopia / tunnel_vision
 // ---------------------------------------------------------------
 
@@ -2568,6 +2625,69 @@ mod tests {
     fn floaters_1x1_does_not_panic() {
         let input = pixel(128, 64, 32, 255);
         let _ = floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // tetrachromacy テスト
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tetrachromacy_strength_zero_is_identity() {
+        let input = pixel(200, 100, 50, 255);
+        let out = tetrachromacy(input.clone(), 0.0).unwrap();
+        assert_eq!(read_rgba(&out), [200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn tetrachromacy_nan_strength_returns_identity() {
+        let input = pixel(200, 100, 50, 200);
+        let out = tetrachromacy(input.clone(), f32::NAN).unwrap();
+        assert_eq!(read_rgba(&out), [200, 100, 50, 200]);
+    }
+
+    #[test]
+    fn tetrachromacy_alpha_preserved() {
+        let input = pixel(200, 100, 50, 77);
+        let out = tetrachromacy(input, 1.0).unwrap();
+        assert_eq!(read_rgba(&out)[3], 77);
+    }
+
+    #[test]
+    fn tetrachromacy_negative_strength_is_identity() {
+        let input = pixel(200, 100, 50, 255);
+        let out = tetrachromacy(input.clone(), -1.0).unwrap();
+        assert_eq!(read_rgba(&out), [200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn tetrachromacy_above_one_clamped_same_as_one() {
+        let input = pixel(200, 100, 50, 255);
+        let a = tetrachromacy(input.clone(), 2.0).unwrap();
+        let b = tetrachromacy(input, 1.0).unwrap();
+        assert_eq!(read_rgba(&a), read_rgba(&b));
+    }
+
+    #[test]
+    fn tetrachromacy_gray_unchanged() {
+        // 純グレー (R==G==B) は rg=0, yb=0 なので変化しない
+        let input = pixel(128, 128, 128, 255);
+        let out = tetrachromacy(input, 1.0).unwrap();
+        let [r, g, b, _] = read_rgba(&out);
+        // 1px round-trip で ±1 以内の誤差を許容
+        assert!(r.abs_diff(128) <= 1);
+        assert!(g.abs_diff(128) <= 1);
+        assert!(b.abs_diff(128) <= 1);
+    }
+
+    #[test]
+    fn tetrachromacy_pure_red_amplifies_rg() {
+        // 純赤: rg > 0 なので R が増え G が減る方向に誇張される
+        let input = pixel(200, 0, 0, 255);
+        let out = tetrachromacy(input, 1.0).unwrap();
+        let [r, g, _b, _] = read_rgba(&out);
+        // R は変化なし or 上昇（既に高い）、G は 0 から下はいかない（clamp）
+        assert!(r >= 200 || r == 255); // clamp で飽和することもある
+        assert_eq!(g, 0); // G は既に 0、下がっても 0 のまま
     }
 
     #[test]

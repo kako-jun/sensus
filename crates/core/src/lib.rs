@@ -80,6 +80,7 @@ pub fn apply(
         Filter::MacularDegeneration => vision::macular_degeneration(img, strength),
         Filter::Hemianopia => vision::hemianopia(img, strength, 0.0),
         Filter::TunnelVision => vision::tunnel_vision(img, strength),
+        Filter::Tetrachromacy => vision::tetrachromacy(img, strength),
         other => Err(Error::NotImplemented(other)),
     }
 }
