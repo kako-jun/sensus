@@ -925,11 +925,12 @@ pub fn floaters(
 /// 2. opponent channel を計算:
 ///    - `rg = R - G`（赤-緑対立軸）
 ///    - `yb = 0.5*(R+G) - B`（黄-青対立軸）
-/// 3. opponent channel を `strength` でスケールして元の色に加算（誇張）:
-///    - `R_out = R + strength * rg * k`
-///    - `G_out = G - strength * rg * k`
-///    - `B_out = B + strength * yb * k * 0.5`（黄青は控えめ）
-///    - `k = 0.5`（誇張係数）
+ /// 3. opponent channel を `strength` でスケールして元の色に加算（誇張）:
+ ///    - `R_out = R + strength * rg * k_rg`
+ ///    - `G_out = G - strength * rg * k_rg`
+ ///    - `B_out = B + strength * yb * k_yb`（黄青は控えめ）
+ ///    - `k_rg = 0.5`（赤-緑誇張係数）
+ ///    - `k_yb = 0.25`（黄-青誇張係数、`k_rg` の半分）
 /// 4. clamp(0.0, 1.0)
 /// 5. linear → sRGB に戻す（gamma 再適用）
 /// 6. alpha は保持
@@ -943,7 +944,8 @@ pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
         return Ok(DynamicImage::ImageRgba8(rgba));
     }
 
-    const K: f32 = 0.5;
+    const K_RG: f32 = 0.5;  // 赤-緑誇張係数
+    const K_YB: f32 = 0.25; // 黄-青誇張係数（控えめ）
 
     for px in rgba.pixels_mut() {
         let r = srgb_to_linear(px[0] as f32 / 255.0);
@@ -953,9 +955,9 @@ pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
         let rg = r - g;
         let yb = 0.5 * (r + g) - b;
 
-        let nr = r + strength * rg * K;
-        let ng = g - strength * rg * K;
-        let nb = b + strength * yb * K * 0.5;
+        let nr = r + strength * rg * K_RG;
+        let ng = g - strength * rg * K_RG;
+        let nb = b + strength * yb * K_YB;
 
         px[0] = pack_u8(linear_to_srgb(nr.clamp(0.0, 1.0)));
         px[1] = pack_u8(linear_to_srgb(ng.clamp(0.0, 1.0)));
@@ -2688,6 +2690,59 @@ mod tests {
         // R は変化なし or 上昇（既に高い）、G は 0 から下はいかない（clamp）
         assert!(r >= 200 || r == 255); // clamp で飽和することもある
         assert_eq!(g, 0); // G は既に 0、下がっても 0 のまま
+    }
+
+    #[test]
+    fn tetrachromacy_preserves_dimensions() {
+        // 出力サイズが入力と同一
+        let mut img = RgbaImage::new(13, 7);
+        for (_, _, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([100, 150, 80, 255]);
+        }
+        let input = DynamicImage::ImageRgba8(img);
+        let out = tetrachromacy(input, 1.0).unwrap();
+        assert_eq!((out.width(), out.height()), (13, 7));
+    }
+
+    #[test]
+    fn tetrachromacy_white_pixel_is_unchanged() {
+        // (255,255,255,255): rg=0, yb=0 → 変化なし
+        let input = pixel(255, 255, 255, 255);
+        let out = tetrachromacy(input, 1.0).unwrap();
+        let [r, g, b, a] = read_rgba(&out);
+        assert_eq!(r, 255);
+        assert_eq!(g, 255);
+        assert_eq!(b, 255);
+        assert_eq!(a, 255);
+    }
+
+    #[test]
+    fn tetrachromacy_black_pixel_is_unchanged() {
+        // (0,0,0,255): rg=0, yb=0 → 変化なし
+        let input = pixel(0, 0, 0, 255);
+        let out = tetrachromacy(input, 1.0).unwrap();
+        let [r, g, b, a] = read_rgba(&out);
+        assert_eq!(r, 0);
+        assert_eq!(g, 0);
+        assert_eq!(b, 0);
+        assert_eq!(a, 255);
+    }
+
+    #[test]
+    fn tetrachromacy_strength_monotonic() {
+        // strength=1.0 の方が strength=0.5 よりも R-G 差が大きい
+        // 赤みある画素 (200, 100, 0, 255): rg = R - G > 0
+        let input = pixel(200, 100, 0, 255);
+        let out05 = tetrachromacy(input.clone(), 0.5).unwrap();
+        let out10 = tetrachromacy(input, 1.0).unwrap();
+        let [r05, g05, _, _] = read_rgba(&out05);
+        let [r10, g10, _, _] = read_rgba(&out10);
+        let diff05 = r05 as i32 - g05 as i32;
+        let diff10 = r10 as i32 - g10 as i32;
+        assert!(
+            diff10 > diff05,
+            "strength=1.0 R-G diff ({diff10}) must be greater than strength=0.5 ({diff05})"
+        );
     }
 
     #[test]
