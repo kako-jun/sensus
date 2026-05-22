@@ -1067,7 +1067,8 @@ pub fn macular_degeneration(img: DynamicImage, strength: f32) -> crate::Result<D
 ///
 /// ## アルゴリズム
 /// `side`: `0.0` = 左側が失われる、`1.0` = 右側が失われる（中間値で移行領域を調整）
-/// `split_x` = 画像幅 × `side` を境界として、失われる側を暗化。
+/// 境界は常に画像の水平中央 (`x = width / 2`) に固定。
+/// `side` は fade 量の重み付けに使用し、0.0 = 左側を完全暗化、1.0 = 右側を完全暗化。
 /// 境界付近は幅 `2%` の smoothstep でぼかす。
 ///
 /// # 引数
