@@ -73,6 +73,7 @@ pub fn apply(
         Filter::Presbyopia => vision::presbyopia(img, strength),
         Filter::Astigmatism => vision::astigmatism(img, strength, 90.0),
         Filter::Cataract => vision::cataract(img, strength, 0),
+        Filter::Photophobia => vision::photophobia(img, strength),
         other => Err(Error::NotImplemented(other)),
     }
 }

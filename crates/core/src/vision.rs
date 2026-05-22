@@ -688,6 +688,69 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
+/// 光過敏（Photophobia）シミュレーション。
+///
+/// 明るい部分が滲み出す bloom 効果を linear sRGB 空間で適用する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強い bloom
+pub fn photophobia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+
+    // bloom 半径
+    const PHOTOPHOBIA_BLOOM_RADIUS_RATIO: f32 = 0.05;
+    let min_dim = width.min(height) as f32;
+    let bloom_radius = strength * PHOTOPHOBIA_BLOOM_RADIUS_RATIO * min_dim;
+
+    // ハイライト閾値
+    const PHOTOPHOBIA_THRESHOLD: f32 = 0.5;
+
+    // linear sRGB に変換
+    let (linear, _alpha) = rgba_to_linear_planes(&rgba);
+
+    // ハイライトレイヤーを抽出
+    let mut highlight: Vec<[f32; 3]> = linear
+        .iter()
+        .map(|&[r, g, b]| {
+            let y = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+            let mask = if y > PHOTOPHOBIA_THRESHOLD {
+                (y - PHOTOPHOBIA_THRESHOLD) / (1.0 - PHOTOPHOBIA_THRESHOLD)
+            } else {
+                0.0
+            };
+            [r * mask, g * mask, b * mask]
+        })
+        .collect();
+
+    // ハイライトレイヤーに disk blur を適用（bloom_radius >= MIN_BLUR_RADIUS_PX の場合のみ）
+    if bloom_radius >= MIN_BLUR_RADIUS_PX {
+        highlight = ellipse_blur(&highlight, width, height, bloom_radius, bloom_radius, 0.0);
+    }
+
+    // 元画像 + bloom を加算（saturate）
+    let mut out_rgba = rgba.clone();
+    for (i, px) in out_rgba.pixels_mut().enumerate() {
+        let orig = linear[i];
+        let bloom = highlight[i];
+        let fr = (orig[0] + bloom[0]).min(1.0);
+        let fg = (orig[1] + bloom[1]).min(1.0);
+        let fb = (orig[2] + bloom[2]).min(1.0);
+        px[0] = pack_u8(linear_to_srgb(fr));
+        px[1] = pack_u8(linear_to_srgb(fg));
+        px[2] = pack_u8(linear_to_srgb(fb));
+        // alpha はそのまま
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
