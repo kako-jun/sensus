@@ -74,6 +74,7 @@ pub fn apply(
         Filter::Astigmatism => vision::astigmatism(img, strength, 90.0),
         Filter::Cataract => vision::cataract(img, strength, 0),
         Filter::Photophobia => vision::photophobia(img, strength),
+        Filter::NightBlindness => vision::nyctalopia(img, strength),
         other => Err(Error::NotImplemented(other)),
     }
 }

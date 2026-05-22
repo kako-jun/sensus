@@ -751,6 +751,47 @@ pub fn photophobia(img: DynamicImage, strength: f32) -> crate::Result<DynamicIma
     Ok(DynamicImage::ImageRgba8(out_rgba))
 }
 
+/// 夜盲（Nyctalopia）シミュレーション。
+///
+/// 暗所視力低下: 全体が暗くなり色感度が落ちてグレースケール寄りになる。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強度夜盲
+pub fn nyctalopia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let dark_factor = 1.0 - strength * 0.7_f32;
+    let desat = strength * 0.8_f32;
+
+    for px in rgba.pixels_mut() {
+        let r = srgb_to_linear(px[0] as f32 / 255.0);
+        let g = srgb_to_linear(px[1] as f32 / 255.0);
+        let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+        let y = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+
+        // 脱色（グレーに寄せる）してから暗化
+        let dr = r + (y - r) * desat;
+        let dg = g + (y - g) * desat;
+        let db = b + (y - b) * desat;
+
+        let fr = dr * dark_factor;
+        let fg = dg * dark_factor;
+        let fb = db * dark_factor;
+
+        px[0] = pack_u8(linear_to_srgb(fr));
+        px[1] = pack_u8(linear_to_srgb(fg));
+        px[2] = pack_u8(linear_to_srgb(fb));
+        // alpha はそのまま
+    }
+
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
