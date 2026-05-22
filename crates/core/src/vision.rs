@@ -315,6 +315,12 @@ fn normalize_strength(strength: f32) -> f32 {
     }
 }
 
+/// 線形補間: `a` と `b` を `t` (0.0..=1.0) で補間する。
+#[inline]
+fn lerp(a: f32, b: f32, t: f32) -> f32 {
+    a + (b - a) * t
+}
+
 /// RGBA8 画像を linear sRGB の `[r, g, b]` 配列 + alpha 配列に分離する。
 fn rgba_to_linear_planes(rgba: &RgbaImage) -> (Vec<[f32; 3]>, Vec<u8>) {
     let len = (rgba.width() * rgba.height()) as usize;
@@ -897,6 +903,296 @@ pub fn floaters(
             px[1] = pack_u8(linear_to_srgb(gl * blend));
             px[2] = pack_u8(linear_to_srgb(bl * blend));
             // alpha はそのまま
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
+// ---------------------------------------------------------------
+// Phase 3b: 視野異常 (Issue #5)
+// ---------------------------------------------------------------
+
+/// 緑内障（glaucoma）シミュレーション。
+///
+/// 緑内障は眼圧上昇による視神経萎縮が原因で、周辺視野から徐々に欠けていく。
+/// 臨床的には視野の一部に暗点が生じ、進行すると管状視野（トンネルビジョン）になる。
+///
+/// ## アルゴリズム
+/// 中心からの距離に基づく vignetted mask を使用:
+/// - 中心付近 (normalized 距離 < `inner_r`): 保存
+/// - 周辺 (距離 > `outer_r`): 暗化 × `strength`
+/// - 中間: smoothstep で滑らかに移行
+///
+/// `inner_r` = `1.0 - strength * 0.7`, `outer_r` = `inner_r + 0.2`
+///
+/// # 引数
+/// - `img`: 入力画像
+/// - `strength`: 強度 (0.0..=1.0)
+pub fn glaucoma(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+    let cx = w_f * 0.5;
+    let cy = h_f * 0.5;
+    // 正規化半径の最大値（コーナーまでの距離）
+    let max_r = (cx * cx + cy * cy).sqrt();
+
+    // 保存される中心領域の境界
+    let inner_r = 1.0 - strength * 0.7;
+    let outer_r = (inner_r + 0.2).min(1.0);
+
+    let mut out_rgba = rgba.clone();
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let r = (dx * dx + dy * dy).sqrt() / max_r;
+
+            // 周辺ほど暗くなる係数
+            let fade = if r <= inner_r {
+                0.0
+            } else if r >= outer_r {
+                1.0
+            } else {
+                let t = (r - inner_r) / (outer_r - inner_r);
+                t * t * (3.0 - 2.0 * t) // smoothstep
+            };
+
+            // 暗化: 元画像 × (1 - strength × fade)
+            let mul = 1.0 - strength * fade;
+
+            let px = out_rgba.get_pixel_mut(x, y);
+            // linear 空間で処理
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            px[0] = pack_u8(linear_to_srgb(rl * mul));
+            px[1] = pack_u8(linear_to_srgb(gl * mul));
+            px[2] = pack_u8(linear_to_srgb(bl * mul));
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
+/// 黄斑変性（macular degeneration）シミュレーション。
+///
+/// 黄斑部（網膜中心）の光受容体が変性し、中心視野が失われる。
+/// 周辺視野は保たれるが、読書・顔の認識が困難になる。
+///
+/// ## アルゴリズム
+/// 中心に集中した暗いぼかし円を重ねる:
+/// - 中心 (normalized 距離 < `inner_r`): 強く暗化 + 色彩低下
+/// - 周辺 (距離 > `outer_r`): 変化なし
+/// - 中間: smoothstep
+///
+/// `inner_r` = `strength * 0.25`, `outer_r` = `strength * 0.4`
+///
+/// # 引数
+/// - `img`: 入力画像
+/// - `strength`: 強度 (0.0..=1.0)
+pub fn macular_degeneration(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+    let cx = w_f * 0.5;
+    let cy = h_f * 0.5;
+    let max_r = (cx * cx + cy * cy).sqrt();
+
+    let inner_r = strength * 0.25;
+    let outer_r = strength * 0.4;
+
+    let mut out_rgba = rgba.clone();
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let r = (dx * dx + dy * dy).sqrt() / max_r;
+
+            let t = if r <= inner_r {
+                1.0
+            } else if r >= outer_r {
+                0.0
+            } else {
+                let u = (r - inner_r) / (outer_r - inner_r);
+                1.0 - u * u * (3.0 - 2.0 * u)
+            };
+
+            if t == 0.0 {
+                continue;
+            }
+
+            let px = out_rgba.get_pixel_mut(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+
+            // 中心部: 輝度を BT.709 で取り出して暗化＋脱色
+            let lum = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+            // 強度に応じて暗化 (最大 0.05 の輝度)
+            let darkened = lum * (1.0 - strength * 0.95);
+            // 元色と脱色・暗化色を t でブレンド
+            let out_r = lerp(rl, darkened, t);
+            let out_g = lerp(gl, darkened, t);
+            let out_b = lerp(bl, darkened, t);
+
+            px[0] = pack_u8(linear_to_srgb(out_r));
+            px[1] = pack_u8(linear_to_srgb(out_g));
+            px[2] = pack_u8(linear_to_srgb(out_b));
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
+/// 半盲（hemianopia）シミュレーション。
+///
+/// 視野の左右どちらかが完全に失われる（同名半盲）。
+/// 脳卒中・脳腫瘍による視放線の損傷が主因。
+///
+/// ## アルゴリズム
+/// `side`: `0.0` = 左側が失われる、`1.0` = 右側が失われる（中間値で移行領域を調整）
+/// `split_x` = 画像幅 × `side` を境界として、失われる側を暗化。
+/// 境界付近は幅 `2%` の smoothstep でぼかす。
+///
+/// # 引数
+/// - `img`: 入力画像
+/// - `strength`: 強度 (0.0..=1.0)
+/// - `side`: 欠損側 (0.0 = 左欠損, 1.0 = 右欠損)
+pub fn hemianopia(img: DynamicImage, strength: f32, side: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let side = side.clamp(0.0, 1.0);
+
+    // 境界 X 座標（正規化 0.5 が中心）
+    let split_x = w_f * 0.5;
+    // 境界のぼかし幅
+    let blur_w = w_f * 0.02;
+
+    let mut out_rgba = rgba.clone();
+    for y in 0..height {
+        for x in 0..width {
+            let xf = x as f32;
+
+            // 左欠損 (side=0.0): x < split_x の領域を暗化
+            // 右欠損 (side=1.0): x > split_x の領域を暗化
+            // 中間値は欠損量を按分
+            let left_fade = if xf < split_x - blur_w {
+                1.0
+            } else if xf > split_x + blur_w {
+                0.0
+            } else {
+                let t = (xf - (split_x - blur_w)) / (2.0 * blur_w);
+                1.0 - t * t * (3.0 - 2.0 * t)
+            };
+
+            // side=0 → left_fade を使う, side=1 → (1-left_fade) を使う
+            let fade = lerp(left_fade, 1.0 - left_fade, side);
+
+            if fade == 0.0 {
+                continue;
+            }
+
+            let mul = 1.0 - fade * strength;
+
+            let px = out_rgba.get_pixel_mut(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            px[0] = pack_u8(linear_to_srgb(rl * mul));
+            px[1] = pack_u8(linear_to_srgb(gl * mul));
+            px[2] = pack_u8(linear_to_srgb(bl * mul));
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
+/// 視野狭窄（tunnel vision）シミュレーション。
+///
+/// 全般的に視野が狭窄し、極端な場合は穴を通して見るような視野になる。
+/// 網膜色素変性・重度の緑内障末期などで生じる。
+///
+/// ## アルゴリズム
+/// glaucoma と同様の vignetting だが、保存される中心領域がより小さく、
+/// 移行領域が狭い（急激な境界）。
+///
+/// `inner_r` = `(1.0 - strength) * 0.5`, `outer_r` = `inner_r + 0.05`
+///
+/// # 引数
+/// - `img`: 入力画像
+/// - `strength`: 強度 (0.0..=1.0)
+pub fn tunnel_vision(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+    let cx = w_f * 0.5;
+    let cy = h_f * 0.5;
+    let max_r = (cx * cx + cy * cy).sqrt();
+
+    // 中心視野の半径: strength が大きいほど小さい
+    let inner_r = (1.0 - strength) * 0.5;
+    // tunnel_vision は急激な境界が特徴
+    let outer_r = (inner_r + 0.05).min(1.0);
+
+    let mut out_rgba = rgba.clone();
+    for y in 0..height {
+        for x in 0..width {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let r = (dx * dx + dy * dy).sqrt() / max_r;
+
+            let fade = if r <= inner_r {
+                0.0
+            } else if r >= outer_r {
+                1.0
+            } else {
+                let t = (r - inner_r) / (outer_r - inner_r);
+                t * t * (3.0 - 2.0 * t)
+            };
+
+            if fade == 0.0 {
+                continue;
+            }
+
+            let mul = 1.0 - strength * fade;
+
+            let px = out_rgba.get_pixel_mut(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            px[0] = pack_u8(linear_to_srgb(rl * mul));
+            px[1] = pack_u8(linear_to_srgb(gl * mul));
+            px[2] = pack_u8(linear_to_srgb(bl * mul));
         }
     }
 
@@ -1575,6 +1871,483 @@ mod tests {
                 );
             }
         }
+    }
+
+    // =================================================================
+    // Phase 3b (#5): visual field defect tests
+    // =================================================================
+
+    // ---------------------------------------------------------------
+    // T01-T04: strength=0.0 → identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 50, 30, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(raw_rgba_vec(&glaucoma(input, 0.0).unwrap()), original);
+    }
+
+    #[test]
+    fn macular_degeneration_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 50, 30, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&macular_degeneration(input, 0.0).unwrap()),
+            original
+        );
+    }
+
+    #[test]
+    fn hemianopia_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 50, 30, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&hemianopia(input, 0.0, 0.0).unwrap()),
+            original
+        );
+    }
+
+    #[test]
+    fn tunnel_vision_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 50, 30, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&tunnel_vision(input, 0.0).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T05-T08: NaN strength → identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_nan_strength_returns_identity() {
+        let input = solid_rgba(32, 32, [100, 150, 200, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&glaucoma(input, f32::NAN).unwrap()),
+            original
+        );
+    }
+
+    #[test]
+    fn macular_degeneration_nan_strength_returns_identity() {
+        let input = solid_rgba(32, 32, [100, 150, 200, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&macular_degeneration(input, f32::NAN).unwrap()),
+            original
+        );
+    }
+
+    #[test]
+    fn hemianopia_nan_strength_returns_identity() {
+        let input = solid_rgba(32, 32, [100, 150, 200, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&hemianopia(input, f32::NAN, 0.0).unwrap()),
+            original
+        );
+    }
+
+    #[test]
+    fn tunnel_vision_nan_strength_returns_identity() {
+        let input = solid_rgba(32, 32, [100, 150, 200, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&tunnel_vision(input, f32::NAN).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T09: glaucoma strength=2.0 is clamped to 1.0
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_strength_above_one_clamped() {
+        let input = solid_rgba(64, 64, [200, 100, 50, 255]);
+        let out2 = raw_rgba_vec(&glaucoma(input.clone(), 2.0).unwrap());
+        let out1 = raw_rgba_vec(&glaucoma(input, 1.0).unwrap());
+        assert_eq!(out2, out1);
+    }
+
+    // ---------------------------------------------------------------
+    // T10: alpha preserved for all 4 visual field filters
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn visual_field_filters_preserve_alpha() {
+        // alpha=200 のピクセル（alpha != 255 で確認）
+        let input = solid_rgba(32, 32, [80, 90, 100, 200]);
+        let check_alpha = |img: DynamicImage| {
+            for px in img.to_rgba8().pixels() {
+                assert_eq!(px[3], 200, "alpha must be preserved");
+            }
+        };
+        check_alpha(glaucoma(input.clone(), 0.8).unwrap());
+        check_alpha(macular_degeneration(input.clone(), 0.8).unwrap());
+        check_alpha(hemianopia(input.clone(), 0.8, 0.0).unwrap());
+        check_alpha(tunnel_vision(input, 0.8).unwrap());
+    }
+
+    // ---------------------------------------------------------------
+    // T11: output dimensions preserved for all 4 visual field filters
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn visual_field_filters_preserve_dimensions() {
+        let input = solid_rgba(47, 31, [100, 100, 100, 255]);
+        let (w, h) = (47, 31);
+        let out = glaucoma(input.clone(), 0.5).unwrap();
+        assert_eq!((out.width(), out.height()), (w, h));
+        let out = macular_degeneration(input.clone(), 0.5).unwrap();
+        assert_eq!((out.width(), out.height()), (w, h));
+        let out = hemianopia(input.clone(), 0.5, 0.5).unwrap();
+        assert_eq!((out.width(), out.height()), (w, h));
+        let out = tunnel_vision(input, 0.5).unwrap();
+        assert_eq!((out.width(), out.height()), (w, h));
+    }
+
+    // ---------------------------------------------------------------
+    // T12: glaucoma center pixel unchanged at strength=1.0
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_center_pixel_unchanged_at_full_strength() {
+        // 白画像で中心（r < inner_r=0.3）は変化なし
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 100, 50, 255]);
+        let out = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let cx = size / 2;
+        let cy = size / 2;
+        let center = out.get_pixel(cx, cy);
+        // 中心画素は元のまま (mul=1.0)
+        assert_eq!([center[0], center[1], center[2]], [200, 100, 50]);
+    }
+
+    // ---------------------------------------------------------------
+    // T13: glaucoma corner pixel becomes black at full strength
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_corner_pixel_becomes_black_at_full_strength() {
+        // コーナー (r=1.0 > outer_r=0.5) → mul=0.0 → 黒
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 100, 50, 255]);
+        let out = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let corner = out.get_pixel(0, 0);
+        assert_eq!([corner[0], corner[1], corner[2]], [0, 0, 0]);
+    }
+
+    // ---------------------------------------------------------------
+    // T14: glaucoma monotonic peripheral darkening
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_strength_monotonic_peripheral_darkening() {
+        // コーナー付近では strength=0.5 の方が strength=1.0 より明るい
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out05 = glaucoma(input.clone(), 0.5).unwrap().to_rgba8();
+        let out10 = glaucoma(input, 1.0).unwrap().to_rgba8();
+        // コーナー (0,0) での輝度比較
+        let r05 = out05.get_pixel(0, 0)[0] as i32;
+        let r10 = out10.get_pixel(0, 0)[0] as i32;
+        assert!(
+            r05 > r10,
+            "strength=0.5 corner must be brighter than strength=1.0: {r05} vs {r10}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T15: macular_degeneration center darkened at full strength
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn macular_degeneration_center_darkened_at_full_strength() {
+        // 中心画素: darkened = lum * 0.05 なので元より暗くなる
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out = macular_degeneration(input, 1.0).unwrap().to_rgba8();
+        let cx = size / 2;
+        let cy = size / 2;
+        let center = out.get_pixel(cx, cy)[0] as i32;
+        // 200 より大幅に暗いはず (strength=1.0, darkened = lum * 0.05)
+        assert!(
+            center < 200,
+            "center must be darkened at full strength, got {center}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T16: macular_degeneration periphery unchanged at full strength
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn macular_degeneration_periphery_unchanged_at_full_strength() {
+        // 周辺 (r > outer_r=0.4) は t=0.0 → continue → 変化なし
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 100, 50, 255]);
+        let out = macular_degeneration(input, 1.0).unwrap().to_rgba8();
+        // コーナーは周辺なので変化なし
+        let corner = out.get_pixel(0, 0);
+        assert_eq!([corner[0], corner[1], corner[2]], [200, 100, 50]);
+    }
+
+    // ---------------------------------------------------------------
+    // T17: macular_degeneration monotonic center darkening
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn macular_degeneration_strength_monotonic_center_darkening() {
+        // 中心では strength が大きいほど暗い
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out05 = macular_degeneration(input.clone(), 0.5).unwrap().to_rgba8();
+        let out10 = macular_degeneration(input, 1.0).unwrap().to_rgba8();
+        let cx = size / 2;
+        let cy = size / 2;
+        let r05 = out05.get_pixel(cx, cy)[0] as i32;
+        let r10 = out10.get_pixel(cx, cy)[0] as i32;
+        assert!(
+            r05 > r10,
+            "strength=0.5 center must be brighter than strength=1.0: {r05} vs {r10}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T18: hemianopia left side darkened when side=0.0
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hemianopia_left_side_darkened_when_side_zero() {
+        // side=0.0, strength=1.0: 左端 (x=0) は x < split_x - blur_w → fade=1.0 → 黒
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out = hemianopia(input, 1.0, 0.0).unwrap().to_rgba8();
+        let left = out.get_pixel(0, size / 2);
+        assert_eq!(
+            [left[0], left[1], left[2]],
+            [0, 0, 0],
+            "left edge must be black when side=0.0"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T19: hemianopia right side darkened when side=1.0
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hemianopia_right_side_darkened_when_side_one() {
+        // side=1.0, strength=1.0: 右端 (x=size-1) は x > split_x + blur_w → fade=1.0 → 黒
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out = hemianopia(input, 1.0, 1.0).unwrap().to_rgba8();
+        let right = out.get_pixel(size - 1, size / 2);
+        assert_eq!(
+            [right[0], right[1], right[2]],
+            [0, 0, 0],
+            "right edge must be black when side=1.0"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T20: hemianopia side=0.0 and side=1.0 are left-right symmetric
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hemianopia_side_left_right_symmetry() {
+        // side=0.0 と side=1.0 の対称性を境界から十分離れた領域（端部）で確認する。
+        // 境界付近の blur_w ゾーンでは整数ピクセルの離散化により非対称が生じうるが、
+        // 境界から遠い領域（左 25%、右 25%）では完全に対称であるべき。
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out_left = hemianopia(input.clone(), 1.0, 0.0).unwrap().to_rgba8();
+        let out_right = hemianopia(input, 1.0, 1.0).unwrap().to_rgba8();
+        // 境界から遠い端部（左 1/4 と右 1/4）の対称性を確認
+        for y in 0..size {
+            for x in 0..size / 4 {
+                let pl = out_left.get_pixel(x, y)[0] as i32;
+                let pr = out_right.get_pixel(size - 1 - x, y)[0] as i32;
+                assert_eq!(
+                    pl, pr,
+                    "far-end symmetry failed at x={x}: side=0 left={pl}, side=1 mirrored={pr}"
+                );
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // T21: hemianopia boundary center is intermediate
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hemianopia_boundary_center_is_intermediate() {
+        // x = split_x (中央) は境界内にあり、完全黒でも完全白でもない
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out = hemianopia(input, 1.0, 0.0).unwrap().to_rgba8();
+        let cx = size / 2;
+        let cy = size / 2;
+        let center = out.get_pixel(cx, cy)[0] as i32;
+        // 完全黒 (0) でも元画像 (≈200) でもない中間値
+        assert!(
+            center > 0 && center < 200,
+            "boundary center must be intermediate, got {center}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T22: tunnel_vision corner becomes black at full strength
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tunnel_vision_corner_becomes_black_at_full_strength() {
+        // strength=1.0: inner_r=0.0, outer_r=0.05。コーナー r≈1.0 > 0.05 → 黒
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 100, 50, 255]);
+        let out = tunnel_vision(input, 1.0).unwrap().to_rgba8();
+        let corner = out.get_pixel(0, 0);
+        assert_eq!([corner[0], corner[1], corner[2]], [0, 0, 0]);
+    }
+
+    // ---------------------------------------------------------------
+    // T23: tunnel_vision monotonic peripheral darkening
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tunnel_vision_strength_monotonic_peripheral_darkening() {
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let out05 = tunnel_vision(input.clone(), 0.5).unwrap().to_rgba8();
+        let out10 = tunnel_vision(input, 1.0).unwrap().to_rgba8();
+        let r05 = out05.get_pixel(0, 0)[0] as i32;
+        let r10 = out10.get_pixel(0, 0)[0] as i32;
+        assert!(
+            r05 > r10,
+            "strength=0.5 corner must be brighter than strength=1.0: {r05} vs {r10}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T24: tunnel_vision darker area is wider than glaucoma at same strength
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tunnel_vision_narrower_than_glaucoma_at_same_strength() {
+        // tunnel_vision の中心保持領域は glaucoma より狭い（暗化エリアが広い）。
+        // 同一の strength=1.0 で、中心から少し離れた点を比較する。
+        // glaucoma: inner_r=0.3, outer_r=0.5 → 中心近くは保存
+        // tunnel: inner_r=0.0, outer_r=0.05 → ほぼ全体が暗化
+        // 中心から 30% 離れた点での輝度比較（glaucoma は保存, tunnel は暗化済み）
+        let size = 100_u32;
+        let input = solid_rgba(size, size, [200, 200, 200, 255]);
+        let g_out = glaucoma(input.clone(), 1.0).unwrap().to_rgba8();
+        let t_out = tunnel_vision(input, 1.0).unwrap().to_rgba8();
+        // (50, 65) は中心から dy=15, normalized ≈ 0.15 → glaucoma ではinner_r=0.3 内で保存
+        let cx = 50_u32;
+        let test_y = 65_u32; // 中心y=50, dy=15
+        let g_px = g_out.get_pixel(cx, test_y)[0] as i32;
+        let t_px = t_out.get_pixel(cx, test_y)[0] as i32;
+        assert!(
+            g_px > t_px,
+            "glaucoma must preserve more than tunnel_vision at same strength: \
+             glaucoma={g_px}, tunnel={t_px}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // T25-T26: lerp tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn lerp_basic_interpolation() {
+        assert_eq!(super::lerp(0.0, 10.0, 0.0), 0.0);
+        assert_eq!(super::lerp(0.0, 10.0, 1.0), 10.0);
+        assert_eq!(super::lerp(0.0, 10.0, 0.5), 5.0);
+        assert_eq!(super::lerp(2.0, 8.0, 0.5), 5.0);
+    }
+
+    #[test]
+    fn lerp_extrapolation_beyond_range() {
+        // t=2.0 → clamp しない: a + (b-a)*2 = 0 + 10*2 = 20
+        let result = super::lerp(0.0, 10.0, 2.0);
+        assert!((result - 20.0).abs() < 1e-5, "expected 20.0, got {result}");
+    }
+
+    // ---------------------------------------------------------------
+    // T27-T30: 1x1 image does not panic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_1x1_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = glaucoma(input, 1.0).unwrap();
+    }
+
+    #[test]
+    fn macular_degeneration_1x1_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = macular_degeneration(input, 1.0).unwrap();
+    }
+
+    #[test]
+    fn hemianopia_1x1_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = hemianopia(input, 1.0, 0.5).unwrap();
+    }
+
+    #[test]
+    fn tunnel_vision_1x1_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = tunnel_vision(input, 1.0).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // T31-T33: color-specific pixel behavior
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_white_image_center_stays_white_corner_goes_black() {
+        let size = 64_u32;
+        let input = solid_rgba(size, size, [255, 255, 255, 255]);
+        let out = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let cx = size / 2;
+        let cy = size / 2;
+        let center = out.get_pixel(cx, cy);
+        assert_eq!(
+            [center[0], center[1], center[2]],
+            [255, 255, 255],
+            "center of white image must stay white"
+        );
+        let corner = out.get_pixel(0, 0);
+        assert_eq!(
+            [corner[0], corner[1], corner[2]],
+            [0, 0, 0],
+            "corner of white image must become black"
+        );
+    }
+
+    #[test]
+    fn glaucoma_black_image_stays_black() {
+        let size = 32_u32;
+        let input = solid_rgba(size, size, [0, 0, 0, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(raw_rgba_vec(&glaucoma(input, 1.0).unwrap()), original);
+    }
+
+    #[test]
+    fn macular_degeneration_black_image_stays_black() {
+        let size = 32_u32;
+        let input = solid_rgba(size, size, [0, 0, 0, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&macular_degeneration(input, 1.0).unwrap()),
+            original
+        );
     }
 
     // ---------------------------------------------------------------

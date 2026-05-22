@@ -76,6 +76,10 @@ pub fn apply(
         Filter::Photophobia => vision::photophobia(img, strength),
         Filter::NightBlindness => vision::nyctalopia(img, strength),
         Filter::Floaters => vision::floaters(img, strength, 0.5, 0, 0.5, 0.5),
+        Filter::Glaucoma => vision::glaucoma(img, strength),
+        Filter::MacularDegeneration => vision::macular_degeneration(img, strength),
+        Filter::Hemianopia => vision::hemianopia(img, strength, 0.0),
+        Filter::TunnelVision => vision::tunnel_vision(img, strength),
         other => Err(Error::NotImplemented(other)),
     }
 }
