@@ -100,7 +100,7 @@ impl Default for Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, RgbImage};
+    use image::{DynamicImage, RgbaImage, RgbImage};
 
     fn make_image() -> DynamicImage {
         DynamicImage::ImageRgb8(RgbImage::new(64, 64))
@@ -149,5 +149,88 @@ mod tests {
         step.gaze_y = 0.6;
         let pipeline = Pipeline::new().push(step);
         assert!(pipeline.apply(img).is_ok());
+    }
+
+    /// 空のパイプラインを通しても画素値が変化しない（byte-exact）。
+    #[test]
+    fn empty_pipeline_is_identity() {
+        let src = {
+            let mut img = RgbImage::new(4, 4);
+            for (x, y, px) in img.enumerate_pixels_mut() {
+                *px = image::Rgb([(x * 17) as u8, (y * 31) as u8, 128]);
+            }
+            DynamicImage::ImageRgb8(img)
+        };
+        let before = src.to_rgb8().into_raw();
+        let after = Pipeline::new().apply(src).unwrap().to_rgb8().into_raw();
+        assert_eq!(before, after);
+    }
+
+    /// Pipeline::apply() が sensus_core::apply() と同一結果を返す。
+    #[test]
+    fn single_step_matches_direct_apply() {
+        let img = make_image();
+        let img2 = img.clone();
+
+        let step = FilterStep::new(Filter::Protanopia, 1.0);
+        let via_pipeline = Pipeline::new().push(step).apply(img).unwrap().to_rgb8().into_raw();
+        let direct = crate::apply(Filter::Protanopia, img2, 1.0).unwrap().to_rgb8().into_raw();
+
+        assert_eq!(via_pipeline, direct);
+    }
+
+    /// A→B と B→A で結果が異なることを確認する（順序依存性のテスト）。
+    #[test]
+    fn two_step_order_matters() {
+        // グラデーション画像を使う。
+        // protanopia（赤→緑方向のシフト）→ glaucoma（周辺暗化）と逆順では
+        // 周辺が暗化されてから色変換されるかどうかが変わるため結果が異なる。
+        let img = {
+            let mut base = RgbImage::new(32, 32);
+            for (x, y, px) in base.enumerate_pixels_mut() {
+                *px = image::Rgb([x as u8 * 7, y as u8 * 5, 200]);
+            }
+            DynamicImage::ImageRgb8(base)
+        };
+        let img2 = img.clone();
+
+        let ab = Pipeline::new()
+            .push(FilterStep::new(Filter::Protanopia, 1.0))
+            .push(FilterStep::new(Filter::Glaucoma, 1.0))
+            .apply(img)
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
+
+        let ba = Pipeline::new()
+            .push(FilterStep::new(Filter::Glaucoma, 1.0))
+            .push(FilterStep::new(Filter::Protanopia, 1.0))
+            .apply(img2)
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
+
+        assert_ne!(ab, ba, "protanopia→glaucoma and glaucoma→protanopia should differ");
+    }
+
+    /// alpha チャンネル付き画像で alpha が保持されること。
+    #[test]
+    fn pipeline_preserves_alpha() {
+        use image::GenericImageView;
+        let src = {
+            let mut img = RgbaImage::new(8, 8);
+            for px in img.pixels_mut() {
+                *px = image::Rgba([100, 150, 200, 128]);
+            }
+            DynamicImage::ImageRgba8(img)
+        };
+        let out = Pipeline::new()
+            .push(FilterStep::new(Filter::Protanopia, 1.0))
+            .apply(src)
+            .unwrap();
+        // すべての画素の alpha が 128 のまま保持されているか確認
+        for (_x, _y, px) in out.pixels() {
+            assert_eq!(px[3], 128, "alpha channel must be preserved");
+        }
     }
 }

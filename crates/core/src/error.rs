@@ -23,6 +23,6 @@ pub enum Error {
         step: usize,
         filter: String,
         #[source]
-        source: Box<Error>,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
 }

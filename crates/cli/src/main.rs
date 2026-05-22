@@ -155,12 +155,20 @@ enum RunError {
     /// A filter was selected but not yet implemented in core.
     #[error("{0}")]
     NotImplemented(String),
+
+    /// A pipeline step failed at runtime.
+    #[error("{0}")]
+    Pipeline(String),
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(RunError::Pipeline(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
         Err(RunError::NotImplemented(msg)) => {
             eprintln!("{msg}");
             ExitCode::from(2)
@@ -194,8 +202,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
         pipeline = pipeline.push(step);
     }
 
-    let result = pipeline.apply(img);
-
     // For single-filter case, replicate legacy warnings.
     if cli.filter.len() == 1 {
         let core_filter = cli.filter[0].to_core();
@@ -224,6 +230,8 @@ fn run(cli: Cli) -> Result<(), RunError> {
         }
     }
 
+    let result = pipeline.apply(img);
+
     match result {
         Ok(out) => {
             out.save(&cli.output)
@@ -246,9 +254,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
             path: cli.input.clone(),
             source: err,
         }),
-        Err(e) => {
-            eprintln!("sensus: {e}");
-            Err(RunError::NotImplemented(e.to_string()))
-        }
+        Err(e) => Err(RunError::Pipeline(format!("sensus: {e}"))),
     }
 }
