@@ -605,6 +605,304 @@ pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<Dy
     Ok(DynamicImage::ImageRgba8(out))
 }
 
+// ---------------------------------------------------------------------
+// Phase 3: light / transparency (cataract, photophobia, nyctalopia, floaters)
+// ---------------------------------------------------------------------
+
+/// 白内障（Cataract）シミュレーション。
+///
+/// linear sRGB 空間で輝度低下・黄色み追加・局所白濁ノイズを適用する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強度白内障
+/// - `seed`: 白濁ノイズのランダムシード
+pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+
+    // チャンネルごとの乗数（黄色み: B を強く抑制）
+    let r_factor = 1.0 - strength * 0.3_f32;
+    let g_factor = 1.0 - strength * 0.3_f32;
+    let b_factor = 1.0 - strength * 0.6_f32;
+
+    // 白濁ノイズの最大ブレンド量
+    const WHITE_BLEND_MAX: f32 = 0.4;
+    // 8x8 ブロック単位でノイズを決定（白内障の白濁は粗い濁り）
+    const BLOCK_SIZE: u32 = 8;
+
+    // ブロックノイズ値を事前計算
+    let block_cols = width.div_ceil(BLOCK_SIZE);
+    let block_rows = height.div_ceil(BLOCK_SIZE);
+    let mut block_noise: Vec<f32> =
+        Vec::with_capacity((block_cols * block_rows) as usize);
+    for by in 0..block_rows {
+        for bx in 0..block_cols {
+            // ハッシュで擬似ランダム値を生成
+            let h = seed
+                .wrapping_mul(0x9e3779b97f4a7c15)
+                .wrapping_add((bx as u64).wrapping_mul(0x517cc1b727220a95))
+                .wrapping_add((by as u64).wrapping_mul(0x6c62272e07bb0142));
+            // 上位ビットを使って 0.0..=1.0 に正規化
+            let n = (h >> 32) as f32 / u32::MAX as f32;
+            block_noise.push(n);
+        }
+    }
+
+    for y in 0..height {
+        for x in 0..width {
+            let px = rgba.get_pixel_mut(x, y);
+
+            // linear sRGB に変換
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+            // チャンネル別輝度低下・黄色み
+            let nr = r * r_factor;
+            let ng = g * g_factor;
+            let nb = b * b_factor;
+
+            // ブロックノイズによる白濁
+            let bx = (x / BLOCK_SIZE) as usize;
+            let by = (y / BLOCK_SIZE) as usize;
+            let noise = block_noise[by * block_cols as usize + bx];
+            let white_blend = strength * noise * WHITE_BLEND_MAX;
+
+            let fr = nr + (1.0 - nr) * white_blend;
+            let fg = ng + (1.0 - ng) * white_blend;
+            let fb = nb + (1.0 - nb) * white_blend;
+
+            px[0] = pack_u8(linear_to_srgb(fr));
+            px[1] = pack_u8(linear_to_srgb(fg));
+            px[2] = pack_u8(linear_to_srgb(fb));
+            // alpha はそのまま
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
+/// 光過敏（Photophobia）シミュレーション。
+///
+/// 明るい部分が滲み出す bloom 効果を linear sRGB 空間で適用する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強い bloom
+pub fn photophobia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+
+    // bloom 半径
+    const PHOTOPHOBIA_BLOOM_RADIUS_RATIO: f32 = 0.05;
+    let min_dim = width.min(height) as f32;
+    let bloom_radius = strength * PHOTOPHOBIA_BLOOM_RADIUS_RATIO * min_dim;
+
+    // ハイライト閾値
+    const PHOTOPHOBIA_THRESHOLD: f32 = 0.5;
+
+    // linear sRGB に変換
+    let (linear, _alpha) = rgba_to_linear_planes(&rgba);
+
+    // ハイライトレイヤーを抽出
+    let mut highlight: Vec<[f32; 3]> = linear
+        .iter()
+        .map(|&[r, g, b]| {
+            let y = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+            let mask = if y > PHOTOPHOBIA_THRESHOLD {
+                (y - PHOTOPHOBIA_THRESHOLD) / (1.0 - PHOTOPHOBIA_THRESHOLD)
+            } else {
+                0.0
+            };
+            [r * mask, g * mask, b * mask]
+        })
+        .collect();
+
+    // ハイライトレイヤーに disk blur を適用（bloom_radius >= MIN_BLUR_RADIUS_PX の場合のみ）
+    // bloom_radius が小さすぎる（= strength が非常に小さい）場合は bloom 効果なし
+    if bloom_radius >= MIN_BLUR_RADIUS_PX {
+        highlight = ellipse_blur(&highlight, width, height, bloom_radius, bloom_radius, 0.0);
+    } else {
+        // blur できない = bloom なし。highlight をゼロにして加算しない
+        highlight.iter_mut().for_each(|p| *p = [0.0, 0.0, 0.0]);
+    }
+
+    // 元画像 + bloom を加算（saturate）
+    let mut out_rgba = rgba.clone();
+    for (i, px) in out_rgba.pixels_mut().enumerate() {
+        let orig = linear[i];
+        let bloom = highlight[i];
+        let fr = (orig[0] + bloom[0]).min(1.0);
+        let fg = (orig[1] + bloom[1]).min(1.0);
+        let fb = (orig[2] + bloom[2]).min(1.0);
+        px[0] = pack_u8(linear_to_srgb(fr));
+        px[1] = pack_u8(linear_to_srgb(fg));
+        px[2] = pack_u8(linear_to_srgb(fb));
+        // alpha はそのまま
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
+/// 夜盲（Nyctalopia）シミュレーション。
+///
+/// 暗所視力低下: 全体が暗くなり色感度が落ちてグレースケール寄りになる。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強度夜盲
+pub fn nyctalopia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let dark_factor = 1.0 - strength * 0.7_f32;
+    let desat = strength * 0.8_f32;
+
+    for px in rgba.pixels_mut() {
+        let r = srgb_to_linear(px[0] as f32 / 255.0);
+        let g = srgb_to_linear(px[1] as f32 / 255.0);
+        let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+        let y = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+
+        // 脱色（グレーに寄せる）してから暗化
+        let dr = r + (y - r) * desat;
+        let dg = g + (y - g) * desat;
+        let db = b + (y - b) * desat;
+
+        let fr = dr * dark_factor;
+        let fg = dg * dark_factor;
+        let fb = db * dark_factor;
+
+        px[0] = pack_u8(linear_to_srgb(fr));
+        px[1] = pack_u8(linear_to_srgb(fg));
+        px[2] = pack_u8(linear_to_srgb(fb));
+        // alpha はそのまま
+    }
+
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
+/// 飛蚊症（Floaters）シミュレーション。
+///
+/// 視野内に暗い blob が浮かぶオーバーレイを乗算ブレンドで適用する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強い飛蚊症
+/// - `density`: blob 密度 (0.0..=1.0)
+/// - `seed`: blob 配置のランダムシード
+/// - `gaze_x`: 視線 X 位置 (0.0 = 左, 1.0 = 右)
+/// - `gaze_y`: 視線 Y 位置 (0.0 = 上, 1.0 = 下)
+pub fn floaters(
+    img: DynamicImage,
+    strength: f32,
+    density: f32,
+    seed: u64,
+    gaze_x: f32,
+    gaze_y: f32,
+) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+
+    let density = density.clamp(0.0, 1.0);
+    let gaze_x = gaze_x.clamp(0.0, 1.0);
+    let gaze_y = gaze_y.clamp(0.0, 1.0);
+
+    // 視線オフセット（フローターは視線に追随）
+    let offset_x = (gaze_x - 0.5) * 0.3 * w_f;
+    let offset_y = (gaze_y - 0.5) * 0.3 * h_f;
+
+    // blob 数と半径
+    let blob_count = (density * 200.0) as usize; // density=0.0 → 0 個（フローターなし）
+    if blob_count == 0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+    let blob_radius = (w_f.min(h_f) * 0.04).max(2.0);
+    let blob_radius_sq = blob_radius * blob_radius;
+
+    // blob 中心位置を seed から生成
+    let mut centers: Vec<(f32, f32)> = Vec::with_capacity(blob_count);
+    for i in 0..blob_count {
+        let hx = seed
+            .wrapping_mul(0x9e3779b97f4a7c15)
+            .wrapping_add((i as u64).wrapping_mul(0x517cc1b727220a95))
+            .wrapping_add(0xdeadbeefcafe1234);
+        let hy = seed
+            .wrapping_mul(0x6c62272e07bb0142)
+            .wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15))
+            .wrapping_add(0xc0ffee0102030405);
+        let cx = (hx >> 32) as f32 / u32::MAX as f32 * w_f + offset_x;
+        let cy = (hy >> 32) as f32 / u32::MAX as f32 * h_f + offset_y;
+        centers.push((cx, cy));
+    }
+
+    // フローターマスクを生成して元画像に乗算ブレンド
+    let mut out_rgba = rgba.clone();
+    for y in 0..height {
+        for x in 0..width {
+            let xf = x as f32;
+            let yf = y as f32;
+
+            // 最も近い blob との距離でマスク値を決定
+            let mut min_dist_sq = f32::MAX;
+            for &(cx, cy) in &centers {
+                let dx = xf - cx;
+                let dy = yf - cy;
+                let d2 = dx * dx + dy * dy;
+                if d2 < min_dist_sq {
+                    min_dist_sq = d2;
+                }
+            }
+
+            // blob 内部: smoothstep 減衰でマスク値を計算
+            // mask = 0.0 → フローター（暗い）、1.0 → 元画像
+            let mask = if min_dist_sq < blob_radius_sq {
+                let t = min_dist_sq / blob_radius_sq;
+                // smoothstep: 外側ほど 1.0 に近い
+                t * t * (3.0 - 2.0 * t)
+            } else {
+                1.0
+            };
+
+            // 元画像 × (1.0 - strength * (1.0 - mask)) で乗算ブレンド
+            let blend = 1.0 - strength * (1.0 - mask);
+
+            let px = out_rgba.get_pixel_mut(x, y);
+            // linear sRGB 空間で乗算（gamma 解除 → 処理 → gamma 戻し）
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            px[0] = pack_u8(linear_to_srgb(rl * blend));
+            px[1] = pack_u8(linear_to_srgb(gl * blend));
+            px[2] = pack_u8(linear_to_srgb(bl * blend));
+            // alpha はそのまま
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1282,6 +1580,221 @@ mod tests {
     // ---------------------------------------------------------------
     // 性能リグレッションガード (--ignored)
     // ---------------------------------------------------------------
+
+    // =================================================================
+    // Phase 3 (#6): light / transparency tests
+    // =================================================================
+
+    // ---------------------------------------------------------------
+    // P01-P04: strength = 0.0 で 4 フィルタすべて identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cataract_strength_zero_is_identity() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(raw_rgba_vec(&cataract(input, 0.0, 42).unwrap()), original);
+    }
+
+    #[test]
+    fn photophobia_strength_zero_is_identity() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(raw_rgba_vec(&photophobia(input, 0.0).unwrap()), original);
+    }
+
+    #[test]
+    fn nyctalopia_strength_zero_is_identity() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(raw_rgba_vec(&nyctalopia(input, 0.0).unwrap()), original);
+    }
+
+    #[test]
+    fn floaters_strength_zero_is_identity() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&floaters(input, 0.0, 0.5, 42, 0.5, 0.5).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // P05-P06: NaN strength は identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cataract_nan_strength_returns_identity() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 200]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&cataract(input, f32::NAN, 42).unwrap()),
+            original
+        );
+    }
+
+    #[test]
+    fn nyctalopia_nan_strength_returns_identity() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 200]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&nyctalopia(input, f32::NAN).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // P07: floaters density=0.0 → blob_count=0 → identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn floaters_density_zero_returns_identity() {
+        let input = solid_rgba(16, 16, [100, 150, 200, 255]);
+        let original = raw_rgba_vec(&input);
+        // density=0.0 なので blob_count=0 → early return で identity
+        assert_eq!(
+            raw_rgba_vec(&floaters(input, 1.0, 0.0, 42, 0.5, 0.5).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // P08: 4 フィルタ alpha 保持（alpha != 255 の入力）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn light_filters_preserve_alpha() {
+        let input = solid_rgba(16, 16, [200, 100, 50, 128]);
+        let check_alpha = |img: &DynamicImage| {
+            for px in img.to_rgba8().pixels() {
+                assert_eq!(px[3], 128, "alpha must be preserved");
+            }
+        };
+        check_alpha(&cataract(input.clone(), 1.0, 42).unwrap());
+        check_alpha(&photophobia(input.clone(), 1.0).unwrap());
+        check_alpha(&nyctalopia(input.clone(), 1.0).unwrap());
+        check_alpha(&floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap());
+    }
+
+    // ---------------------------------------------------------------
+    // P09: 4 フィルタ 出力サイズ同一
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn light_filters_preserve_dimensions() {
+        let input = solid_rgba(31, 17, [80, 90, 100, 255]);
+        let check_dims = |img: &DynamicImage| {
+            assert_eq!((img.width(), img.height()), (31, 17));
+        };
+        check_dims(&cataract(input.clone(), 1.0, 42).unwrap());
+        check_dims(&photophobia(input.clone(), 1.0).unwrap());
+        check_dims(&nyctalopia(input.clone(), 1.0).unwrap());
+        check_dims(&floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap());
+    }
+
+    // ---------------------------------------------------------------
+    // P10: cataract yellowing reduces B channel more than R/G
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cataract_yellowing_reduces_blue() {
+        // strength=1.0: R係数 0.7, G係数 0.7, B係数 0.4
+        // 白画像で out_B < out_R かつ out_B < out_G になるはず
+        // （ただしwhite_blendノイズの影響を避けるため、
+        //   すべてのピクセルで B < R を確認する）
+        let input = solid_rgba(32, 32, [255, 255, 255, 255]);
+        let out = cataract(input, 1.0, 0).unwrap().to_rgba8();
+        // 少なくとも中心ピクセルで確認
+        let px = out.get_pixel(16, 16);
+        let (r, g, b) = (px[0] as i32, px[1] as i32, px[2] as i32);
+        assert!(
+            b < r,
+            "cataract yellowing: expected B < R, got R={r}, G={g}, B={b}"
+        );
+        // 全ピクセルで B <= R を確認（白濁ノイズがあっても基本的に B が最小）
+        for px in out.pixels() {
+            let (pr, pb) = (px[0] as i32, px[2] as i32);
+            assert!(
+                pb <= pr,
+                "cataract: expected B <= R at every pixel, got R={pr}, B={pb}"
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // P11: nyctalopia darkens and desaturates
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn nyctalopia_darkens_and_desaturates() {
+        // strength=1.0 で白画像 [255,255,255] が暗くなりグレーに近づく
+        // dark_factor = 1.0 - 1.0 * 0.7 = 0.3
+        // 白のlinear: 1.0 → desat後も1.0（グレー）→ 0.3倍 → linear 0.3
+        // sRGB変換: linear_to_srgb(0.3) ≈ 0.5872 → 8bit ≈ 150
+        let input = solid_rgba(8, 8, [255, 255, 255, 255]);
+        let out = nyctalopia(input, 1.0).unwrap().to_rgba8();
+        for px in out.pixels() {
+            let (r, g, b) = (px[0], px[1], px[2]);
+            // 暗化: 255 より大幅に低い
+            assert!(r < 200, "nyctalopia must darken: R={r}");
+            // グレーに近い: R==G==B（1bit 丸め誤差を許容）
+            assert!((r as i16 - g as i16).abs() <= 1, "R/G desaturate mismatch");
+            assert!((g as i16 - b as i16).abs() <= 1, "G/B desaturate mismatch");
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // P12: floaters same seed → byte-exact reproducible
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn floaters_same_seed_is_reproducible() {
+        let input = solid_rgba(32, 32, [200, 150, 100, 255]);
+        let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.3, 12345, 0.5, 0.5).unwrap());
+        let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.3, 12345, 0.5, 0.5).unwrap());
+        assert_eq!(out1, out2, "same seed must produce byte-exact identical output");
+    }
+
+    // ---------------------------------------------------------------
+    // P13: floaters different seed → different output
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn floaters_different_seed_differs() {
+        let input = solid_rgba(32, 32, [200, 150, 100, 255]);
+        let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.5, 111, 0.5, 0.5).unwrap());
+        let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.5, 999, 0.5, 0.5).unwrap());
+        assert_ne!(out1, out2, "different seeds must produce different output");
+    }
+
+    // ---------------------------------------------------------------
+    // P14-P17: 1x1 でクラッシュなし
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn cataract_1x1_does_not_panic() {
+        let input = pixel(128, 64, 32, 255);
+        let _ = cataract(input, 1.0, 42).unwrap();
+    }
+
+    #[test]
+    fn photophobia_1x1_does_not_panic() {
+        let input = pixel(255, 255, 255, 255);
+        let _ = photophobia(input, 1.0).unwrap();
+    }
+
+    #[test]
+    fn nyctalopia_1x1_does_not_panic() {
+        let input = pixel(128, 64, 32, 255);
+        let _ = nyctalopia(input, 1.0).unwrap();
+    }
+
+    #[test]
+    fn floaters_1x1_does_not_panic() {
+        let input = pixel(128, 64, 32, 255);
+        let _ = floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap();
+    }
 
     #[test]
     #[ignore = "perf check; run with `cargo test -- --ignored`"]

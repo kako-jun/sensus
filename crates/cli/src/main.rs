@@ -86,6 +86,22 @@ struct Cli {
     /// vertical sharp, horizontal blurred).
     #[arg(long, default_value_t = 90.0, value_parser = parse_axis)]
     axis: f32,
+
+    /// Random seed for stochastic filters (cataract, floaters). Default: 0.
+    #[arg(long, default_value = "0")]
+    seed: u64,
+
+    /// Floater density in 0.0..=1.0. Only used with --filter floaters.
+    #[arg(long, default_value = "0.5")]
+    density: f32,
+
+    /// Gaze X position in 0.0..=1.0 (0=left, 1=right). Only used with --filter floaters.
+    #[arg(long, default_value = "0.5")]
+    gaze_x: f32,
+
+    /// Gaze Y position in 0.0..=1.0 (0=top, 1=bottom). Only used with --filter floaters.
+    #[arg(long, default_value = "0.5")]
+    gaze_y: f32,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -170,9 +186,37 @@ fn run(cli: Cli) -> Result<(), RunError> {
             "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
         );
     }
+    // --seed/--density/--gaze_x/--gaze_y が対象外フィルタで指定された場合も警告。
+    let uses_seed = matches!(core_filter, CoreFilter::Cataract | CoreFilter::Floaters);
+    let uses_floater_params = matches!(core_filter, CoreFilter::Floaters);
+    if !uses_seed && cli.seed != 0 {
+        eprintln!(
+            "sensus: warning: --seed is only used with --filter cataract or floaters (ignored for {core_filter:?})"
+        );
+    }
+    if !uses_floater_params && (cli.density != 0.5 || cli.gaze_x != 0.5 || cli.gaze_y != 0.5) {
+        eprintln!(
+            "sensus: warning: --density/--gaze-x/--gaze-y are only used with --filter floaters (ignored for {core_filter:?})"
+        );
+    }
 
     let result = match core_filter {
         CoreFilter::Astigmatism => sensus_core::vision::astigmatism(img, cli.strength, cli.axis),
+        CoreFilter::Cataract => {
+            sensus_core::vision::cataract(img, cli.strength, cli.seed)
+        }
+        CoreFilter::Floaters => {
+            sensus_core::vision::floaters(
+                img,
+                cli.strength,
+                cli.density,
+                cli.seed,
+                cli.gaze_x,
+                cli.gaze_y,
+            )
+        }
+        CoreFilter::Photophobia => sensus_core::vision::photophobia(img, cli.strength),
+        CoreFilter::NightBlindness => sensus_core::vision::nyctalopia(img, cli.strength),
         f => sensus_core::apply(f, img, cli.strength),
     };
 
