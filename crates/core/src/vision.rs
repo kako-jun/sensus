@@ -612,7 +612,7 @@ pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<Dy
 }
 
 // ---------------------------------------------------------------------
-// Phase 3: light / transparency (cataract, photophobia, nyctalopia, floaters)
+// Phase 3b: 光・透明度 (Issue #6) — cataract / photophobia / nyctalopia / floaters
 // ---------------------------------------------------------------------
 
 /// 白内障（Cataract）シミュレーション。
@@ -910,7 +910,7 @@ pub fn floaters(
 }
 
 // ---------------------------------------------------------------
-// Phase 3b: 視野異常 (Issue #5)
+// Phase 3a: 視野異常 (Issue #5) — glaucoma / macular_degeneration / hemianopia / tunnel_vision
 // ---------------------------------------------------------------
 
 /// 緑内障（glaucoma）シミュレーション。
@@ -1874,7 +1874,7 @@ mod tests {
     }
 
     // =================================================================
-    // Phase 3b (#5): visual field defect tests
+    // Phase 3a (#5): visual field defect tests
     // =================================================================
 
     // ---------------------------------------------------------------
