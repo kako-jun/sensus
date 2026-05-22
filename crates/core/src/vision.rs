@@ -637,8 +637,8 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     const BLOCK_SIZE: u32 = 8;
 
     // ブロックノイズ値を事前計算
-    let block_cols = (width + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    let block_rows = (height + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let block_cols = width.div_ceil(BLOCK_SIZE);
+    let block_rows = height.div_ceil(BLOCK_SIZE);
     let mut block_noise: Vec<f32> =
         Vec::with_capacity((block_cols * block_rows) as usize);
     for by in 0..block_rows {
