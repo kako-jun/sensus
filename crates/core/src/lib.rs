@@ -72,6 +72,7 @@ pub fn apply(
         Filter::Hyperopia => vision::hyperopia(img, strength),
         Filter::Presbyopia => vision::presbyopia(img, strength),
         Filter::Astigmatism => vision::astigmatism(img, strength, 90.0),
+        Filter::Cataract => vision::cataract(img, strength, 0),
         other => Err(Error::NotImplemented(other)),
     }
 }

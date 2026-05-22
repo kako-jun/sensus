@@ -605,6 +605,89 @@ pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<Dy
     Ok(DynamicImage::ImageRgba8(out))
 }
 
+// ---------------------------------------------------------------------
+// Phase 3: light / transparency (cataract, photophobia, nyctalopia, floaters)
+// ---------------------------------------------------------------------
+
+/// 白内障（Cataract）シミュレーション。
+///
+/// linear sRGB 空間で輝度低下・黄色み追加・局所白濁ノイズを適用する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強度白内障
+/// - `seed`: 白濁ノイズのランダムシード
+pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+
+    // チャンネルごとの乗数（黄色み: B を強く抑制）
+    let r_factor = 1.0 - strength * 0.3_f32;
+    let g_factor = 1.0 - strength * 0.3_f32;
+    let b_factor = 1.0 - strength * 0.6_f32;
+
+    // 白濁ノイズの最大ブレンド量
+    const WHITE_BLEND_MAX: f32 = 0.4;
+    // 8x8 ブロック単位でノイズを決定（白内障の白濁は粗い濁り）
+    const BLOCK_SIZE: u32 = 8;
+
+    // ブロックノイズ値を事前計算
+    let block_cols = (width + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let block_rows = (height + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let mut block_noise: Vec<f32> =
+        Vec::with_capacity((block_cols * block_rows) as usize);
+    for by in 0..block_rows {
+        for bx in 0..block_cols {
+            // ハッシュで擬似ランダム値を生成
+            let h = seed
+                .wrapping_mul(0x9e3779b97f4a7c15)
+                .wrapping_add((bx as u64).wrapping_mul(0x517cc1b727220a95))
+                .wrapping_add((by as u64).wrapping_mul(0x6c62272e07bb0142));
+            // 上位ビットを使って 0.0..=1.0 に正規化
+            let n = (h >> 32) as f32 / u32::MAX as f32;
+            block_noise.push(n);
+        }
+    }
+
+    for y in 0..height {
+        for x in 0..width {
+            let px = rgba.get_pixel_mut(x, y);
+
+            // linear sRGB に変換
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+            // チャンネル別輝度低下・黄色み
+            let nr = r * r_factor;
+            let ng = g * g_factor;
+            let nb = b * b_factor;
+
+            // ブロックノイズによる白濁
+            let bx = (x / BLOCK_SIZE) as usize;
+            let by = (y / BLOCK_SIZE) as usize;
+            let noise = block_noise[by * block_cols as usize + bx];
+            let white_blend = strength * noise * WHITE_BLEND_MAX;
+
+            let fr = nr + (1.0 - nr) * white_blend;
+            let fg = ng + (1.0 - ng) * white_blend;
+            let fb = nb + (1.0 - nb) * white_blend;
+
+            px[0] = pack_u8(linear_to_srgb(fr));
+            px[1] = pack_u8(linear_to_srgb(fg));
+            px[2] = pack_u8(linear_to_srgb(fb));
+            // alpha はそのまま
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
