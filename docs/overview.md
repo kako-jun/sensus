@@ -194,7 +194,82 @@ astigmatism is expressed by chaining `Astigmatism + Myopia` (or
 callers that need a different axis should call `vision::astigmatism()`
 directly.
 
-## Non-goals
+## Visual field defect algorithm (Phase 3a, #5)
+
+`glaucoma`, `macular_degeneration`, `hemianopia`, and `tunnel_vision`
+simulate spatial loss of the visual field using **distance-based vignette
+masks** computed in linear sRGB space.
+
+### glaucoma
+
+Peripheral field loss radiating inward from the corners. A normalised
+radial distance `r` (0 = image centre, 1 = farthest corner) determines
+the darkening coefficient:
+
+- `r ≤ inner_r = 1.0 - strength × 0.7`: preserved (multiplier = 1.0)
+- `r ≥ outer_r = inner_r + 0.2`: fully darkened (multiplier = 0.0)
+- Between the two: smoothstep transition
+
+The pixel multiplier is `1.0 - strength × fade`.
+
+### macular_degeneration
+
+Central scotoma (blind spot). The same radial scheme is inverted — the
+*centre* is darkened toward a dark grey (`lum × (1 - strength × 0.95)`)
+and the periphery is unchanged:
+
+- `r ≤ inner_r = strength × 0.25`: full scotoma
+- `r ≥ outer_r = strength × 0.4`: unchanged
+- Between the two: smoothstep
+
+Uses `lerp(original_channel, lum × (1 - strength × 0.95), t)` to blend
+desaturation and darkening together.
+
+### hemianopia
+
+Left or right half-field loss. A vertical split at `x = width / 2` with
+a `2%` wide smoothstep border darkens the specified side. The `side`
+parameter (0.0 = left field lost, 1.0 = right field lost) is linearly
+interpolated so intermediate values shade both sides partially.
+
+Pixel multiplier: `1.0 - fade × strength`, where `fade` is derived from
+the horizontal smoothstep.
+
+CLI flag: `--side` (default `0.0`).
+
+### tunnel_vision
+
+Severe peripheral constriction (end-stage glaucoma, retinitis pigmentosa).
+Identical to `glaucoma` in structure but with a dramatically narrower
+preserved centre and sharper transition:
+
+- `inner_r = (1.0 - strength) × 0.5`
+- `outer_r = inner_r + 0.05` (cf. glaucoma's 0.2)
+
+At `strength = 1.0` only the single central pixel escapes darkening.
+
+### Medical urgency notes
+
+- 🚨 **hemianopia** (sudden onset): possible stroke — call emergency services immediately.
+- ⚠️ **glaucoma**: often asymptomatic until advanced; early treatment is critical.
+- ⚠️ **macular_degeneration**: early detection can slow progression.
+
+## Light / transparency algorithm (Phase 3b, #6)
+
+`cataract`, `photophobia`, `nyctalopia`, and `floaters` simulate
+aberrations of the eye's optical medium, all in linear sRGB space.
+
+- **cataract**: per-channel attenuation (`R×0.7, G×0.7, B×0.4`) for
+  yellowing, plus 8×8 block-hash noise for scatter haze.
+- **photophobia**: extracts pixels above BT.709 luminance threshold 0.5,
+  applies disk blur, and adds the result back as bloom.
+- **nyctalopia**: desaturates via BT.709 lerp (×0.8) and darkens (×0.7).
+- **floaters**: places smoothstep-edged blobs at deterministic positions
+  derived from a seed and gaze offset, and multiplies them into the image.
+
+CLI flags: `--seed`, `--density`, `--gaze-x`, `--gaze-y`.
+
+
 
 - **WebAssembly** — sensus is consumed by native apps; a wasm build adds
   maintenance cost without a clear consumer.

@@ -102,6 +102,11 @@ struct Cli {
     /// Gaze Y position in 0.0..=1.0 (0=top, 1=bottom). Only used with --filter floaters.
     #[arg(long, default_value = "0.5")]
     gaze_y: f32,
+
+    /// Hemianopia side: 0.0 = left field lost, 1.0 = right field lost.
+    /// Only used with --filter hemianopia.
+    #[arg(long, default_value = "0.0")]
+    side: f32,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -199,6 +204,12 @@ fn run(cli: Cli) -> Result<(), RunError> {
             "sensus: warning: --density/--gaze-x/--gaze-y are only used with --filter floaters (ignored for {core_filter:?})"
         );
     }
+    let uses_side = matches!(core_filter, CoreFilter::Hemianopia);
+    if !uses_side && cli.side != 0.0 {
+        eprintln!(
+            "sensus: warning: --side is only used with --filter hemianopia (ignored for {core_filter:?})"
+        );
+    }
 
     let result = match core_filter {
         CoreFilter::Astigmatism => sensus_core::vision::astigmatism(img, cli.strength, cli.axis),
@@ -217,6 +228,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
         }
         CoreFilter::Photophobia => sensus_core::vision::photophobia(img, cli.strength),
         CoreFilter::NightBlindness => sensus_core::vision::nyctalopia(img, cli.strength),
+        CoreFilter::Hemianopia => sensus_core::vision::hemianopia(img, cli.strength, cli.side),
         f => sensus_core::apply(f, img, cli.strength),
     };
 
