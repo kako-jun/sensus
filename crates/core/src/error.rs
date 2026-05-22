@@ -16,4 +16,13 @@ pub enum Error {
     /// Underlying [`image`] crate error (decode / encode / format).
     #[error("image processing error: {0}")]
     Image(#[from] image::ImageError),
+
+    /// A pipeline step failed. `step` はゼロ起算インデックス、`filter` はフィルタ名。
+    #[error("pipeline step {step} ({filter}) failed: {source}")]
+    Pipeline {
+        step: usize,
+        filter: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }

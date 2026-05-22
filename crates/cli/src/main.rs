@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sensus_core::{Error as CoreError, Filter as CoreFilter};
+use sensus_core::{pipeline::{FilterStep, Pipeline}, Error as CoreError, Filter as CoreFilter};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -73,9 +73,9 @@ struct Cli {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Filter to apply.
-    #[arg(short, long, value_enum)]
-    filter: Filter,
+    /// Filter(s) to apply. Specify multiple times to chain filters.
+    #[arg(short, long, value_enum, num_args = 1..)]
+    filter: Vec<Filter>,
 
     /// Filter strength in 0.0..=1.0 (0.0 = original, 1.0 = full effect).
     #[arg(short, long, default_value_t = 1.0, value_parser = parse_strength)]
@@ -155,12 +155,20 @@ enum RunError {
     /// A filter was selected but not yet implemented in core.
     #[error("{0}")]
     NotImplemented(String),
+
+    /// A pipeline step failed at runtime.
+    #[error("{0}")]
+    Pipeline(String),
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(RunError::Pipeline(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
         Err(RunError::NotImplemented(msg)) => {
             eprintln!("{msg}");
             ExitCode::from(2)
@@ -180,57 +188,49 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
     let (width, height) = (img.width(), img.height());
 
-    // astigmatism のみ CLI から軸を渡せるよう特別扱いする。他フィルタは
-    // 既定軸の apply() ファサード経由 (同じ動作・他フィルタでは axis は無視)。
-    let core_filter = cli.filter.to_core();
-
-    // --axis を明示指定 (≠ default 90.0) したのに対象が astigmatism でない場合、
-    // silent に無視せず stderr で警告する。
-    if !matches!(core_filter, CoreFilter::Astigmatism) && cli.axis != 90.0 {
-        eprintln!(
-            "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
-        );
-    }
-    // --seed/--density/--gaze_x/--gaze_y が対象外フィルタで指定された場合も警告。
-    let uses_seed = matches!(core_filter, CoreFilter::Cataract | CoreFilter::Floaters);
-    let uses_floater_params = matches!(core_filter, CoreFilter::Floaters);
-    if !uses_seed && cli.seed != 0 {
-        eprintln!(
-            "sensus: warning: --seed is only used with --filter cataract or floaters (ignored for {core_filter:?})"
-        );
-    }
-    if !uses_floater_params && (cli.density != 0.5 || cli.gaze_x != 0.5 || cli.gaze_y != 0.5) {
-        eprintln!(
-            "sensus: warning: --density/--gaze-x/--gaze-y are only used with --filter floaters (ignored for {core_filter:?})"
-        );
-    }
-    let uses_side = matches!(core_filter, CoreFilter::Hemianopia);
-    if !uses_side && cli.side != 0.0 {
-        eprintln!(
-            "sensus: warning: --side is only used with --filter hemianopia (ignored for {core_filter:?})"
-        );
+    // Build pipeline from --filter list (must not be empty; clap enforces num_args=1..)
+    let mut pipeline = Pipeline::new();
+    for f in &cli.filter {
+        let core_filter = f.to_core();
+        let mut step = FilterStep::new(core_filter, cli.strength);
+        step.axis = cli.axis;
+        step.seed = cli.seed;
+        step.density = cli.density;
+        step.gaze_x = cli.gaze_x;
+        step.gaze_y = cli.gaze_y;
+        step.side = cli.side;
+        pipeline = pipeline.push(step);
     }
 
-    let result = match core_filter {
-        CoreFilter::Astigmatism => sensus_core::vision::astigmatism(img, cli.strength, cli.axis),
-        CoreFilter::Cataract => {
-            sensus_core::vision::cataract(img, cli.strength, cli.seed)
+    // For single-filter case, replicate legacy warnings.
+    if cli.filter.len() == 1 {
+        let core_filter = cli.filter[0].to_core();
+        if !matches!(core_filter, CoreFilter::Astigmatism) && cli.axis != 90.0 {
+            eprintln!(
+                "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
+            );
         }
-        CoreFilter::Floaters => {
-            sensus_core::vision::floaters(
-                img,
-                cli.strength,
-                cli.density,
-                cli.seed,
-                cli.gaze_x,
-                cli.gaze_y,
-            )
+        let uses_seed = matches!(core_filter, CoreFilter::Cataract | CoreFilter::Floaters);
+        let uses_floater_params = matches!(core_filter, CoreFilter::Floaters);
+        if !uses_seed && cli.seed != 0 {
+            eprintln!(
+                "sensus: warning: --seed is only used with --filter cataract or floaters (ignored for {core_filter:?})"
+            );
         }
-        CoreFilter::Photophobia => sensus_core::vision::photophobia(img, cli.strength),
-        CoreFilter::NightBlindness => sensus_core::vision::nyctalopia(img, cli.strength),
-        CoreFilter::Hemianopia => sensus_core::vision::hemianopia(img, cli.strength, cli.side),
-        f => sensus_core::apply(f, img, cli.strength),
-    };
+        if !uses_floater_params && (cli.density != 0.5 || cli.gaze_x != 0.5 || cli.gaze_y != 0.5) {
+            eprintln!(
+                "sensus: warning: --density/--gaze-x/--gaze-y are only used with --filter floaters (ignored for {core_filter:?})"
+            );
+        }
+        let uses_side = matches!(core_filter, CoreFilter::Hemianopia);
+        if !uses_side && cli.side != 0.0 {
+            eprintln!(
+                "sensus: warning: --side is only used with --filter hemianopia (ignored for {core_filter:?})"
+            );
+        }
+    }
+
+    let result = pipeline.apply(img);
 
     match result {
         Ok(out) => {
@@ -254,5 +254,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
             path: cli.input.clone(),
             source: err,
         }),
+        Err(e) => Err(RunError::Pipeline(format!("sensus: {e}"))),
     }
 }

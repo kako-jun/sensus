@@ -72,7 +72,27 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 |---|---|---|---|
 | `vision` | 1, 2, 3 | #2, #3, #4, #5, #6 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
-| `pipeline` | 4 | #10 | filter composition |
+| `pipeline` | 4 | #10 | filter composition ✅ |
+
+## Pipeline (Phase 4, #10)
+
+`Pipeline` chains multiple filters sequentially over a single image.
+
+```rust
+use sensus_core::{Filter, pipeline::{Pipeline, FilterStep}};
+
+let result = Pipeline::new()
+    .push(FilterStep::new(Filter::Myopia, 1.0))
+    .push(FilterStep::new(Filter::Cataract, 0.8))
+    .apply(img)?;
+```
+
+- **Builder pattern**: `Pipeline::push()` takes ownership and returns `self`, enabling chaining.
+- **Order matters**: filters are applied left-to-right. `A → B` and `B → A` generally produce different results.
+- **Per-step parameters**: `FilterStep` carries filter-specific params (`axis`, `seed`, `density`, `gaze_x`, `gaze_y`, `side`) with sensible defaults. Set them directly on the struct after construction.
+- **Error propagation**: if a step fails, `Error::Pipeline { step, filter, source }` reports which step index and filter name caused the error.
+- **CLI**: pass `--filter` multiple times: `sensus -i in.png -o out.png --filter myopia --filter cataract`
+
 
 See [`roadmap.md`](roadmap.md) for the per-phase implementation plan.
 
