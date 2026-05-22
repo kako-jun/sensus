@@ -10,8 +10,9 @@ educational tools, and apps like
 
 ## Status
 
-Pre-release scaffold (`v0.0.x`). Filters are landing one phase at a time —
-see [`docs/roadmap.md`](docs/roadmap.md) for what is implemented today.
+**v0.1.0** — stable release on [crates.io](https://crates.io/crates/sensus).
+All Phase 1–3 vision filters are implemented. See
+[`docs/roadmap.md`](docs/roadmap.md) for the full phase tracker.
 
 ## Filters
 
@@ -19,17 +20,23 @@ see [`docs/roadmap.md`](docs/roadmap.md) for what is implemented today.
 
 | Filter | Status | Phase | Notes |
 |---|---|---|---|
-| `protanopia`           | ✅ implemented | 1 (#2) | L-cone loss (red-blind), Machado 2009 |
-| `deuteranopia`         | ✅ implemented | 1 (#2) | M-cone loss (green-blind), Machado 2009 |
-| `tritanopia`           | ✅ implemented | 1 (#2) | S-cone loss (blue-blind), Machado 2009 |
-| `achromatopsia`        | ✅ implemented | 1 (#2) | Total color blindness, BT.709 luma |
-| `tetrachromacy`        | planned | 1+ (#3) | Four-cone exploration |
-| `myopia`               | ✅ implemented | 2 (#4) | Disk blur, -6 D max |
-| `hyperopia`            | ✅ implemented | 2 (#4) | Disk blur, +4 D max |
-| `presbyopia`           | ✅ implemented | 2 (#4) | Disk blur, +3 D add max |
-| `astigmatism`          | ✅ implemented | 2 (#4) | 1D directional blur (pure cylindrical lens), configurable axis |
-| `glaucoma` / `macular-degeneration` / `hemianopia` / `tunnel-vision` | planned | 3 (#5) | Visual field defects |
-| `cataract` / `floaters` / `photophobia` / `night-blindness` | planned | 3 (#6) | Light & transparency |
+| `protanopia`            | ✅ implemented | 1 (#2) | L-cone loss (red-blind), Machado 2009 |
+| `deuteranopia`          | ✅ implemented | 1 (#2) | M-cone loss (green-blind), Machado 2009 |
+| `tritanopia`            | ✅ implemented | 1 (#2) | S-cone loss (blue-blind), Machado 2009 |
+| `achromatopsia`         | ✅ implemented | 1 (#2) | Total color blindness, BT.709 luma |
+| `tetrachromacy`         | ✅ implemented | 1+ (#3) | Four-cone exploration, gamut expansion in LMS space |
+| `myopia`                | ✅ implemented | 2 (#4) | Disk blur, -6 D max |
+| `hyperopia`             | ✅ implemented | 2 (#4) | Disk blur, +4 D max |
+| `presbyopia`            | ✅ implemented | 2 (#4) | Disk blur, +3 D add max |
+| `astigmatism`           | ✅ implemented | 2 (#4) | 1D directional blur (pure cylindrical lens), configurable axis |
+| `glaucoma`              | ✅ implemented | 3 (#5) | Radial vignette / peripheral field loss |
+| `macular_degeneration`  | ✅ implemented | 3 (#5) | Foveal blur and dimming |
+| `hemianopia`            | ✅ implemented | 3 (#5) | Half-field blanking |
+| `tunnel_vision`         | ✅ implemented | 3 (#5) | Severe radial vignette |
+| `cataract`              | ✅ implemented | 3 (#6) | Haze overlay |
+| `floaters`              | ✅ implemented | 3 (#6) | Translucent blob compositing |
+| `photophobia`           | ✅ implemented | 3 (#6) | Brightness boost and highlight halation |
+| `nyctalopia`            | ✅ implemented | 3 (#6) | Darkening and desaturation (night-blindness) |
 
 ### Hearing (Phase 4)
 
@@ -41,14 +48,6 @@ designed both as an empathy / education tool and as an early-warning primer
 for symptoms worth taking seriously.
 
 ## Install
-
-crates.io 公開は v0.1.0 から（[#12](https://github.com/kako-jun/sensus/issues/12)）。それまでは git からインストールしてください:
-
-```sh
-cargo install --git https://github.com/kako-jun/sensus
-```
-
-v0.1.0 以降は通常通り:
 
 ```sh
 cargo install sensus
@@ -71,12 +70,15 @@ sensus -i photo.png -o photo-myopia.png       --filter myopia        --strength 
 sensus -i photo.png -o photo-presbyopia.png   --filter presbyopia    --strength 0.7
 # astigmatism with explicit cylinder axis (degrees, 0..=180; default 90)
 sensus -i photo.png -o photo-astig.png        --filter astigmatism   --strength 1.0 --axis 90
-```
 
-The above commands return exit code 0 and write the transformed image to
-`-o`. Filters not yet implemented (`tetrachromacy`, `glaucoma`, etc.) exit
-with code 2 and a "not implemented" message — see
-[`docs/roadmap.md`](docs/roadmap.md) for status.
+# Phase 3: visual field defects and light conditions
+sensus -i photo.png -o photo-glaucoma.png     --filter glaucoma      --strength 1.0
+sensus -i photo.png -o photo-cataract.png     --filter cataract      --strength 0.8
+
+# Pipeline: chain multiple filters in one pass
+sensus -i photo.png -o out.png --filter deuteranopia --filter myopia --strength 1.0
+sensus -i photo.png -o out.png --filter glaucoma --filter cataract --strength 0.7
+```
 
 Flags:
 
@@ -98,8 +100,7 @@ get a `DynamicImage` out.
 ```toml
 # Cargo.toml
 [dependencies]
-# crates.io 公開（v0.1.0）まではgit依存で
-sensus-core = { git = "https://github.com/kako-jun/sensus" }
+sensus-core = "0.1"
 ```
 
 ```rust
