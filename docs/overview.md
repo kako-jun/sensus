@@ -101,7 +101,39 @@ Color vision deficiency simulation uses the
 [machado]: https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
 [doi]: https://doi.org/10.1109/TVCG.2009.113
 
-## Focus / refraction algorithm (Phase 2, #4)
+## Tetrachromacy algorithm (Phase 1+, #3)
+
+`tetrachromacy` approximates what a tetrachromat might perceive by
+exaggerating color differences that trichromats cannot distinguish.
+
+### Fundamental limitation
+
+RGB cameras and displays capture only 3 channels; the fourth spectral
+dimension that a tetrachromat's extra cone type would sense is not
+recorded. A physically exact simulation is **impossible from RGB input**.
+The filter instead renders a visualization: "if a difference existed here,
+it might look like this."
+
+### Algorithm
+
+1. Decode each pixel to **linear sRGB** (gamma removal).
+2. Compute **opponent channels**:
+   - `rg = R − G` (red–green axis; most relevant to the tetrachromat's
+     extra L/M cone overlap near 560 nm)
+   - `yb = 0.5×(R+G) − B` (yellow–blue axis)
+3. Exaggerate each axis scaled by `strength`:
+   - `R_out = R + strength × rg × k_rg` (`k_rg = 0.5`)
+   - `G_out = G − strength × rg × k_rg`
+   - `B_out = B + strength × yb × k_yb` (`k_yb = 0.25`, subtler)
+4. Clamp each channel to `0.0..=1.0`.
+5. Re-encode to sRGB (gamma application).
+6. Alpha is preserved.
+
+**Uniform colours** (R = G = B) produce `rg = yb = 0` and are therefore
+unchanged regardless of `strength`. The effect is visible only where
+hue differences already exist in the source image.
+
+
 
 `myopia`, `hyperopia`, `presbyopia`, and `astigmatism` simulate refractive
 defocus using a **disk (pillbox) blur** in linear sRGB space:
