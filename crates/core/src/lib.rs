@@ -53,8 +53,8 @@ pub enum Filter {
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
 ///
-/// Phase 1 (#2) で色覚特性 4 種、Phase 2 (#4) で焦点・屈折 4 種を実装済み。
-/// 残りのフィルタは引き続き [`Error::NotImplemented`] を返す。
+/// Phase 1 (#2) で色覚特性 4 種、Phase 1+ (#3) で四色型色覚、
+/// Phase 2 (#4) で焦点・屈折 4 種、Phase 3 (#5/#6) で視野異常・光透明度を実装済み。
 ///
 /// `Astigmatism` は軸 90°（with-the-rule）の既定値で適用される。任意の軸を
 /// 指定したい場合は [`vision::astigmatism`] を直接呼ぶこと。
@@ -80,6 +80,6 @@ pub fn apply(
         Filter::MacularDegeneration => vision::macular_degeneration(img, strength),
         Filter::Hemianopia => vision::hemianopia(img, strength, 0.0),
         Filter::TunnelVision => vision::tunnel_vision(img, strength),
-        other => Err(Error::NotImplemented(other)),
+        Filter::Tetrachromacy => vision::tetrachromacy(img, strength),
     }
 }
