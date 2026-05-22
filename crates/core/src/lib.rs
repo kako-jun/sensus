@@ -75,6 +75,7 @@ pub fn apply(
         Filter::Cataract => vision::cataract(img, strength, 0),
         Filter::Photophobia => vision::photophobia(img, strength),
         Filter::NightBlindness => vision::nyctalopia(img, strength),
+        Filter::Floaters => vision::floaters(img, strength, 0.5, 0, 0.5, 0.5),
         other => Err(Error::NotImplemented(other)),
     }
 }

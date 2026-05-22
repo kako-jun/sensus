@@ -792,6 +792,106 @@ pub fn nyctalopia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImag
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
+/// 飛蚊症（Floaters）シミュレーション。
+///
+/// 視野内に暗い blob が浮かぶオーバーレイを乗算ブレンドで適用する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強い飛蚊症
+/// - `density`: blob 密度 (0.0..=1.0)
+/// - `seed`: blob 配置のランダムシード
+/// - `gaze_x`: 視線 X 位置 (0.0 = 左, 1.0 = 右)
+/// - `gaze_y`: 視線 Y 位置 (0.0 = 上, 1.0 = 下)
+pub fn floaters(
+    img: DynamicImage,
+    strength: f32,
+    density: f32,
+    seed: u64,
+    gaze_x: f32,
+    gaze_y: f32,
+) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+
+    let density = density.clamp(0.0, 1.0);
+    let gaze_x = gaze_x.clamp(0.0, 1.0);
+    let gaze_y = gaze_y.clamp(0.0, 1.0);
+
+    // 視線オフセット（フローターは視線に追随）
+    let offset_x = (gaze_x - 0.5) * 0.3 * w_f;
+    let offset_y = (gaze_y - 0.5) * 0.3 * h_f;
+
+    // blob 数と半径
+    let blob_count = ((density * 200.0) as usize).max(1);
+    let blob_radius = (w_f.min(h_f) * 0.04).max(2.0);
+    let blob_radius_sq = blob_radius * blob_radius;
+
+    // blob 中心位置を seed から生成
+    let mut centers: Vec<(f32, f32)> = Vec::with_capacity(blob_count);
+    for i in 0..blob_count {
+        let hx = seed
+            .wrapping_mul(0x9e3779b97f4a7c15)
+            .wrapping_add((i as u64).wrapping_mul(0x517cc1b727220a95))
+            .wrapping_add(0xdeadbeefcafe1234);
+        let hy = seed
+            .wrapping_mul(0x6c62272e07bb0142)
+            .wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15))
+            .wrapping_add(0xc0ffee0102030405);
+        let cx = (hx >> 32) as f32 / u32::MAX as f32 * w_f + offset_x;
+        let cy = (hy >> 32) as f32 / u32::MAX as f32 * h_f + offset_y;
+        centers.push((cx, cy));
+    }
+
+    // フローターマスクを生成して元画像に乗算ブレンド
+    let mut out_rgba = rgba.clone();
+    for y in 0..height {
+        for x in 0..width {
+            let xf = x as f32;
+            let yf = y as f32;
+
+            // 最も近い blob との距離でマスク値を決定
+            let mut min_dist_sq = f32::MAX;
+            for &(cx, cy) in &centers {
+                let dx = xf - cx;
+                let dy = yf - cy;
+                let d2 = dx * dx + dy * dy;
+                if d2 < min_dist_sq {
+                    min_dist_sq = d2;
+                }
+            }
+
+            // blob 内部: smoothstep 減衰でマスク値を計算
+            // mask = 0.0 → フローター（暗い）、1.0 → 元画像
+            let mask = if min_dist_sq < blob_radius_sq {
+                let t = min_dist_sq / blob_radius_sq;
+                // smoothstep: 外側ほど 1.0 に近い
+                t * t * (3.0 - 2.0 * t)
+            } else {
+                1.0
+            };
+
+            // 元画像 × (1.0 - strength * (1.0 - mask)) で乗算ブレンド
+            let blend = 1.0 - strength * (1.0 - mask);
+
+            let px = out_rgba.get_pixel_mut(x, y);
+            px[0] = pack_u8(px[0] as f32 / 255.0 * blend);
+            px[1] = pack_u8(px[1] as f32 / 255.0 * blend);
+            px[2] = pack_u8(px[2] as f32 / 255.0 * blend);
+            // alpha はそのまま
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
