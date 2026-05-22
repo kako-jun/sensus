@@ -5,10 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-05-22
 
 ### Added
 
+- **Phase 3 visual field & light filters** (#5, #6): `glaucoma`,
+  `macular_degeneration`, `hemianopia`, `tunnel_vision`, `cataract`,
+  `floaters`, `photophobia`, `nyctalopia` (night-blindness). All implemented
+  as composable single-pass image operations in linear sRGB. `glaucoma` and
+  `tunnel_vision` apply a radial vignette mask; `hemianopia` blanks the
+  appropriate half-field; `macular_degeneration` blurs and dims the foveal
+  region; `cataract` adds a haze overlay; `floaters` composites translucent
+  blobs; `photophobia` brightens and halates highlights; `nyctalopia` darkens
+  and desaturates the image.
+- **Pipeline support** via `sensus_core::pipeline`: apply multiple filters
+  in sequence in a single command with `--filter f1 --filter f2 …`.
+- **tetrachromacy** exploration filter (#3): expands the chrominance gamut
+  to simulate four-cone perception. Implemented via a heuristic gamut
+  expansion in LMS space.
+- First stable crates.io release (`v0.1.0`). `sensus-core` and `sensus` are
+  now published; `cargo install sensus` is the recommended install path (#12).
 - **Phase 2 focus / refraction filters** (#4): `myopia`, `hyperopia`,
   `presbyopia`, `astigmatism`. All implemented as **disk (pillbox) blur**
   in linear sRGB — Gaussian is intentionally rejected because the
@@ -43,8 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `strength` values. `achromatopsia` uses CIE photopic luminance with
   BT.709 primaries (`0.2126 R + 0.7152 G + 0.0722 B`); BT.601 is
   intentionally avoided. Alpha is preserved.
-- `sensus_core::apply()` now dispatches the four Phase 1 filters and only
-  returns `Error::NotImplemented` for the remaining variants.
+- `sensus_core::apply()` dispatches all implemented filters and returns
+  `Error::NotImplemented` only for variants not yet landed.
 - CLI now writes the transformed image to `--output` on success
   (exit code `0`) for any implemented filter.
 - Cargo workspace scaffold with two crates: `sensus-core` (pure logic) and
@@ -56,20 +72,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sensus_core::Error` (thiserror-derived) with `NotImplemented(Filter)`
   and `Image(image::ImageError)` variants, and `sensus_core::Result<T>`
   alias. (#1)
-- `sensus_core::vision::{protanopia, deuteranopia, tritanopia,
-  achromatopsia}` function stubs ready for Phase 1 (#2). (#1)
-- CLI argument parsing via clap derive — `--input`, `--output`, `--filter`,
-  `--strength` — covering all planned vision filter names. CLI logic is
-  split into `main` / `run()` for testability; filters are not yet
-  implemented and the binary exits with code `2` and a "not implemented"
-  message. (#1)
 - GitHub Actions workflows: `ci.yml` (test / fmt / clippy with
   `--all-targets --locked`) and `release.yml` (tag-driven build with
   `-p sensus --locked` for x86_64-linux, x86_64-apple, aarch64-apple,
   x86_64-windows; uploads tarballs / zips to GitHub Releases). (#1)
-- Documentation: `README.md` (English, end-user master, with scaffold-era
-  install / git-dep instructions), `docs/overview.md` (English, design),
-  `docs/roadmap.md` (Japanese, phase tracker), `CLAUDE.md` (Japanese,
-  AI-facing internal notes). universal-experience is documented as a
-  Flutter app (no Tauri). (#1)
+- Documentation: `README.md` (English, end-user master), `docs/overview.md`
+  (English, design), `docs/roadmap.md` (Japanese, phase tracker),
+  `CLAUDE.md` (Japanese, AI-facing internal notes). (#1)
 - MIT license. (#1)
+
+[0.1.0]: https://github.com/kako-jun/sensus/releases/tag/v0.1.0
