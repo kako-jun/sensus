@@ -38,6 +38,7 @@ sensus/
     │       ├── hearing.rs   # hearing loss, pitch shift, balance
     │       ├── shaders.rs   # GLSL ES 3.00 shader sources + uniform structs
     │       ├── shaders/     # *.frag shader source files (included via include_str!)
+    │       ├── stereo.rs    # MPO stereo split + SAD disparity → depth map
     │       └── pipeline.rs  # filter composition
     └── cli/
         ├── Cargo.toml      # [[bin]] name = "sensus"
@@ -74,6 +75,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 |---|---|---|---|
 | `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
+| `stereo` | 6 | #31 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |
 | `shaders` | 5 | #16 | GLSL ES 3.00 shader sources + uniform structs for all visual filters |
 
@@ -365,6 +367,46 @@ automatically resized with Lanczos3 before processing. This extends the
 uniform-blur refraction filters in #4 to spatially-varying defocus for
 scenes with a known depth channel (stereo photography, portrait-mode JPEG,
 Depth Anything V2 output, etc.).
+
+## Stereo photography depth map generation (Phase 6, #31)
+
+`sensus_core::stereo` converts a stereo image pair into a greyscale depth
+map that can be fed directly into `depth_aware_blur`.
+
+```rust
+use sensus_core::stereo::{split_mpo, stereo_to_depth};
+
+let mpo_bytes = std::fs::read("photo.mpo")?;
+let (left, right) = split_mpo(&mpo_bytes)?;
+let depth_map = stereo_to_depth(&left, &right)?;
+let result = depth_aware_blur(left, &depth_map, 0.5, 0.023, DepthBlurKind::Myopia)?;
+```
+
+**`split_mpo(data: &[u8]) -> Result<(DynamicImage, DynamicImage)>`**
+
+MPO (Multi-Picture Object) is a JPEG superset used by Nintendo 3DS,
+PlayStation 3D cameras, and some Android devices. The file embeds left-eye
+and right-eye JPEG streams back-to-back; `split_mpo` scans for the
+`FFD9 FFD8` (EOI + SOI) boundary and decodes each stream independently.
+Returns `Error::InvalidMpo` if no second stream is found.
+
+**`stereo_to_depth(left, right) -> Result<DynamicImage>`**
+
+Computes a disparity map via block-matching SAD (Sum of Absolute
+Differences): `BLOCK_SIZE = 7`, `MAX_DISPARITY = 64`. Each pixel's best
+horizontal shift (left→right) is mapped to a brightness value — brighter
+means closer. Returns `Error::SizeMismatch` if left and right have
+different dimensions.
+
+**CLI integration:**
+
+```bash
+sensus --filter myopia-depth --mpo photo.mpo --focus 0.5 -o output.png
+```
+
+`--mpo <PATH>` auto-generates the depth map from the stereo pair and
+applies depth-aware blur to the left-eye image. `--mpo` and `--depth`
+are mutually exclusive; only one depth blur filter may be active at a time.
 
 ## Hearing filters (Phase 4, #7–#9)
 
