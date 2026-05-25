@@ -341,9 +341,11 @@ aberrations of the eye's optical medium, all in linear sRGB space.
 
 - **cataract**: per-channel attenuation (`R×0.7, G×0.7, B×0.4`) for
   yellowing, plus 8×8 block-hash noise for scatter haze.
+  ⚠️ 即受診 — 急激な視力低下・視野変化は眼科受診推奨。
 - **photophobia**: extracts pixels above BT.709 luminance threshold 0.5,
   applies disk blur, and adds the result back as bloom.
 - **nyctalopia**: desaturates via BT.709 lerp (×0.8) and darkens (×0.7).
+  ⚠️ 早期受診 — 夜盲の急激な悪化はビタミンA欠乏・網膜色素変性の可能性。
 - **floaters**: places smoothstep-edged blobs at deterministic positions
   derived from a seed and gaze offset, and multiplies them into the image.
 
@@ -359,6 +361,7 @@ simulation beyond spatial field defects and optical blur.
   the ghost at opacity `ghost_strength × strength` in linear sRGB.
   Simulates double vision from strabismus or cranial nerve palsy.
   CLI: `--offset-x`, `--offset-y`, `--ghost-strength`.
+  🚨 即救急 — 突然の複視は動眼神経麻痺・脳幹梗塞の可能性。
 - **nystagmus**: applies 1D directional blur (`amplitude × strength ×
   min(W,H)` px radius, `direction_deg` in degrees) as a static snapshot of
   the motion blur caused by involuntary oscillatory eye movement.
@@ -480,6 +483,7 @@ and returns a buffer; no audio device I/O.
 - **3 vestibular–visual filters** added to `vision.rs`: `vertigo` (rotating
   radial warp), `bppv_rotation` (brief rotational jerk), `vestibular_neuritis`
   (sustained horizontal tilt). These are image-space effects; no audio I/O.
+  🚨 即救急 — 突然の激しいめまいは脳卒中との鑑別が必要（`vestibular_neuritis`）。
 
 ## GLSL ES 3.00 shader source API (Phase 5, #16)
 
