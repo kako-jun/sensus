@@ -70,6 +70,8 @@ pub enum Filter {
     DetailLoss,
     // vision (Phase N / #58: teichopsia)
     Teichopsia,
+    // vision (Phase N / #59: flickering stars)
+    FlickeringStars,
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -114,6 +116,7 @@ pub fn apply(
         Filter::ContrastSensitivity => vision::contrast_sensitivity(img, strength),
         Filter::DetailLoss => vision::detail_loss(img, strength),
         Filter::Teichopsia => vision::teichopsia(img, strength),
+        Filter::FlickeringStars => vision::flickering_stars(img, strength, 0),
     }
 }
 

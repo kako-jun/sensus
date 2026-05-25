@@ -85,6 +85,7 @@ impl FilterStep {
             Filter::Nystagmus => vision::nystagmus(img, self.strength, self.amplitude, self.direction_deg),
             Filter::Starbursts => vision::starbursts(img, self.strength, self.num_rays, self.ray_length_ratio, self.threshold),
             Filter::Metamorphopsia => vision::metamorphopsia(img, self.strength, self.meta_freq, self.meta_seed),
+            Filter::FlickeringStars => vision::flickering_stars(img, self.strength, self.seed),
             f => crate::apply(f, img, self.strength),
         }
     }

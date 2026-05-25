@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vision: Flickering Stars フィルタ追加** (#59):
+  `flickering_stars(img, strength, seed)` を `vision.rs` に追加。
+  LCG でランダムな光点を生成して additive blend する。光点数 = `(strength × 200.0) as usize`。
+  各光点は半径 2 px の矩形ブロブ。`Filter::FlickeringStars` を `lib.rs` に追加。
+  `flickering_stars.frag` GLSL シェーダ追加。
+  `docs/overview.md` に医学的注記追加:「急激な光点の増加・カーテン状の視野欠損を伴う場合は網膜剥離の前兆。即受診。」
+  テスト: strength=0 → identity、strength=1 → 出力の最大輝度が入力より高いこと。
+
 - **vision: Teichopsia フィルタ追加** (#58):
   `teichopsia(img, strength)` を `vision.rs` に追加。視野周辺にジグザグ縞の光（要塞スペクトル）を重畳し、
   内側（scotoma）を暗化する。リング領域（正規化距離 0.2〜0.5）で saw wave 輝度加算、

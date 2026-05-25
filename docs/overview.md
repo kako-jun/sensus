@@ -73,7 +73,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56, #57, #58 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity, detail_loss, teichopsia |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56, #57, #58, #59 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity, detail_loss, teichopsia, flickering_stars |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
 | `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |
@@ -136,6 +136,17 @@ arcs) seen as a migraine aura.
 - `strength = 0.0` → identity; `strength = 1.0` → full effect
 
 > **医学的注記**: 偏頭痛の前兆として 20〜30 分続く。初めて経験する場合は眼科・神経内科を受診。
+
+## Flickering Stars filter (#59)
+
+`flickering_stars(img, strength, seed)` simulates photopsia (flashes of light)
+by additively blending random white blob points onto the image.
+
+- Point count = `(strength × 200.0) as usize` (200 points at strength=1.0)
+- Each point is a 2 px rectangular blob with additive luminance 0.5–1.0
+- `strength = 0.0` → identity (zero points); `strength = 1.0` → 200 white blobs
+
+> **医学的注記**: 急激な光点の増加・カーテン状の視野欠損を伴う場合は網膜剥離の前兆。即受診。
 
 ## Auditory Processing Disorder (APD) (Issue #38)
 
