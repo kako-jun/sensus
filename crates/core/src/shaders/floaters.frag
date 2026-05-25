@@ -8,6 +8,10 @@ precision mediump float;
 // GPU 版は LCG ブロックノイズで floater マスクを生成し、
 // 乗算ブレンドで暗いドットを重ねるシンプル実装。
 // CPU の精密な blob/strand 描画とは異なり、近似的な見た目を提供する。
+//
+// 注意: GPU 版はブレンドを sRGB 空間で直接行う（linear 変換なし）。
+// CPU 実装は linear sRGB 空間で乗算するため、厳密な色値は異なるが
+// 視覚的な近似として許容している（「GPU 版は近似」はこの差異を指す）。
 
 uniform sampler2D uTexture;
 uniform float uStrength;

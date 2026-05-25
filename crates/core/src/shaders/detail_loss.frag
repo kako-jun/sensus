@@ -1,7 +1,10 @@
 #version 300 es
-// M-2 実装方針: GLSL・CPU ともに「タイル中心1点サンプリング（pixelation）」に統一。
-// CPU の全ピクセル平均から中心点参照に変更し、GPU と厳密に一致させる。
-// これにより CPU/GPU の PSNR ≥ 30 dB が保証される。
+// 細部消失（Detail Loss）シミュレーション。
+// 各ピクセルを所属タイルの中心点の色で置き換えることで、
+// のっぺりとした塊に見える視覚的効果を実現する（pixelation）。
+// CPU 実装（vision::detail_loss）と同一アルゴリズムを使用。
+// apply(Filter::DetailLoss) は vision::detail_loss_with_cell_size（全平均）を呼ぶため
+// このシェーダとはアルゴリズムが異なる点に注意（docs を参照）。
 precision mediump float;
 uniform sampler2D uTexture;
 uniform float uStrength;

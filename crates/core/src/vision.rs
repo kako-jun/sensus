@@ -2566,6 +2566,7 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// これは [`detail_loss`]（タイル中心点参照）や GLSL シェーダと異なり、
 /// 視覚的に高品質だが CPU コストが増加する。
 /// `apply(Filter::DetailLoss)` 経由時はこのバリアントが呼ばれる。
+#[allow(unused_variables)]
 pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: u32) -> Result<DynamicImage> {
     let rgba = img.to_rgba8();
     let tile_size = cell_size.max(1);
