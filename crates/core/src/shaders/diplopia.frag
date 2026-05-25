@@ -1,0 +1,37 @@
+#version 300 es
+precision mediump float;
+
+uniform sampler2D uTexture;
+uniform float uStrength;
+uniform float uOffsetX;   // dx（テクセル単位 = dx_px / width）
+uniform float uOffsetY;   // dy（テクセル単位 = dy_px / height）
+uniform float uGhostStrength;
+
+in vec2 vTexCoord;
+out vec4 fragColor;
+
+float srgbToLinear(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+float linearToSrgb(float c) {
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
+void main() {
+    vec4 orig = texture(uTexture, vTexCoord);
+    vec2 ghostUV = clamp(vTexCoord - vec2(uOffsetX, uOffsetY), 0.0, 1.0);
+    vec4 ghost = texture(uTexture, ghostUV);
+
+    float alpha = uGhostStrength * uStrength;
+
+    vec3 o = vec3(srgbToLinear(orig.r), srgbToLinear(orig.g), srgbToLinear(orig.b));
+    vec3 g = vec3(srgbToLinear(ghost.r), srgbToLinear(ghost.g), srgbToLinear(ghost.b));
+    vec3 blended = mix(o, o + g * alpha, uStrength);
+
+    fragColor = vec4(
+        linearToSrgb(clamp(blended.r, 0.0, 1.0)),
+        linearToSrgb(clamp(blended.g, 0.0, 1.0)),
+        linearToSrgb(clamp(blended.b, 0.0, 1.0)),
+        orig.a
+    );
+}

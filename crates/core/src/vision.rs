@@ -1540,6 +1540,210 @@ pub fn tunnel_vision(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
     Ok(DynamicImage::ImageRgba8(out_rgba))
 }
 
+// -------------------------------------------------------------------------
+// Phase 4 / #29: diplopia / nystagmus / starbursts
+// -------------------------------------------------------------------------
+
+/// 複視（Diplopia）シミュレーション。
+///
+/// 元画像を `(offset_x, offset_y)` ピクセルだけ平行移動した「幽霊像」を
+/// `ghost_strength * strength` の強度でアルファブレンドして合成する。
+///
+/// # 引数
+/// - `strength`: エフェクト全体強度（0.0..=1.0）
+/// - `offset_x`: 水平ずれ（min(W,H) 比、−1.0..=1.0）
+/// - `offset_y`: 垂直ずれ（min(W,H) 比、−1.0..=1.0）
+/// - `ghost_strength`: 幽霊像の見えやすさ（0.0..=1.0）
+pub fn diplopia(
+    img: DynamicImage,
+    strength: f32,
+    offset_x: f32,
+    offset_y: f32,
+    ghost_strength: f32,
+) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    if s == 0.0 {
+        return Ok(img);
+    }
+
+    let rgba = img.to_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+    let min_dim = width.min(height) as f32;
+
+    let dx = (offset_x * min_dim).round() as i32;
+    let dy = (offset_y * min_dim).round() as i32;
+    let ghost_alpha = ghost_strength.clamp(0.0, 1.0) * s;
+
+    let mut out = RgbaImage::new(width, height);
+    for y in 0..height as i32 {
+        for x in 0..width as i32 {
+            let orig_px = rgba.get_pixel(x as u32, y as u32);
+
+            // 幽霊のソース座標（エッジクランプ）
+            let src_x = (x - dx).clamp(0, width as i32 - 1) as u32;
+            let src_y = (y - dy).clamp(0, height as i32 - 1) as u32;
+            let ghost_px = rgba.get_pixel(src_x, src_y);
+
+            // linear sRGB でアルファブレンド
+            let o = [
+                srgb_to_linear(orig_px[0] as f32 / 255.0),
+                srgb_to_linear(orig_px[1] as f32 / 255.0),
+                srgb_to_linear(orig_px[2] as f32 / 255.0),
+            ];
+            let g = [
+                srgb_to_linear(ghost_px[0] as f32 / 255.0),
+                srgb_to_linear(ghost_px[1] as f32 / 255.0),
+                srgb_to_linear(ghost_px[2] as f32 / 255.0),
+            ];
+            let blended = [
+                lerp(o[0], o[0] + g[0] * ghost_alpha, s).clamp(0.0, 1.0),
+                lerp(o[1], o[1] + g[1] * ghost_alpha, s).clamp(0.0, 1.0),
+                lerp(o[2], o[2] + g[2] * ghost_alpha, s).clamp(0.0, 1.0),
+            ];
+
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([
+                    pack_u8(linear_to_srgb(blended[0])),
+                    pack_u8(linear_to_srgb(blended[1])),
+                    pack_u8(linear_to_srgb(blended[2])),
+                    orig_px[3],
+                ]),
+            );
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
+/// 眼振（Nystagmus）シミュレーション。
+///
+/// 目が周期的に揺れることで生じる motion blur を
+/// 1D directional blur（astigmatism と同構造）で表現する。
+///
+/// # 引数
+/// - `strength`: エフェクト強度（0.0..=1.0）
+/// - `amplitude`: 揺れ幅（min(W,H) 比）
+/// - `direction_deg`: 揺れ方向（0°=水平, 90°=垂直）
+pub fn nystagmus(
+    img: DynamicImage,
+    strength: f32,
+    amplitude: f32,
+    direction_deg: f32,
+) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+    let min_dim = width.min(height) as f32;
+
+    let radius_px = amplitude.clamp(0.0, 1.0) * s * min_dim;
+
+    if s == 0.0 || radius_px < MIN_BLUR_RADIUS_PX {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    // 揺れ方向をそのままぼかし方向として使用（astigmatism と異なり +90° しない）
+    let blur_axis_rad = direction_deg.to_radians();
+
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+    // 1D directional blur: 短軸を MIN_BLUR_RADIUS_PX に縮退
+    let blurred = ellipse_blur(&linear, width, height, radius_px, MIN_BLUR_RADIUS_PX, blur_axis_rad);
+    let out = linear_planes_to_rgba(&blurred, &alpha, width, height);
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
+/// スターバースト（Starbursts）シミュレーション。
+///
+/// 強い光源から放射状の光芒が伸びる現象（乱視・白内障術後など）を表現する。
+///
+/// # 引数
+/// - `strength`: エフェクト強度（0.0..=1.0）
+/// - `num_rays`: 光芒の本数（4/6/8 推奨）
+/// - `ray_length_ratio`: 光芒の長さ（min(W,H) 比）
+/// - `threshold`: 光芒が発生する輝度閾値（0.0..=1.0）
+pub fn starbursts(
+    img: DynamicImage,
+    strength: f32,
+    num_rays: u32,
+    ray_length_ratio: f32,
+    threshold: f32,
+) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    if s == 0.0 {
+        return Ok(img);
+    }
+
+    let rgba = img.to_rgba8();
+    let width = rgba.width();
+    let height = rgba.height();
+    let min_dim = width.min(height) as f32;
+
+    let ray_length_px = (ray_length_ratio.clamp(0.0, 1.0) * min_dim) as u32;
+    let threshold = threshold.clamp(0.0, 1.0);
+
+    // 光芒レイヤー（linear sRGB, f32）
+    let mut ray_layer: Vec<[f32; 3]> = vec![[0.0; 3]; (width * height) as usize];
+
+    // BT.709 輝度計算用定数
+    const R_LUMA: f32 = 0.2126;
+    const G_LUMA: f32 = 0.7152;
+    const B_LUMA: f32 = 0.0722;
+
+    use std::f32::consts::PI;
+
+    for y in 0..height {
+        for x in 0..width {
+            let px = rgba.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            let luma = R_LUMA * rl + G_LUMA * gl + B_LUMA * bl;
+
+            if luma <= threshold || num_rays == 0 || ray_length_px == 0 {
+                continue;
+            }
+
+            let src_intensity = (luma - threshold) / (1.0 - threshold).max(1e-6);
+
+            for i in 0..num_rays {
+                let theta = i as f32 * 2.0 * PI / num_rays as f32;
+                let cos_t = theta.cos();
+                let sin_t = theta.sin();
+
+                for t in 1..=ray_length_px {
+                    let sx = x as i32 + (t as f32 * cos_t).round() as i32;
+                    let sy = y as i32 + (t as f32 * sin_t).round() as i32;
+                    if sx < 0 || sx >= width as i32 || sy < 0 || sy >= height as i32 {
+                        continue;
+                    }
+                    let weight = src_intensity * (1.0 - t as f32 / ray_length_px as f32) * s;
+                    let idx = sy as usize * width as usize + sx as usize;
+                    ray_layer[idx][0] += weight;
+                    ray_layer[idx][1] += weight;
+                    ray_layer[idx][2] += weight;
+                }
+            }
+        }
+    }
+
+    // 元画像 linear + 光芒レイヤー を合成
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+    let mut out_linear: Vec<[f32; 3]> = Vec::with_capacity(linear.len());
+    for (i, orig) in linear.iter().enumerate() {
+        out_linear.push([
+            (orig[0] + ray_layer[i][0]).clamp(0.0, 1.0),
+            (orig[1] + ray_layer[i][1]).clamp(0.0, 1.0),
+            (orig[2] + ray_layer[i][2]).clamp(0.0, 1.0),
+        ]);
+    }
+
+    let out = linear_planes_to_rgba(&out_linear, &alpha, width, height);
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3345,5 +3549,121 @@ mod tests {
             "near pixel (depth=1.0 > focus=0.0) must be more blurred than focus pixel: \
              blurred_center={blurred_center}, sharp_center={sharp_center}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // #29: diplopia / nystagmus / starbursts
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn diplopia_shifts_ghost_image() {
+        // 32x32、左半分を白、右半分を黒にして右に少しずらす
+        let size = 32_u32;
+        let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
+        // 左半分を白
+        for y in 0..size {
+            for x in 0..(size / 2) {
+                img.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+            }
+        }
+        // 右半分の左端（x = size/2）の元の値は 0
+        let check_x = size / 2;
+        let check_y = size / 2;
+        let orig_px = img.get_pixel(check_x, check_y)[0];
+        assert_eq!(orig_px, 0, "original should be black at check point");
+
+        let input = DynamicImage::ImageRgba8(img);
+        // offset_x=0.1 → dx = 0.1 * 32 = 3px 右シフト → 幽霊は左の白領域から来る
+        let out = diplopia(input, 1.0, 0.1, 0.0, 1.0).unwrap();
+        let out_px_val = out.to_rgba8().get_pixel(check_x, check_y)[0];
+        assert!(
+            out_px_val > orig_px,
+            "diplopia should brighten via ghost: orig={orig_px}, out={out_px_val}"
+        );
+    }
+
+    #[test]
+    fn diplopia_strength_zero_is_identity() {
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 5) as u8, (y * 7) as u8, 128, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = diplopia(DynamicImage::ImageRgba8(img), 0.0, 0.1, 0.1, 0.7).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let max_err = orig.iter().zip(out_raw.iter())
+            .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(max_err <= 1, "strength=0 should be identity, max_err={max_err}");
+    }
+
+    #[test]
+    fn nystagmus_blurs_image() {
+        let size = 32_u32;
+        let input = center_white_dot(size);
+        let cx = size / 2;
+        let cy = size / 2;
+        let orig_center = input.to_rgba8().get_pixel(cx, cy)[0];
+
+        let out = nystagmus(input, 1.0, 0.1, 0.0).unwrap();
+        let out_center = out.to_rgba8().get_pixel(cx, cy)[0];
+        assert!(
+            out_center < orig_center,
+            "nystagmus should blur white dot: orig={orig_center}, out={out_center}"
+        );
+    }
+
+    #[test]
+    fn nystagmus_zero_amplitude_is_identity() {
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 6) as u8, (y * 8) as u8, 100, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = nystagmus(DynamicImage::ImageRgba8(img), 1.0, 0.0, 0.0).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let max_err = orig.iter().zip(out_raw.iter())
+            .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(max_err <= 1, "amplitude=0 should be identity, max_err={max_err}");
+    }
+
+    #[test]
+    fn starbursts_brightens_near_bright_pixels() {
+        let size = 32_u32;
+        let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
+        img.put_pixel(size / 2, size / 2, Rgba([255, 255, 255, 255]));
+
+        // 中央から 3px 離れた画素の元の値
+        let nearby_x = size / 2 + 3;
+        let nearby_y = size / 2;
+        let orig_nearby = img.get_pixel(nearby_x, nearby_y)[0];
+
+        let out = starbursts(DynamicImage::ImageRgba8(img), 1.0, 8, 0.2, 0.5).unwrap();
+        let out_nearby = out.to_rgba8().get_pixel(nearby_x, nearby_y)[0];
+
+        assert!(
+            out_nearby > orig_nearby,
+            "starbursts should brighten pixels near bright source: orig={orig_nearby}, out={out_nearby}"
+        );
+    }
+
+    #[test]
+    fn starbursts_strength_zero_is_identity() {
+        let size = 32_u32;
+        let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
+        img.put_pixel(size / 2, size / 2, Rgba([255, 255, 255, 255]));
+        let orig = img.clone().into_raw();
+        let out = starbursts(DynamicImage::ImageRgba8(img), 0.0, 6, 0.1, 0.5).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let max_err = orig.iter().zip(out_raw.iter())
+            .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(max_err <= 1, "strength=0 should be identity, max_err={max_err}");
     }
 }

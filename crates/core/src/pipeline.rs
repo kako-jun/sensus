@@ -24,6 +24,22 @@ pub struct FilterStep {
     pub gaze_y: f32,
     /// hemianopia 用側（0.0=左視野消失, 1.0=右視野消失）。デフォルト: 0.0
     pub side: f32,
+    /// diplopia 水平ずれ（min(W,H) 比）。デフォルト: 0.02
+    pub offset_x: f32,
+    /// diplopia 垂直ずれ（min(W,H) 比）。デフォルト: 0.01
+    pub offset_y: f32,
+    /// diplopia 幽霊像強度。デフォルト: 0.7
+    pub ghost_strength: f32,
+    /// nystagmus 振幅（min(W,H) 比）。デフォルト: 0.03
+    pub amplitude: f32,
+    /// nystagmus 方向（0°=水平, 90°=垂直）。デフォルト: 0.0
+    pub direction_deg: f32,
+    /// starbursts 光芒数。デフォルト: 6
+    pub num_rays: u32,
+    /// starbursts 光芒長（min(W,H) 比）。デフォルト: 0.1
+    pub ray_length_ratio: f32,
+    /// starbursts 輝度閾値。デフォルト: 0.8
+    pub threshold: f32,
 }
 
 impl FilterStep {
@@ -38,6 +54,14 @@ impl FilterStep {
             gaze_x: 0.5,
             gaze_y: 0.5,
             side: 0.0,
+            offset_x: 0.02,
+            offset_y: 0.01,
+            ghost_strength: 0.7,
+            amplitude: 0.03,
+            direction_deg: 0.0,
+            num_rays: 6,
+            ray_length_ratio: 0.1,
+            threshold: 0.8,
         }
     }
 
@@ -51,6 +75,9 @@ impl FilterStep {
             Filter::Photophobia => vision::photophobia(img, self.strength),
             Filter::NightBlindness => vision::nyctalopia(img, self.strength),
             Filter::Hemianopia => vision::hemianopia(img, self.strength, self.side),
+            Filter::Diplopia => vision::diplopia(img, self.strength, self.offset_x, self.offset_y, self.ghost_strength),
+            Filter::Nystagmus => vision::nystagmus(img, self.strength, self.amplitude, self.direction_deg),
+            Filter::Starbursts => vision::starbursts(img, self.strength, self.num_rays, self.ray_length_ratio, self.threshold),
             f => crate::apply(f, img, self.strength),
         }
     }
