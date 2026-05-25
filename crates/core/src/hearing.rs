@@ -90,7 +90,8 @@ impl BiquadFilter {
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = sample_rate as f32;
+    // sample_rate=0 の場合はフォールバックとして 44100 Hz を使用する。
+    let fs = if sample_rate == 0 { 44100.0 } else { sample_rate as f32 };
     // バイリニア変換による Butterworth 2 次 LP
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
@@ -395,7 +396,7 @@ pub fn dysmelodia(buf: AudioBuffer, strength: f32) -> AudioBuffer {
 /// # 注意
 /// Linear resampling は簡易実装のため、大きなシフト量では音質劣化がある。
 pub fn pitch_shift_semitones(buf: AudioBuffer, semitones: f32) -> AudioBuffer {
-    if semitones == 0.0 {
+    if semitones == 0.0 || !semitones.is_finite() {
         return buf;
     }
     let ratio = 2.0_f32.powf(semitones / 12.0);
@@ -599,6 +600,161 @@ mod tests {
             channels: 2,
         };
         assert_eq!(buf.frames(), 100);
+    }
+
+    // ---------------------------------------------------------------
+    // TC-H-03: sample_rate=0 は panic しない
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hearing_loss_sample_rate_zero_does_not_panic() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, -0.2, 0.3],
+            sample_rate: 0,
+            channels: 1,
+        };
+        let _ = hearing_loss(buf, 1.0);
+    }
+
+    // ---------------------------------------------------------------
+    // TC-H-04〜07: strength=0.0 は identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn amusia_strength_zero_is_identity() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, -0.2, 0.3],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let orig = buf.samples.clone();
+        let out = amusia(buf, 0.0);
+        assert_eq!(out.samples, orig);
+    }
+
+    #[test]
+    fn noise_induced_hearing_loss_strength_zero_is_identity() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, -0.2, 0.3],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let orig = buf.samples.clone();
+        let out = noise_induced_hearing_loss(buf, 0.0);
+        assert_eq!(out.samples, orig);
+    }
+
+    #[test]
+    fn paracusis_strength_zero_is_identity() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, -0.2, 0.3],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let orig = buf.samples.clone();
+        let out = paracusis(buf, 0.0);
+        assert_eq!(out.samples, orig);
+    }
+
+    #[test]
+    fn dysmelodia_strength_zero_is_identity() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, -0.2, 0.3],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let orig = buf.samples.clone();
+        let out = dysmelodia(buf, 0.0);
+        assert_eq!(out.samples, orig);
+    }
+
+    // ---------------------------------------------------------------
+    // TC-H-11〜13: 空バッファは panic しない
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hearing_loss_empty_buffer_does_not_panic() {
+        let buf = AudioBuffer {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let out = hearing_loss(buf, 1.0);
+        assert!(out.samples.is_empty());
+    }
+
+    #[test]
+    fn tinnitus_empty_buffer_does_not_panic() {
+        let buf = AudioBuffer {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let out = tinnitus(buf, 1.0, 4000.0);
+        assert!(out.samples.is_empty());
+    }
+
+    #[test]
+    fn pitch_shift_empty_buffer_returns_empty() {
+        let buf = AudioBuffer {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let out = pitch_shift_semitones(buf, 2.0);
+        assert!(out.samples.is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // TC-H-16: ステレオ入力でチャンネル数保持
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn hearing_loss_stereo_preserves_channel_count() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, 0.2, -0.1, -0.2, 0.3, 0.4],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let out = hearing_loss(buf, 0.5);
+        assert_eq!(out.channels, 2);
+    }
+
+    // ---------------------------------------------------------------
+    // TC-H-24: NaN semitones は panic しない
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn pitch_shift_nan_semitones_does_not_panic() {
+        let buf = sine_wave(440.0, 100, 44100);
+        let orig = buf.samples.clone();
+        let out = pitch_shift_semitones(buf, f32::NAN);
+        // NaN は identity として扱う契約
+        assert_eq!(out.samples, orig);
+    }
+
+    // ---------------------------------------------------------------
+    // TC-H-25〜26: diplacusis
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn diplacusis_mono_input_produces_stereo_output() {
+        let buf = sine_wave(440.0, 100, 44100);
+        assert_eq!(buf.channels, 1);
+        let out = diplacusis(buf, 1.0);
+        assert_eq!(out.channels, 2);
+        assert_eq!(out.samples.len(), 200);
+    }
+
+    #[test]
+    fn diplacusis_stereo_input_does_not_panic() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, 0.2, -0.1, -0.2, 0.3, 0.4],
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let out = diplacusis(buf, 1.0);
+        assert_eq!(out.channels, 2);
     }
 
     #[test]

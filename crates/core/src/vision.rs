@@ -1299,7 +1299,7 @@ pub fn bppv_rotation(img: DynamicImage, strength: f32, time_t: f32) -> Result<Dy
     // nystagmus パターン: 高速 sawtooth 波（急速相 + 緩徐相）
     // 周期 2 秒、t=0..=0.3 で急速回転、t=0.3..=2.0 でゆっくり戻る
     let period = 2.0_f32;
-    let phase = (time_t % period) / period; // 0.0..=1.0
+    let phase = time_t.rem_euclid(period) / period; // 0.0..=1.0（負の time_t も正しく処理）
     let fast_fraction = 0.3_f32;
     let angle_norm = if phase < fast_fraction {
         // 急速相: 0 → 1
@@ -2943,5 +2943,89 @@ mod tests {
             elapsed.as_secs_f32() < 5.0,
             "1024×1024 myopia s=1.0 took {elapsed:?}, target < 5s"
         );
+    }
+
+    // =================================================================
+    // Phase 4 (#9): めまいフィルタ tests
+    // =================================================================
+
+    // ---------------------------------------------------------------
+    // TC-V-01: vertigo strength=0.0 は identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vertigo_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(raw_rgba_vec(&vertigo(input, 0.0, 1.0).unwrap()), original);
+    }
+
+    // ---------------------------------------------------------------
+    // TC-V-03: vertigo 1x1 image does not panic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vertigo_1x1_image_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = vertigo(input, 1.0, 0.5).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // TC-V-05: bppv_rotation strength=0.0 は identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bppv_rotation_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&bppv_rotation(input, 0.0, 1.0).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // TC-V-07: bppv_rotation 1x1 image does not panic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bppv_rotation_1x1_image_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = bppv_rotation(input, 1.0, 0.5).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // TC-V-11: bppv_rotation time_t=-1.0 does not panic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bppv_rotation_time_t_negative_does_not_panic() {
+        let input = solid_rgba(32, 32, [100, 150, 200, 255]);
+        // rem_euclid により -1.0 → 1.0 (mod 2.0) になる。角度は適正範囲に収まる。
+        let _ = bppv_rotation(input, 1.0, -1.0).unwrap();
+    }
+
+    // ---------------------------------------------------------------
+    // TC-V-12: vestibular_neuritis strength=0.0 は identity
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vestibular_neuritis_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [200, 100, 50, 255]);
+        let original = raw_rgba_vec(&input);
+        assert_eq!(
+            raw_rgba_vec(&vestibular_neuritis(input, 0.0).unwrap()),
+            original
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // TC-V-14: vestibular_neuritis 1x1 image does not panic
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vestibular_neuritis_1x1_image_does_not_panic() {
+        let input = pixel(128, 128, 128, 255);
+        let _ = vestibular_neuritis(input, 1.0).unwrap();
     }
 }
