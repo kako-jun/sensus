@@ -68,6 +68,8 @@ pub enum Filter {
     ContrastSensitivity,
     // vision (Phase N / #57: detail loss)
     DetailLoss,
+    // vision (Phase N / #58: teichopsia)
+    Teichopsia,
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -111,6 +113,7 @@ pub fn apply(
         Filter::Metamorphopsia => vision::metamorphopsia(img, strength, 4.0, 0),
         Filter::ContrastSensitivity => vision::contrast_sensitivity(img, strength),
         Filter::DetailLoss => vision::detail_loss(img, strength),
+        Filter::Teichopsia => vision::teichopsia(img, strength),
     }
 }
 

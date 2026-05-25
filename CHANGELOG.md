@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vision: Teichopsia フィルタ追加** (#58):
+  `teichopsia(img, strength)` を `vision.rs` に追加。視野周辺にジグザグ縞の光（要塞スペクトル）を重畳し、
+  内側（scotoma）を暗化する。リング領域（正規化距離 0.2〜0.5）で saw wave 輝度加算、
+  内側（< 0.2）を `strength × 0.7` で暗化。`Filter::Teichopsia` を `lib.rs` に追加。
+  `teichopsia.frag` GLSL シェーダ追加。
+  `docs/overview.md` に医学的注記追加:「偏頭痛の前兆として 20〜30 分続く。初めて経験する場合は眼科・神経内科を受診。」
+  テスト: strength=0 → PSNR ≥ 60 dB、strength=1 → 画像中心が暗化。
+
 - **vision: Detail Loss フィルタ追加** (#57):
   `detail_loss(img, strength)` を `vision.rs` に追加。矩形タイルごとに平均色に置き換える（pixelation）。
   タイルサイズ = `(strength × 20.0).max(1.0) as u32` px（strength=1 で 20px タイル）。

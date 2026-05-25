@@ -969,3 +969,9 @@ fn shader_detail_loss_glsl_is_not_empty() {
     use sensus_core::shaders::detail_loss_glsl;
     assert!(!detail_loss_glsl().is_empty());
 }
+
+#[test]
+fn shader_teichopsia_glsl_is_not_empty() {
+    use sensus_core::shaders::teichopsia_glsl;
+    assert!(!teichopsia_glsl().is_empty());
+}

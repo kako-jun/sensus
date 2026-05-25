@@ -2509,6 +2509,78 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgba8(out))
 }
 
+// ---------------------------------------------------------------
+// Issue #58: Teichopsia フィルタ（偏頭痛の前兆：要塞スペクトル）
+// ---------------------------------------------------------------
+
+/// 閃輝暗点（Teichopsia / Fortification Spectra）シミュレーション。
+///
+/// 視野周辺にジグザグ縞の光（要塞スペクトル）を重畳し、内側（scotoma）を暗化する。
+///
+/// ## アルゴリズム
+///
+/// 1. 正規化 UV 座標（-0.5..0.5）で中心からの距離を計算
+/// 2. 距離 0.2〜0.5 のリング領域内でジグザグ輝度を加算（saw wave）
+/// 3. 内側（< 0.2）は scotoma として暗化
+/// 4. strength でリング輝度と scotoma 暗化をスケール
+///
+/// > **医学的注記**: 偏頭痛の前兆として 20〜30 分続く。
+/// > 初めて経験する場合は眼科・神経内科を受診。
+///
+/// - `strength = 0.0`: 元画像と同一
+/// - `strength = 1.0`: 最大の閃輝暗点効果
+pub fn teichopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+    if s == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+    let aspect = w_f / h_f;
+
+    for y in 0..height {
+        for x in 0..width {
+            // 正規化座標（-0.5..0.5）
+            let ux = (x as f32 / w_f) - 0.5;
+            let uy = ((y as f32 / h_f) - 0.5) / aspect;
+            let dist = (ux * ux + uy * uy).sqrt();
+
+            let px = rgba.get_pixel_mut(x, y);
+
+            if dist < 0.2 {
+                // scotoma: 内側を strength に応じて暗化
+                let dark = 1.0 - s * 0.7 * (1.0 - dist / 0.2);
+                let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                px[0] = pack_u8(linear_to_srgb(rl * dark));
+                px[1] = pack_u8(linear_to_srgb(gl * dark));
+                px[2] = pack_u8(linear_to_srgb(bl * dark));
+            } else if dist >= 0.2 && dist <= 0.5 {
+                // ジグザグリング
+                let angle = uy.atan2(ux);
+                let saw = (angle / PI * 8.0).fract(); // saw wave 0..1
+                let ring_t = (dist - 0.2) / 0.3; // 0..1 in ring
+                let fade = (ring_t * (1.0 - ring_t) * 4.0).clamp(0.0, 1.0); // 中央強調
+                let brightness = saw * s * fade * 0.6;
+
+                let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                px[0] = pack_u8(linear_to_srgb((rl + brightness).min(1.0)));
+                px[1] = pack_u8(linear_to_srgb((gl + brightness).min(1.0)));
+                px[2] = pack_u8(linear_to_srgb((bl + brightness).min(1.0)));
+            }
+            // 外側は変更なし
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5156,6 +5228,41 @@ mod tests {
         let sd_in = stddev(&orig);
         let sd_out = stddev(&out);
         assert!(sd_out < sd_in, "detail_loss strength=1 must reduce stddev (in={sd_in:.2}, out={sd_out:.2})");
+    }
+
+    // -------------------------------------------------------
+    // teichopsia tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn teichopsia_strength_zero_identity() {
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig = img.clone();
+        let out = teichopsia(DynamicImage::ImageRgba8(img), 0.0).unwrap().to_rgba8();
+        // PSNR >= 60 dB
+        let mse: f64 = orig.pixels().zip(out.pixels()).map(|(a, b)| {
+            (0..3).map(|i| { let d = a[i] as f64 - b[i] as f64; d * d }).sum::<f64>()
+        }).sum::<f64>() / (64.0 * 64.0 * 3.0);
+        if mse > 0.0 {
+            let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
+            assert!(psnr >= 60.0, "PSNR={psnr:.1} dB expected >= 60 dB");
+        }
+    }
+
+    #[test]
+    fn teichopsia_strength_one_darkens_center() {
+        let mut img = RgbaImage::new(64, 64);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 255]);
+        }
+        let out = teichopsia(DynamicImage::ImageRgba8(img), 1.0).unwrap().to_rgba8();
+        // 中心ピクセル（scotoma）が暗化されているか
+        let center = out.get_pixel(32, 32);
+        let brightness = center[0] as u32 + center[1] as u32 + center[2] as u32;
+        assert!(brightness < 600, "teichopsia strength=1 must darken center (got {brightness})");
     }
 }
 
