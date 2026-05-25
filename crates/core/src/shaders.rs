@@ -106,6 +106,16 @@ pub fn dry_eye_glsl() -> &'static str {
     include_str!("shaders/dry_eye.frag")
 }
 
+/// contrast_sensitivity.frag の GLSL ES 3.00 ソースを返す。
+pub fn contrast_sensitivity_glsl() -> &'static str {
+    include_str!("shaders/contrast_sensitivity.frag")
+}
+
+/// contrast_sensitivity の uniform を返す。
+pub fn contrast_sensitivity_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    SimpleStrengthUniforms { strength }
+}
+
 /// photophobia.frag の GLSL ES 3.00 ソースを返す。
 pub fn photophobia_glsl() -> &'static str {
     include_str!("shaders/photophobia.frag")

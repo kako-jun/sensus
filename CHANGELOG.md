@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **vision: Contrast Sensitivity フィルタ追加** (#56):
+  `contrast_sensitivity(img, strength)` を `vision.rs` に追加。
+  輝度コントラストを linear sRGB 空間で midpoint (0.5) に引き寄せる。
+  式: `output = 0.5 + (input − 0.5) × (1.0 − strength × 0.5)`。
+  `strength=0` で identity、`strength=1` で 50% コントラスト圧縮。
+  `Filter::ContrastSensitivity` を `lib.rs` に追加。
+  `contrast_sensitivity.frag` GLSL シェーダ追加。
+  テスト: strength=0 → PSNR ≥ 60 dB、strength=1 → 輝度分散が入力より小さいこと。
+
 ### Fixed
 
 - **vision: cataract の散乱ノイズを LCG ベース Simplex-like ノイズに改善** (#50):

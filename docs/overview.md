@@ -73,7 +73,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
 | `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |
@@ -115,6 +115,16 @@ let result = Pipeline::new()
   making processing O(tile_area × kernel_height) instead of O(W×H × kernel_height).
   Because the blur radius varies spatially per tile with a fixed seed, this
   filter is not amenable to a GLSL equivalence test.
+
+## Contrast Sensitivity filter (#56)
+
+`contrast_sensitivity(img, strength)` compresses luminance contrast toward the
+midpoint (0.5) in linear sRGB space.
+
+Formula: `output = 0.5 + (input − 0.5) × (1.0 − strength × 0.5)`
+
+- `strength = 0.0` → identity (same as source image)
+- `strength = 1.0` → 50% contrast compression (output luminance variance < input)
 
 ## Auditory Processing Disorder (APD) (Issue #38)
 

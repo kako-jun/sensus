@@ -957,3 +957,9 @@ fn shader_floaters_glsl_is_not_empty() {
     use sensus_core::shaders::floaters_glsl;
     assert!(!floaters_glsl().is_empty());
 }
+
+#[test]
+fn shader_contrast_sensitivity_glsl_is_not_empty() {
+    use sensus_core::shaders::contrast_sensitivity_glsl;
+    assert!(!contrast_sensitivity_glsl().is_empty());
+}

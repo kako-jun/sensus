@@ -2409,6 +2409,41 @@ pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgba8(out))
 }
 
+// ---------------------------------------------------------------
+// Issue #56: Contrast Sensitivity フィルタ
+// ---------------------------------------------------------------
+
+/// コントラスト感度低下（Contrast Sensitivity Loss）シミュレーション。
+///
+/// 輝度コントラストを圧縮し、midpoint (0.5) に引き寄せる。
+/// 式: `output = 0.5 + (input - 0.5) * (1.0 - strength * 0.5)`
+///
+/// - `strength = 0.0`: 元画像と同一
+/// - `strength = 1.0`: 輝度コントラストを 50% 圧縮
+///
+/// 処理は linear sRGB 空間で行う。
+pub fn contrast_sensitivity(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+    if s == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+    let scale = 1.0 - s * 0.5;
+    for px in rgba.pixels_mut() {
+        let r = srgb_to_linear(px[0] as f32 / 255.0);
+        let g = srgb_to_linear(px[1] as f32 / 255.0);
+        let b = srgb_to_linear(px[2] as f32 / 255.0);
+        let nr = 0.5 + (r - 0.5) * scale;
+        let ng = 0.5 + (g - 0.5) * scale;
+        let nb = 0.5 + (b - 0.5) * scale;
+        px[0] = pack_u8(linear_to_srgb(nr.clamp(0.0, 1.0)));
+        px[1] = pack_u8(linear_to_srgb(ng.clamp(0.0, 1.0)));
+        px[2] = pack_u8(linear_to_srgb(nb.clamp(0.0, 1.0)));
+        // alpha はそのまま
+    }
+    Ok(DynamicImage::ImageRgba8(rgba))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4970,6 +5005,54 @@ mod tests {
         let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Biarcuate).unwrap();
         let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
         assert!(out_sum < orig_sum, "glaucoma Biarcuate strength=1 must darken");
+    }
+
+    // -------------------------------------------------------
+    // contrast_sensitivity tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn contrast_sensitivity_strength_zero_identity() {
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig = img.clone();
+        let out = contrast_sensitivity(DynamicImage::ImageRgba8(img), 0.0).unwrap().to_rgba8();
+        // PSNR >= 60 dB
+        let mse: f64 = orig.pixels().zip(out.pixels()).map(|(a, b)| {
+            (0..3).map(|i| {
+                let d = a[i] as f64 - b[i] as f64;
+                d * d
+            }).sum::<f64>()
+        }).sum::<f64>() / (64.0 * 64.0 * 3.0);
+        if mse > 0.0 {
+            let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
+            assert!(psnr >= 60.0, "PSNR={psnr:.1} dB, expected >= 60 dB");
+        }
+    }
+
+    #[test]
+    fn contrast_sensitivity_strength_one_reduces_variance() {
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig = img.clone();
+        let out = contrast_sensitivity(DynamicImage::ImageRgba8(img), 1.0).unwrap().to_rgba8();
+
+        let luma = |p: &image::Rgba<u8>| -> f64 {
+            0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64
+        };
+        let variance = |pixels: &RgbaImage| -> f64 {
+            let vals: Vec<f64> = pixels.pixels().map(luma).collect();
+            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+            vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64
+        };
+
+        let var_in = variance(&orig);
+        let var_out = variance(&out);
+        assert!(var_out < var_in, "contrast_sensitivity strength=1 must reduce luminance variance (in={var_in:.2}, out={var_out:.2})");
     }
 }
 
