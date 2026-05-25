@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **vision: cataract の散乱ノイズを LCG ベース Simplex-like ノイズに改善** (#50):
+  旧実装の 8×8 矩形ブロックノイズ（空間非連続）を格子頂点 LCG + smoothstep bilinear 補間による
+  空間相関ノイズ（CELL_SIZE=32）に置き換え。白濁パターンがより自然な滲みになった。
+  黄変マトリクス係数のコメントに医学的出典を追記:
+  Pokorny et al. (1987) *Applied Optics* 26(8) および van Norren & Vos (1974) *Vision Research* 14(11)。
+  `cataract.frag` も同じ格子補間ノイズ + 出典コメントに更新（`uSeed` / `uResolution` uniform 追加）。
+
 ### Added
 
 - **shader: tetrachromacy/vertigo/bppv_rotation/vestibular_neuritis/floaters の GLSL シェーダ追加** (#48):
