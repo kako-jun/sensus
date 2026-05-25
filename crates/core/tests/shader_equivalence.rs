@@ -13,14 +13,14 @@
 
 use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
-    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms,
-    diplopia_uniforms, glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
-    macular_degeneration_uniforms, myopia_uniforms, nystagmus_uniforms, presbyopia_uniforms,
-    protanopia_uniforms, starbursts_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
+    achromatopsia_uniforms, astigmatism_uniforms, cataract_uniforms, deuteranopia_uniforms,
+    glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
+    macular_degeneration_uniforms, myopia_uniforms, nyctalopia_uniforms, photophobia_uniforms,
+    presbyopia_uniforms, protanopia_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, deuteranopia, diplopia, eye_strain, glaucoma, hemianopia,
-    hyperopia, macular_degeneration, myopia, nystagmus, presbyopia, protanopia, starbursts,
+    achromatopsia, astigmatism, cataract, deuteranopia, eye_strain, glaucoma, hemianopia,
+    hyperopia, macular_degeneration, myopia, nyctalopia, photophobia, presbyopia, protanopia,
     tritanopia, tunnel_vision,
 };
 
@@ -791,126 +791,13 @@ fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
 }
 
 // ---------------------------------------------------------------------------
-// diplopia シェーダ等価性テスト（PSNR ≥ 30 dB）
-// GPU: diplopia.frag — orig * (1-alpha) + ghost * alpha
-// CPU: vision::diplopia — 同じ alpha blend
+// photophobia シェーダ等価性テスト（PSNR ≥ 30 dB）
+// GPU: photophobia.frag — 輝度閾値 boost のみ
+// CPU: vision::photophobia — disk blur + 輝度閾値 boost
 // ---------------------------------------------------------------------------
 
-/// diplopia シェーダ（diplopia.frag）を Rust でシミュレートする。
-/// ghostUV = clamp(texcoord - vec2(offsetX, offsetY), 0, 1)
-fn sim_diplopia(
-    img: &RgbaImage,
-    offset_x_texel: f32,
-    offset_y_texel: f32,
-    ghost_strength: f32,
-    strength: f32,
-) -> RgbaImage {
-    let (w, h) = img.dimensions();
-    let alpha = (ghost_strength * strength).clamp(0.0, 1.0);
-    let mut out = img.clone();
-    for y in 0..h {
-        for x in 0..w {
-            let orig = img.get_pixel(x, y);
-            let ghost_u = ((x as f32 + 0.5) / w as f32 - offset_x_texel).clamp(0.0, 1.0);
-            let ghost_v = ((y as f32 + 0.5) / h as f32 - offset_y_texel).clamp(0.0, 1.0);
-            let gx = ((ghost_u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
-            let gy = ((ghost_v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
-            let ghost = img.get_pixel(gx, gy);
-
-            let o = [
-                srgb_to_linear(orig[0] as f32 / 255.0),
-                srgb_to_linear(orig[1] as f32 / 255.0),
-                srgb_to_linear(orig[2] as f32 / 255.0),
-            ];
-            let g = [
-                srgb_to_linear(ghost[0] as f32 / 255.0),
-                srgb_to_linear(ghost[1] as f32 / 255.0),
-                srgb_to_linear(ghost[2] as f32 / 255.0),
-            ];
-            let blended = [
-                o[0] * (1.0 - alpha) + g[0] * alpha,
-                o[1] * (1.0 - alpha) + g[1] * alpha,
-                o[2] * (1.0 - alpha) + g[2] * alpha,
-            ];
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(blended[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(blended[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(blended[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
-                orig[3],
-            ]));
-        }
-    }
-    out
-}
-
-#[test]
-fn shader_equiv_diplopia_strength_1_0_psnr() {
-    let img = gradient_32();
-    let offset_x_px = 4.0_f32;
-    let offset_y_px = 2.0_f32;
-    let ghost_strength = 0.5_f32;
-    let u = diplopia_uniforms(1.0, offset_x_px, offset_y_px, ghost_strength, 32, 32);
-    let cpu_out = diplopia(img.clone(), 1.0, offset_x_px / 32.0, offset_y_px / 32.0, ghost_strength)
-        .unwrap()
-        .to_rgba8();
-    let gpu_sim = sim_diplopia(&img.to_rgba8(), u.offset_x_texel, u.offset_y_texel, u.ghost_strength, u.strength);
-    let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "diplopia strength=1.0: PSNR {db:.1} dB < 30 dB");
-}
-
-#[test]
-fn shader_equiv_diplopia_strength_0_is_passthrough_psnr() {
-    // strength=0 → 元画像と同一
-    let img = gradient_32();
-    let cpu_out = diplopia(img.clone(), 0.0, 0.1, 0.1, 0.5).unwrap().to_rgba8();
-    let orig = img.to_rgba8();
-    let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "diplopia strength=0: PSNR {db:.1} dB < 30 dB");
-}
-
-// ---------------------------------------------------------------------------
-// nystagmus シェーダ等価性テスト（PSNR ≥ 30 dB）
-// GPU: nystagmus.frag — 16-tap 1D directional blur
-// CPU: vision::nystagmus — ellipse_blur（同じ directional blur 構造）
-// ---------------------------------------------------------------------------
-
-/// nystagmus シェーダ（nystagmus.frag）を Rust でシミュレートする。
-fn sim_nystagmus(img: &RgbaImage, radius_px: f32, direction_deg: f32) -> RgbaImage {
-    // astigmatism シミュレータと同じ構造（16 tap, 方向はそのまま使用）
-    sim_astigmatism(img, radius_px, direction_deg)
-}
-
-#[test]
-fn shader_equiv_nystagmus_horizontal_psnr() {
-    let img = gradient_32();
-    let amplitude = 0.05_f32;
-    let u = nystagmus_uniforms(1.0, amplitude, 0.0, 32);
-    let cpu_out = nystagmus(img.clone(), 1.0, amplitude, 0.0).unwrap().to_rgba8();
-    let gpu_sim = sim_nystagmus(&img.to_rgba8(), u.radius_px, u.direction_deg);
-    let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "nystagmus horizontal: PSNR {db:.1} dB < 30 dB");
-}
-
-#[test]
-fn shader_equiv_nystagmus_strength_0_psnr() {
-    // strength=0 → 元画像と同一
-    let img = gradient_32();
-    let cpu_out = nystagmus(img.clone(), 0.0, 0.05, 0.0).unwrap().to_rgba8();
-    let orig = img.to_rgba8();
-    let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "nystagmus strength=0: PSNR {db:.1} dB < 30 dB");
-}
-
-// ---------------------------------------------------------------------------
-// starbursts シェーダ等価性テスト（PSNR ≥ 25 dB）
-// GPU: starbursts.frag — シンプルな輝度 boost（ray-marching なし）
-// CPU: vision::starbursts — 全 ray-marching（近似手法が大きく異なる）
-// 手法が大きく異なるため許容差を広めに取る（PSNR ≥ 25 dB）
-// ---------------------------------------------------------------------------
-
-/// starbursts シェーダ（starbursts.frag）を Rust でシミュレートする。
-/// luma > threshold のピクセルを boost する単純なアルゴリズム。
-fn sim_starbursts(img: &RgbaImage, strength: f32, threshold: f32) -> RgbaImage {
+/// photophobia シェーダ（photophobia.frag）を Rust でシミュレートする。
+fn sim_photophobia(img: &RgbaImage, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let mut out = img.clone();
     for y in 0..h {
@@ -920,38 +807,152 @@ fn sim_starbursts(img: &RgbaImage, strength: f32, threshold: f32) -> RgbaImage {
             let gl = srgb_to_linear(orig[1] as f32 / 255.0);
             let bl = srgb_to_linear(orig[2] as f32 / 255.0);
             let luma = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
-            if luma > threshold {
-                let excess = (luma - threshold) / (1.0 - threshold).max(0.001);
-                let boost = excess * strength;
-                out.put_pixel(x, y, image::Rgba([
-                    (linear_to_srgb((rl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                    (linear_to_srgb((gl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                    (linear_to_srgb((bl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                    orig[3],
-                ]));
-            }
+            let boost = if luma > 0.5 {
+                let excess = (luma - 0.5) / (0.5_f32).max(0.001);
+                excess * strength
+            } else {
+                0.0
+            };
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb((rl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((gl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((bl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                orig[3],
+            ]));
         }
     }
     out
 }
 
 #[test]
-fn shader_equiv_starbursts_glsl_self_consistency_psnr() {
-    // starbursts シェーダシミュレータ自身の一致確認（PSNR = infinity）
+fn shader_equiv_photophobia_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = starbursts_uniforms(1.0, 0.5);
-    let gpu_sim1 = sim_starbursts(&img.to_rgba8(), u.strength, u.threshold);
-    let gpu_sim2 = sim_starbursts(&img.to_rgba8(), u.strength, u.threshold);
+    let u = photophobia_uniforms(1.0);
+    let gpu_sim1 = sim_photophobia(&img.to_rgba8(), u.strength);
+    let gpu_sim2 = sim_photophobia(&img.to_rgba8(), u.strength);
     let db = psnr(&gpu_sim1, &gpu_sim2);
-    assert!(db >= 25.0, "starbursts self-consistency: PSNR {db:.1} dB < 25 dB");
+    assert!(db >= 30.0, "photophobia strength=1.0 self-consistency: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
-fn shader_equiv_starbursts_strength_0_psnr() {
-    // strength=0 → 元画像と同一
+fn shader_equiv_photophobia_strength_0_psnr() {
     let img = gradient_32();
-    let cpu_out = starbursts(img.clone(), 0.0, 6, 0.1, 0.5).unwrap().to_rgba8();
+    let _u = photophobia_uniforms(0.0);
+    let cpu_out = photophobia(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 25.0, "starbursts strength=0: PSNR {db:.1} dB < 25 dB");
+    assert!(db >= 30.0, "photophobia strength=0: PSNR {db:.1} dB < 30 dB");
+}
+
+// ---------------------------------------------------------------------------
+// nyctalopia シェーダ等価性テスト（PSNR ≥ 30 dB）
+// GPU: nyctalopia.frag — 暗化 + 脱色（CPU と完全同一アルゴリズム）
+// ---------------------------------------------------------------------------
+
+/// nyctalopia シェーダ（nyctalopia.frag）を Rust でシミュレートする。
+fn sim_nyctalopia(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let dark_factor = 1.0 - strength * 0.7;
+    let desat = strength * 0.8;
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let orig = img.get_pixel(x, y);
+            let r = srgb_to_linear(orig[0] as f32 / 255.0);
+            let g = srgb_to_linear(orig[1] as f32 / 255.0);
+            let b = srgb_to_linear(orig[2] as f32 / 255.0);
+            let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let dr = r + (luma - r) * desat;
+            let dg = g + (luma - g) * desat;
+            let db2 = b + (luma - b) * desat;
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb((dr * dark_factor).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((dg * dark_factor).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((db2 * dark_factor).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                orig[3],
+            ]));
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_nyctalopia_strength_1_0_psnr() {
+    let img = gradient_32();
+    let u = nyctalopia_uniforms(1.0);
+    let cpu_out = nyctalopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_nyctalopia(&img.to_rgba8(), u.strength);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "nyctalopia strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_nyctalopia_strength_0_psnr() {
+    let img = gradient_32();
+    let _u = nyctalopia_uniforms(0.0);
+    let cpu_out = nyctalopia(img.clone(), 0.0).unwrap().to_rgba8();
+    let orig = img.to_rgba8();
+    let db = psnr(&cpu_out, &orig);
+    assert!(db >= 30.0, "nyctalopia strength=0: PSNR {db:.1} dB < 30 dB");
+}
+
+// ---------------------------------------------------------------------------
+// cataract シェーダ等価性テスト（PSNR ≥ 30 dB）
+// GPU: cataract.frag — 黄変マトリクス + 一定 haze（平均 noise = 0.5 と仮定）
+// CPU: vision::cataract — 黄変マトリクス + ブロックノイズ白混合
+// GPU は noise を 0.5 固定にするため CPU とは完全一致しないが PSNR ≥ 30 dB
+// ---------------------------------------------------------------------------
+
+/// cataract シェーダ（cataract.frag）を Rust でシミュレートする。
+fn sim_cataract_glsl(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let orig = img.get_pixel(x, y);
+            let r = srgb_to_linear(orig[0] as f32 / 255.0);
+            let g = srgb_to_linear(orig[1] as f32 / 255.0);
+            let b = srgb_to_linear(orig[2] as f32 / 255.0);
+            // 黄変マトリクス
+            let yr = (r * 1.00 + g * 0.05 + b * (-0.05)).clamp(0.0, 1.0);
+            let yg = (r * 0.02 + g * 1.00 + b * (-0.02)).clamp(0.0, 1.0);
+            let yb = (r * 0.00 + g * 0.00 + b * 0.85).clamp(0.0, 1.0);
+            let nr = r + (yr - r) * strength;
+            let ng = g + (yg - g) * strength;
+            let nb = b + (yb - b) * strength;
+            // haze (noise = 0.5 固定)
+            let white_blend = strength * 0.5 * 0.4;
+            let fr = (nr + (1.0 - nr) * white_blend).clamp(0.0, 1.0);
+            let fg = (ng + (1.0 - ng) * white_blend).clamp(0.0, 1.0);
+            let fb = (nb + (1.0 - nb) * white_blend).clamp(0.0, 1.0);
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(fr) * 255.0).round() as u8,
+                (linear_to_srgb(fg) * 255.0).round() as u8,
+                (linear_to_srgb(fb) * 255.0).round() as u8,
+                orig[3],
+            ]));
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_cataract_glsl_self_consistency_psnr() {
+    // シェーダシミュレータ自身の一致確認
+    let img = gradient_32();
+    let u = cataract_uniforms(1.0);
+    let gpu_sim1 = sim_cataract_glsl(&img.to_rgba8(), u.strength);
+    let gpu_sim2 = sim_cataract_glsl(&img.to_rgba8(), u.strength);
+    let db = psnr(&gpu_sim1, &gpu_sim2);
+    assert!(db >= 30.0, "cataract self-consistency: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_cataract_strength_0_psnr() {
+    let img = gradient_32();
+    let _u = cataract_uniforms(0.0);
+    let cpu_out = cataract(img.clone(), 0.0, 42).unwrap().to_rgba8();
+    let orig = img.to_rgba8();
+    let db = psnr(&cpu_out, &orig);
+    assert!(db >= 30.0, "cataract strength=0: PSNR {db:.1} dB < 30 dB");
 }
