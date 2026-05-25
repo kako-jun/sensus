@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **shader: 視野欠損 4 種の GLSL ES 3.00 シェーダを追加** (#46):
+  `glaucoma.frag`（周辺ビネット、smoothstep マスク）、`macular_degeneration.frag`（中心暗化、foveal smoothstep マスク）、`hemianopia.frag`（左右半側マスク）、`tunnel_vision.frag`（急峻なトンネルビネット）の 4 シェーダを `crates/core/src/shaders/` に追加。
+  `shaders.rs` に `glaucoma_glsl()` / `macular_degeneration_glsl()` / `hemianopia_glsl()` / `tunnel_vision_glsl()` および対応する uniform 構造体・計算関数を追加。
+  uniform 構造体: `FieldOfVisionUniforms { strength }` / `HemianopiaUniforms { strength, side }`（side: 1.0=右側欠損, -1.0=左側欠損）。
+
 ### Changed
 
 - **vision: depth_aware_blur をビン線形補間に変更** (#54):
