@@ -25,4 +25,17 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+
+    /// MPO バイト列に2枚目の JPEG (SOI `FFD8`) が見つからなかった。
+    #[error("invalid MPO: second JPEG (SOI) not found after EOI")]
+    InvalidMpo,
+
+    /// 左右画像のサイズが一致しない。
+    #[error("size mismatch: left {left_w}x{left_h}, right {right_w}x{right_h}")]
+    SizeMismatch {
+        left_w: u32,
+        left_h: u32,
+        right_w: u32,
+        right_h: u32,
+    },
 }
