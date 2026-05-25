@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sensus_core::{pipeline::{FilterStep, Pipeline}, vision::{depth_aware_blur, DepthBlurKind}, Error as CoreError, Filter as CoreFilter};
+use sensus_core::{pipeline::{FilterStep, Pipeline}, stereo::{split_mpo, stereo_to_depth}, vision::{depth_aware_blur, DepthBlurKind}, Error as CoreError, Filter as CoreFilter};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -147,6 +147,11 @@ struct Cli {
     #[arg(long)]
     depth: Option<PathBuf>,
 
+    /// MPO stereo image path. Automatically generates a depth map and applies depth blur.
+    /// Requires a depth blur filter (--filter myopia-depth / hyperopia-depth / depth-of-field).
+    #[arg(long)]
+    mpo: Option<PathBuf>,
+
     /// Focus depth in 0.0..=1.0 (bright=near, dark=far). Only used with depth blur filters.
     #[arg(long, default_value = "0.5", value_parser = parse_focus)]
     focus: f32,
@@ -278,6 +283,16 @@ enum RunError {
     /// A pipeline step failed at runtime.
     #[error("{0}")]
     Pipeline(String),
+
+    #[error("sensus: failed to read MPO file {path:?}: {source}")]
+    MpoRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{0}")]
+    MpoError(String),
 }
 
 fn main() -> ExitCode {
@@ -285,6 +300,10 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(RunError::Pipeline(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
+        Err(RunError::MpoError(msg)) => {
             eprintln!("{msg}");
             ExitCode::FAILURE
         }
@@ -311,11 +330,40 @@ fn run(cli: Cli) -> Result<(), RunError> {
     // TODO(#19): Pipeline 統合時にここを削除し Pipeline 経由で処理する
     if cli.filter.iter().any(|f| f.is_depth_filter()) {
         if cli.filter.len() > 1 {
+            if cli.mpo.is_some() {
+                return Err(RunError::MpoError(
+                    "sensus: --mpo cannot be combined with multiple filters".to_string(),
+                ));
+            }
             return Err(RunError::Pipeline(
                 "sensus: depth blur filters cannot be combined with other filters".to_string(),
             ));
         }
         let kind = cli.filter[0].depth_kind().unwrap();
+
+        if cli.mpo.is_some() && cli.depth.is_some() {
+            return Err(RunError::MpoError(
+                "sensus: --mpo and --depth cannot be used together".to_string(),
+            ));
+        }
+
+        if let Some(mpo_path) = cli.mpo {
+            let bytes = std::fs::read(&mpo_path).map_err(|source| RunError::MpoRead {
+                path: mpo_path.clone(),
+                source,
+            })?;
+            let (left, right) = split_mpo(&bytes)
+                .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
+            let depth_img = stereo_to_depth(&left, &right)
+                .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
+            let out = depth_aware_blur(left, &depth_img, cli.focus, cli.strength * 0.023, kind)
+                .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
+            return out.save(&cli.output).map_err(|source| RunError::OutputSave {
+                path: cli.output.clone(),
+                source,
+            });
+        }
+
         let depth_path = cli.depth.as_ref().ok_or_else(|| {
             RunError::Pipeline(
                 "sensus: --depth <PATH> is required for depth blur filters".to_string(),
@@ -331,6 +379,13 @@ fn run(cli: Cli) -> Result<(), RunError> {
             path: cli.output.clone(),
             source,
         });
+    }
+
+    // --mpo が指定されているが depth フィルタ以外の場合はエラー
+    if cli.mpo.is_some() {
+        return Err(RunError::MpoError(
+            "sensus: --mpo requires a depth blur filter (myopia-depth, hyperopia-depth, depth-of-field)".to_string(),
+        ));
     }
 
     // Build pipeline from --filter list (must not be empty; clap enforces num_args=1..)
