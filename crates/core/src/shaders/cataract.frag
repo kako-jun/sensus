@@ -20,7 +20,7 @@ precision mediump float;
 
 uniform sampler2D uTexture;
 uniform float uStrength;
-uniform float uSeed;
+uniform uint uSeed;    // u64 シードの下位 32bit を uint として渡す（float 経由の精度損失を回避）
 uniform vec2 uResolution;
 
 in vec2 vTexCoord;

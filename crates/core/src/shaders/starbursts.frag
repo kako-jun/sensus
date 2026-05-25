@@ -28,6 +28,7 @@ vec3 hslRainbow(float hueDeg) {
     float sector = floor(h / 60.0);
     float f = h / 60.0 - sector;
     float r, g, b;
+    // H=360° は H=0°（赤）と同値になる（HSL の周期性）
     if (sector < 1.0)      { r = 1.0;     g = f;       b = 0.0; }
     else if (sector < 2.0) { r = 1.0 - f; g = 1.0;     b = 0.0; }
     else if (sector < 3.0) { r = 0.0;     g = 1.0;     b = f; }

@@ -40,4 +40,5 @@ void main() {
     ) + center;
 
     fragColor = texture(uTexture, clamp(srcUV, 0.0, 1.0));
+    // 範囲外の UV は端ピクセルにクランプする（CPU 実装と同じ動作）
 }

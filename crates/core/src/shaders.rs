@@ -544,7 +544,7 @@ pub struct BppvRotationUniforms {
 #[derive(Debug, Clone)]
 pub struct FloatersUniforms {
     pub strength: f32,
-    pub seed: f32,
+    pub seed: u32,
 }
 
 /// tetrachromacy の uniform を計算する。
@@ -578,7 +578,7 @@ pub fn bppv_rotation_uniforms(strength: f32, time: f32) -> BppvRotationUniforms 
 pub fn floaters_uniforms(strength: f32, seed: u64) -> FloatersUniforms {
     FloatersUniforms {
         strength,
-        seed: seed as f32,
+        seed: seed as u32,
     }
 }
 
