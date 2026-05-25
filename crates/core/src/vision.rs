@@ -2044,12 +2044,44 @@ pub fn nystagmus(
 /// - `num_rays`: 光芒の本数（4/6/8 推奨）
 /// - `ray_length_ratio`: 光芒の長さ（min(W,H) 比）
 /// - `threshold`: 光芒が発生する輝度閾値（0.0..=1.0）
+/// HSL (hue 0..360, s=1, l=0.5) → linear sRGB の変換（分散レイ色に使用）。
+///
+/// 純粋な彩度 1 の虹色を返す内部ヘルパー。
+#[inline]
+fn hsl_rainbow_to_linear(hue_deg: f32) -> [f32; 3] {
+    // H ∈ [0, 360), S = 1, L = 0.5 の特殊ケースを展開する。
+    // C = (1 - |2L - 1|) × S = 1, X = C × (1 - |H/60 mod 2 - 1|), m = L - C/2 = 0
+    let h = hue_deg.rem_euclid(360.0);
+    let sector = (h / 60.0) as u32;
+    let f = h / 60.0 - sector as f32;
+    let (r, g, b) = match sector {
+        0 => (1.0, f, 0.0),
+        1 => (1.0 - f, 1.0, 0.0),
+        2 => (0.0, 1.0, f),
+        3 => (0.0, 1.0 - f, 1.0),
+        4 => (f, 0.0, 1.0),
+        _ => (1.0, 0.0, 1.0 - f),
+    };
+    // sRGB → linear（HSL で L=0.5 なら既に sRGB と見なして gamma 解除する）
+    [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)]
+}
+
+/// 光芒（Starbursts）シミュレーション。
+///
+/// LASIK / 白内障手術後や高度乱視でレンズ面の回折から生じる放射状の光芒を再現する。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強い光芒
+/// - `num_rays`: 光芒の本数（0 で無効化）
+/// - `ray_length_ratio`: 光芒長（min(W,H) 比, 0.0..=1.0）
+/// - `threshold`: 光芒を発生させる輝度閾値（0.0..=1.0, BT.709 luma）
+/// - `dispersion`: 波長分散による虹色光芒（0.0 = 白, 1.0 = 完全虹色）
 pub fn starbursts(
     img: DynamicImage,
     strength: f32,
     num_rays: u32,
     ray_length_ratio: f32,
     threshold: f32,
+    dispersion: f32,
 ) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     if s == 0.0 {
@@ -2063,6 +2095,7 @@ pub fn starbursts(
 
     let ray_length_px = (ray_length_ratio.clamp(0.0, 1.0) * min_dim) as u32;
     let threshold = threshold.clamp(0.0, 1.0);
+    let dispersion = dispersion.clamp(0.0, 1.0);
 
     // 光芒レイヤー（linear sRGB, f32）
     let mut ray_layer: Vec<[f32; 3]> = vec![[0.0; 3]; (width * height) as usize];
@@ -2091,6 +2124,14 @@ pub fn starbursts(
                 let cos_t = theta.cos();
                 let sin_t = theta.sin();
 
+                // 分散色: 各 ray の角度を色相に対応させる（虹色）
+                // dispersion=0 → 白 (1,1,1), dispersion=1 → HSL 虹色
+                let angle_deg = theta.to_degrees().rem_euclid(360.0);
+                let rainbow = hsl_rainbow_to_linear(angle_deg);
+                let ray_r = lerp(1.0, rainbow[0], dispersion);
+                let ray_g = lerp(1.0, rainbow[1], dispersion);
+                let ray_b = lerp(1.0, rainbow[2], dispersion);
+
                 for t in 1..=ray_length_px {
                     let sx = x as i32 + (t as f32 * cos_t).round() as i32;
                     let sy = y as i32 + (t as f32 * sin_t).round() as i32;
@@ -2099,9 +2140,9 @@ pub fn starbursts(
                     }
                     let weight = src_intensity * (1.0 - t as f32 / ray_length_px as f32) * s;
                     let idx = sy as usize * width as usize + sx as usize;
-                    ray_layer[idx][0] += weight;
-                    ray_layer[idx][1] += weight;
-                    ray_layer[idx][2] += weight;
+                    ray_layer[idx][0] += weight * ray_r;
+                    ray_layer[idx][1] += weight * ray_g;
+                    ray_layer[idx][2] += weight * ray_b;
                 }
             }
         }
@@ -4904,7 +4945,7 @@ mod tests {
         let nearby_y = size / 2;
         let orig_nearby = img.get_pixel(nearby_x, nearby_y)[0];
 
-        let out = starbursts(DynamicImage::ImageRgba8(img), 1.0, 8, 0.2, 0.5).unwrap();
+        let out = starbursts(DynamicImage::ImageRgba8(img), 1.0, 8, 0.2, 0.5, 0.0).unwrap();
         let out_nearby = out.to_rgba8().get_pixel(nearby_x, nearby_y)[0];
 
         assert!(
@@ -4919,7 +4960,7 @@ mod tests {
         let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
         img.put_pixel(size / 2, size / 2, Rgba([255, 255, 255, 255]));
         let orig = img.clone().into_raw();
-        let out = starbursts(DynamicImage::ImageRgba8(img), 0.0, 6, 0.1, 0.5).unwrap();
+        let out = starbursts(DynamicImage::ImageRgba8(img), 0.0, 6, 0.1, 0.5, 0.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
         let max_err = orig.iter().zip(out_raw.iter())
             .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
@@ -4927,6 +4968,29 @@ mod tests {
             .unwrap_or(0);
         // strength=0 は early return するため byte-exact 一致するはず
         assert!(max_err == 0, "strength=0 should be byte-exact identity, max_err={max_err}");
+    }
+
+    #[test]
+    fn starbursts_dispersion_one_produces_rainbow() {
+        // 中央に白い輝点を置き、dispersion=1.0 で光芒を生成する。
+        // 虹色光芒なのでRGB チャネルが互いに異なる値を持つことを確認する。
+        let size = 64_u32;
+        let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
+        img.put_pixel(size / 2, size / 2, Rgba([255, 255, 255, 255]));
+        let out = starbursts(
+            DynamicImage::ImageRgba8(img),
+            1.0, 8, 0.3, 0.5, 1.0,
+        ).unwrap().to_rgba8();
+
+        // 全ピクセルの R/G/B の最大値を収集し、チャネル間で差があることを確認
+        let mut any_diff = false;
+        for px in out.pixels() {
+            if px[0] != px[1] || px[1] != px[2] {
+                any_diff = true;
+                break;
+            }
+        }
+        assert!(any_diff, "dispersion=1.0 should produce colored (non-gray) pixels");
     }
 
     #[test]
