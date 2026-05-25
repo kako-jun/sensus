@@ -75,7 +75,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 |---|---|---|---|
 | `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
-| `stereo` | 6 | #31 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`) |
+| `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |
 | `shaders` | 5 | #16 | GLSL ES 3.00 shader sources + uniform structs for all visual filters |
 
@@ -407,6 +407,36 @@ sensus --filter myopia-depth --mpo photo.mpo --focus 0.5 -o output.png
 `--mpo <PATH>` auto-generates the depth map from the stereo pair and
 applies depth-aware blur to the left-eye image. `--mpo` and `--depth`
 are mutually exclusive; only one depth blur filter may be active at a time.
+
+**`read_xmp_depth(data: &[u8]) -> Result<DynamicImage>`** (#32)
+
+Extracts a depth map from an Android portrait-mode JPEG that carries the
+Google Depth API XMP extension. The function scans every `APP1` (0xFFE1)
+segment in the JPEG byte stream for `GDepth:Data`, decodes the embedded
+base64 PNG or JPEG, and returns it as a `DynamicImage`. If no `GDepth:Data`
+field is present the function returns `Error::NoDepthMap`.
+
+```rust
+use sensus_core::stereo::read_xmp_depth;
+
+let jpeg_bytes = std::fs::read("portrait.jpg")?;
+let depth_map = read_xmp_depth(&jpeg_bytes)?;
+let result = depth_aware_blur(
+    image::load_from_memory(&jpeg_bytes)?,
+    &depth_map, 0.5, 0.023, DepthBlurKind::Myopia
+)?;
+```
+
+**CLI integration:**
+
+```bash
+sensus --filter myopia-depth --portrait portrait.jpg --focus 0.5 -o output.png
+```
+
+`--portrait <PATH>` reads the JPEG, extracts the XMP depth map, and applies
+depth-aware blur. If `--input` is also given the input image is used as the
+source; otherwise the portrait file itself is the source. `--portrait` is
+mutually exclusive with `--mpo` and `--depth`.
 
 ## Hearing filters (Phase 4, #7–#9)
 
