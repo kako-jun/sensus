@@ -64,6 +64,32 @@ fn cli_mpo_with_myopia_depth_filter_succeeds() {
 }
 
 // ---------------------------------------------------------------
+// C-01b: --mpo 単独（--input なし）で成功する
+// ---------------------------------------------------------------
+
+#[test]
+fn cli_mpo_without_input_succeeds() {
+    let dir = TempDir::new().unwrap();
+    let mpo_path = dir.path().join("test.mpo");
+    let output_path = dir.path().join("out.png");
+
+    let mpo_bytes = make_synthetic_mpo(32, 32);
+    std::fs::write(&mpo_path, &mpo_bytes).unwrap();
+
+    let status = cargo_run()
+        .args([
+            "-o", output_path.to_str().unwrap(),
+            "--filter", "myopia-depth",
+            "--mpo", mpo_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+
+    assert!(status.success(), "--mpo without --input should succeed");
+    assert!(output_path.exists(), "output file should be created");
+}
+
+// ---------------------------------------------------------------
 // C-02: --mpo + --depth 同時指定 → 失敗
 // ---------------------------------------------------------------
 

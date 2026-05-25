@@ -359,7 +359,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
     // --mpo なし → --input が必須
     let input_path = cli.input.ok_or_else(|| {
-        RunError::Pipeline(
+        RunError::MpoError(
             "sensus: --input is required when --mpo is not specified".to_string(),
         )
     })?;
