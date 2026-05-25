@@ -70,6 +70,7 @@
 
 use crate::Result;
 use image::{DynamicImage, RgbaImage};
+use std::f32::consts::PI;
 
 /// Machado 2009 severity = 1.0 行列（linear sRGB → simulated linear sRGB）。
 ///
@@ -1250,7 +1251,7 @@ pub fn vertigo(img: DynamicImage, strength: f32, time_t: f32) -> Result<DynamicI
     // 最大回転角 15° = 0.2618 rad
     const MAX_ANGLE_RAD: f32 = 0.2618;
     // ゆっくりとした回転（0.3 Hz）
-    let angle = s * MAX_ANGLE_RAD * (2.0 * std::f32::consts::PI * 0.3 * time_t).sin();
+    let angle = s * MAX_ANGLE_RAD * (2.0 * PI * 0.3 * time_t).sin();
     let cos_a = angle.cos();
     let sin_a = angle.sin();
 
@@ -1573,6 +1574,7 @@ pub fn diplopia(
 
     let dx = (offset_x * min_dim).round() as i32;
     let dy = (offset_y * min_dim).round() as i32;
+    // ghost の寄与 = ghost_strength × strength（線形、二重スケーリングしない）
     let ghost_alpha = ghost_strength.clamp(0.0, 1.0) * s;
 
     let mut out = RgbaImage::new(width, height);
@@ -1597,9 +1599,10 @@ pub fn diplopia(
                 srgb_to_linear(ghost_px[2] as f32 / 255.0),
             ];
             let blended = [
-                lerp(o[0], o[0] + g[0] * ghost_alpha, s).clamp(0.0, 1.0),
-                lerp(o[1], o[1] + g[1] * ghost_alpha, s).clamp(0.0, 1.0),
-                lerp(o[2], o[2] + g[2] * ghost_alpha, s).clamp(0.0, 1.0),
+                // out = orig + ghost * ghost_alpha（加算合成、clamp で白飛び防止）
+                (o[0] + g[0] * ghost_alpha).clamp(0.0, 1.0),
+                (o[1] + g[1] * ghost_alpha).clamp(0.0, 1.0),
+                (o[2] + g[2] * ghost_alpha).clamp(0.0, 1.0),
             ];
 
             out.put_pixel(
@@ -1691,8 +1694,6 @@ pub fn starbursts(
     const R_LUMA: f32 = 0.2126;
     const G_LUMA: f32 = 0.7152;
     const B_LUMA: f32 = 0.0722;
-
-    use std::f32::consts::PI;
 
     for y in 0..height {
         for x in 0..width {
@@ -3664,6 +3665,7 @@ mod tests {
             .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
             .max()
             .unwrap_or(0);
-        assert!(max_err <= 1, "strength=0 should be identity, max_err={max_err}");
+        // strength=0 は early return するため byte-exact 一致するはず
+        assert!(max_err == 0, "strength=0 should be byte-exact identity, max_err={max_err}");
     }
 }

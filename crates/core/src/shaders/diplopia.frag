@@ -26,7 +26,8 @@ void main() {
 
     vec3 o = vec3(srgbToLinear(orig.r), srgbToLinear(orig.g), srgbToLinear(orig.b));
     vec3 g = vec3(srgbToLinear(ghost.r), srgbToLinear(ghost.g), srgbToLinear(ghost.b));
-    vec3 blended = mix(o, o + g * alpha, uStrength);
+    // out = orig + ghost * alpha（加算合成、double-scaling しない）
+    vec3 blended = clamp(o + g * alpha, 0.0, 1.0);
 
     fragColor = vec4(
         linearToSrgb(clamp(blended.r, 0.0, 1.0)),

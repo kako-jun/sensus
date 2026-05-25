@@ -168,7 +168,7 @@ struct Cli {
     amplitude: f32,
 
     /// Nystagmus direction in degrees (0=horizontal, 90=vertical). Default: 0.0
-    #[arg(long, default_value = "0.0")]
+    #[arg(long, default_value = "0.0", value_parser = parse_direction_deg)]
     direction_deg: f32,
 
     /// Starbursts number of rays. Default: 6
@@ -238,6 +238,17 @@ fn parse_axis(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=180.0).contains(&v) {
         return Err(format!("axis must be in 0.0..=180.0 degrees, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse `--direction-deg` (nystagmus) in 0.0..=360.0.
+fn parse_direction_deg(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=360.0).contains(&v) {
+        return Err(format!("direction-deg must be in 0.0..=360.0, got {v}"));
     }
     Ok(v)
 }
