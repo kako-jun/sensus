@@ -17,6 +17,7 @@ pub mod stereo;
 pub mod vision;
 
 pub use error::Error;
+pub use pipeline::{AudioPipeline, AudioFilterStep};
 
 /// Convenience alias for `Result<T, sensus_core::Error>`.
 pub type Result<T> = std::result::Result<T, Error>;

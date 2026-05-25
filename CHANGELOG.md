@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AudioPipeline / AudioFilterStep 追加** (#66):
+  `crates/core/src/pipeline.rs` に聴覚フィルタ多段合成用の `AudioPipeline` と `AudioFilterStep` を追加。
+  `Pipeline`（視覚）と同じ builder パターンで `push(filter, strength).apply(&buf)` が使えるようになった。
+  `lib.rs` に `pub use pipeline::{AudioPipeline, AudioFilterStep};` を追加し外部公開。
+
 - **vision: starbursts に波長分散（虹色光芒）オプション追加** (#67):
   `starbursts()` シグネチャに `dispersion: f32` パラメータを追加。
   `dispersion=0.0`（デフォルト）は既存の白い光芒と後方互換。

@@ -139,6 +139,65 @@ impl Default for Pipeline {
     }
 }
 
+// ---------------------------------------------------------------
+// AudioPipeline (Issue #66): 聴覚フィルタの多段合成
+// ---------------------------------------------------------------
+
+use crate::{HearingFilter, hearing::AudioBuffer};
+
+/// 1つの聴覚フィルタ適用単位。
+pub struct AudioFilterStep {
+    pub filter: HearingFilter,
+    pub strength: f32,
+}
+
+/// 複数の [`AudioFilterStep`] を順番に適用するパイプライン。
+///
+/// # 例
+///
+/// ```rust,no_run
+/// use sensus_core::{AudioPipeline, HearingFilter, hearing::AudioBuffer};
+///
+/// let buf = AudioBuffer { samples: vec![0.0; 1000], sample_rate: 44100, channels: 1 };
+/// let out = AudioPipeline::new()
+///     .push(HearingFilter::HearingLoss, 0.5)
+///     .apply(&buf)
+///     .unwrap();
+/// ```
+pub struct AudioPipeline {
+    steps: Vec<AudioFilterStep>,
+}
+
+impl AudioPipeline {
+    /// 空のパイプラインを生成する。
+    pub fn new() -> Self {
+        Self { steps: Vec::new() }
+    }
+
+    /// ステップを末尾に追加し、`self` を返す（builder パターン）。
+    pub fn push(mut self, filter: HearingFilter, strength: f32) -> Self {
+        self.steps.push(AudioFilterStep { filter, strength });
+        self
+    }
+
+    /// すべてのステップを順番に適用する。
+    ///
+    /// エラーが発生した場合は [`crate::Error`] を返す。
+    pub fn apply(&self, buf: &AudioBuffer) -> Result<AudioBuffer> {
+        let mut current = buf.clone();
+        for step in &self.steps {
+            current = crate::apply_hearing(step.filter.clone(), current, step.strength)?;
+        }
+        Ok(current)
+    }
+}
+
+impl Default for AudioPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,9 +280,6 @@ mod tests {
     /// A→B と B→A で結果が異なることを確認する（順序依存性のテスト）。
     #[test]
     fn two_step_order_matters() {
-        // グラデーション画像を使う。
-        // protanopia（赤→緑方向のシフト）→ glaucoma（周辺暗化）と逆順では
-        // 周辺が暗化されてから色変換されるかどうかが変わるため結果が異なる。
         let img = {
             let mut base = RgbImage::new(32, 32);
             for (x, y, px) in base.enumerate_pixels_mut() {
@@ -267,9 +323,63 @@ mod tests {
             .push(FilterStep::new(Filter::Protanopia, 1.0))
             .apply(src)
             .unwrap();
-        // すべての画素の alpha が 128 のまま保持されているか確認
         for (_x, _y, px) in out.pixels() {
             assert_eq!(px[3], 128, "alpha channel must be preserved");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // AudioPipeline テスト
+    // ---------------------------------------------------------------
+
+    fn silence_buf(frames: usize) -> AudioBuffer {
+        AudioBuffer {
+            samples: vec![0.0; frames],
+            sample_rate: 44100,
+            channels: 1,
+        }
+    }
+
+    #[test]
+    fn audio_pipeline_single_step_returns_ok() {
+        let buf = silence_buf(1000);
+        let result = AudioPipeline::new()
+            .push(HearingFilter::HearingLoss, 0.5)
+            .apply(&buf);
+        assert!(result.is_ok(), "single step AudioPipeline should return Ok");
+    }
+
+    #[test]
+    fn audio_pipeline_two_steps_returns_ok() {
+        let buf = silence_buf(1000);
+        let result = AudioPipeline::new()
+            .push(HearingFilter::HearingLoss, 0.5)
+            .push(HearingFilter::Tinnitus { freq_hz: 4000.0 }, 0.3)
+            .apply(&buf);
+        assert!(result.is_ok(), "two-step AudioPipeline should return Ok");
+    }
+
+    #[test]
+    fn audio_pipeline_empty_returns_same_buffer() {
+        let buf = silence_buf(100);
+        let out = AudioPipeline::new().apply(&buf).unwrap();
+        assert_eq!(out.samples, buf.samples);
+        assert_eq!(out.sample_rate, buf.sample_rate);
+        assert_eq!(out.channels, buf.channels);
+    }
+
+    #[test]
+    fn audio_pipeline_preserves_sample_rate_and_channels() {
+        let buf = AudioBuffer {
+            samples: vec![0.1, -0.1, 0.2, -0.2],
+            sample_rate: 48000,
+            channels: 2,
+        };
+        let out = AudioPipeline::new()
+            .push(HearingFilter::HearingLoss, 0.3)
+            .apply(&buf)
+            .unwrap();
+        assert_eq!(out.sample_rate, 48000);
+        assert_eq!(out.channels, 2);
     }
 }
