@@ -73,7 +73,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56, #57 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity, detail_loss |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56, #57, #58 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity, detail_loss, teichopsia |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
 | `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |
@@ -125,6 +125,17 @@ Formula: `output = 0.5 + (input − 0.5) × (1.0 − strength × 0.5)`
 
 - `strength = 0.0` → identity (same as source image)
 - `strength = 1.0` → 50% contrast compression (output luminance variance < input)
+
+## Teichopsia filter (#58)
+
+`teichopsia(img, strength)` simulates the fortification spectra (zigzag luminance
+arcs) seen as a migraine aura.
+
+- Ring region (normalized distance 0.2–0.5 from center): additive saw-wave brightness overlay
+- Inner scotoma (distance < 0.2): darkened by `strength × 0.7`
+- `strength = 0.0` → identity; `strength = 1.0` → full effect
+
+> **医学的注記**: 偏頭痛の前兆として 20〜30 分続く。初めて経験する場合は眼科・神経内科を受診。
 
 ## Auditory Processing Disorder (APD) (Issue #38)
 
