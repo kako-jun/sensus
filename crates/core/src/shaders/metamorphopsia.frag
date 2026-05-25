@@ -7,7 +7,7 @@ precision mediump float;
 uniform sampler2D uTexture;
 uniform float uStrength;   // 0.0..=1.0
 uniform float uFreq;       // 空間周波数（グリッド分割数 / min(W,H)）
-uniform float uSeed;       // ランダムシード（整数を float で渡す）
+uniform uint  uSeed;       // ランダムシード（uint で精度損失なく渡す）
 uniform vec2  uTexelSize;  // vec2(1.0/width, 1.0/height)
 
 in vec2 vTexCoord;
@@ -52,8 +52,11 @@ void main() {
     // ノイズ座標（周波数スケール）
     vec2 noiseUv = vTexCoord * uFreq;
 
+    // uint uSeed を float に変換して hash2 に渡す
+    float seedF = float(uSeed);
+
     // [-1, 1]^2 の変位ベクトルを生成
-    vec2 noise = smoothNoise(noiseUv, uSeed) * 2.0 - 1.0;
+    vec2 noise = smoothNoise(noiseUv, seedF) * 2.0 - 1.0;
 
     // テクスチャ座標への変位量（texel 単位 → uv 単位）
     vec2 disp = noise * uStrength * MAX_DISP_PX * uTexelSize;

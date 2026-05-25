@@ -22,7 +22,9 @@ void main() {
     vec3 lin = vec3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
 
     // 正規化 UV (-0.5..0.5) に aspect 補正を適用して円形距離計算
-    // CPU 実装に合わせて y を aspect で割る方式: uy = (y/h - 0.5) / aspect
+    // uy / aspect（aspect = width/height）: UV 空間ではなくピクセル空間で円形になるよう補正。
+    // 横長画像（width > height, aspect > 1）の場合 uy が縮小され、UV 空間では横長楕円だが
+    // ピクセル座標に変換すると正円になる。CPU 実装（vision::teichopsia）と同一の補正方式。
     vec2 uv = vTexCoord - vec2(0.5);
     vec2 uvA = vec2(uv.x, uv.y / uAspect);
     float dist = length(uvA);

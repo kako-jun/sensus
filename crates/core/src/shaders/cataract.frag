@@ -34,14 +34,18 @@ float linearToSrgb(float c) {
 }
 
 // LCG ハッシュ: 格子頂点 (gx, gy) の擬似ランダム値（0.0..=1.0）
+// CPU 実装（vision::cataract）の Knuth 64bit LCG 定数を uint（32bit）で近似。
+//   mul = 6364136223846793005 mod 2^32 = 0x4c957f2du
+//   add = 1442695040888963407 mod 2^32 = 0xf767814fu
+// これにより CPU と同じシードから同等のノイズパターンが生成される。
 float gridNoise(float gx, float gy) {
-    // CPU 実装と同じハッシュ定数
+    // CPU 実装と同じ空間ハッシュ定数
     uint s = uint(uSeed);
     uint h = s * 0x9e3779b9u
         + uint(gx) * 0x517cc1b7u
         + uint(gy) * 0x6c62272eu;
-    // LCG 1 ステップ
-    uint lcg = h * 1664525u + 1013904223u;
+    // LCG 1 ステップ（CPU の Knuth 定数の下位 32bit）
+    uint lcg = h * 0x4c957f2du + 0xf767814fu;
     return float(lcg) / float(0xFFFFFFFFu);
 }
 
