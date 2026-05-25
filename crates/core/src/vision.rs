@@ -1319,6 +1319,9 @@ pub fn glaucoma(img: DynamicImage, strength: f32, mode: GlaucomaMode) -> crate::
                     }
 
                     // 弧状帯の中での正規化距離（smoothstep 用）
+                    // strength ≈ 0.133 付近で r_max ≈ r_min になりうるが、
+                    // その場合は r_min < r < r_max が成立しないため早期 continue し、
+                    // ゼロ除算・NaN は発生しない。
                     let t_r = (r - r_min) / (r_max - r_min);
                     let fade_r = t_r * t_r * (3.0 - 2.0 * t_r); // smoothstep
                     // 帯の中央（t_r=0.5）が最も暗く、両端に向かって明るくなる
@@ -2517,24 +2520,17 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
             let y0 = ty * tile_size;
             let x1 = (x0 + tile_size).min(width);
             let y1 = (y0 + tile_size).min(height);
-            let count = ((x1 - x0) * (y1 - y0)) as u64;
-            if count == 0 {
+            if x1 <= x0 || y1 <= y0 {
                 continue;
             }
 
-            // タイル内の平均色を linear sRGB で計算
-            let mut sum = [0.0_f64; 3];
-            for py in y0..y1 {
-                for px in x0..x1 {
-                    let p = rgba.get_pixel(px, py);
-                    sum[0] += srgb_to_linear(p[0] as f32 / 255.0) as f64;
-                    sum[1] += srgb_to_linear(p[1] as f32 / 255.0) as f64;
-                    sum[2] += srgb_to_linear(p[2] as f32 / 255.0) as f64;
-                }
-            }
-            let avg_r = pack_u8(linear_to_srgb((sum[0] / count as f64) as f32));
-            let avg_g = pack_u8(linear_to_srgb((sum[1] / count as f64) as f32));
-            let avg_b = pack_u8(linear_to_srgb((sum[2] / count as f64) as f32));
+            // タイル中心1点をサンプリング（GLSL と同一アルゴリズム: pixelation）
+            let cx = (x0 + tile_size / 2).min(width - 1);
+            let cy = (y0 + tile_size / 2).min(height - 1);
+            let cp = rgba.get_pixel(cx, cy);
+            let avg_r = cp[0];
+            let avg_g = cp[1];
+            let avg_b = cp[2];
 
             for py in y0..y1 {
                 for px in x0..x1 {

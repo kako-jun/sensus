@@ -45,6 +45,8 @@ void main() {
     for (int i = 0; i < 200; i++) {
         if (float(i) >= count) break;
         uint ui = uint(i);
+        // uSeed * 1000u: 各光点のハッシュ入力を seed でシフトする定数倍。
+        // uint 演算なのでラップアラウンド（オーバーフロー）は意図的な動作。
         uint h1 = hash_uint(ui + uSeed * 1000u);
         uint h2 = hash_uint(ui + uSeed * 1000u + 7654u);
         uint h3 = hash_uint(ui + uSeed * 1000u + 9876u);

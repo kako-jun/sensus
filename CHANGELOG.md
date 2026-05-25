@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix: review 指摘全件修正 round2（S×4/N×3）**:
+- **fix: review 指摘全件修正 round3（must×2 / should×3 / nit×3）**:
+  - [M-1] `teichopsia.frag` の aspect 計算を CPU 実装と一致させる: `uv.x * uAspect` 方式から `uv.y / uAspect` 方式に変更。`shader_equiv_teichopsia_strength_05_psnr`（PSNR ≥ 25 dB）テスト追加
+  - [M-2] `detail_loss.frag` を9点サンプルから中心1点サンプリング（pixelation）に変更。CPU（`vision.rs`）も同様にタイル全平均から中心点参照に変更し、CPU/GPU を完全統一。`shader_equiv_detail_loss_strength_1_psnr`（PSNR ≥ 30 dB）テスト追加
+  - [S-1] M-1 修正後の teichopsia CPU/GLSL 等価 PSNR テストを追加（上記 M-1 に含む）
+  - [S-2] `flickering_stars.frag` の `uSeed * 1000u` にラップアラウンドが意図的動作であることを示すコメントを追加
+  - [S-3] `vision.rs` glaucoma 弧状モードの `t_r` 計算付近に `r_max ≈ r_min` 時の NaN 非発生を説明するコメントを追加
+  - [N-1] `docs/overview.md` の cataract 記述を現行実装（Pokorny/van Norren 黄変行列・32×32 bilinear 補間ノイズ）に更新
+  - [N-2] `lib.rs` の `Filter::Floaters.size` フィールドに「将来の blob_radius_ratio に使用予定、現在は無視」コメントを追加
+  - [N-3] `pipeline.rs` の `audio_pipeline_two_steps_returns_ok` テストを分割し、silence + HearingLoss → silent 確認テスト（`audio_pipeline_hearing_loss_on_silence_stays_silent`）と非ゼロバッファ減衰確認テスト（`audio_pipeline_hearing_loss_changes_nonzero_buffer`）を追加
+
+
   - [S-1] `sim_vignette_fov` に `aspect: f32` 引数を追加してシェーダ（`uAspect`）と一致させる。非正方形（64×32）テスト `shader_equiv_glaucoma_non_square_64x32_psnr` を追加（PSNR ≥ 30 dB）
   - [S-2] `floaters.frag` の `uniform float uSeed` → `uniform uint uSeed` に変更（24bit 精度劣化防止）。`FloatersUniforms.seed: f32 → u32`、`floaters_uniforms` を `seed as u32` に修正
   - [S-3] `nyctalopia.frag` の命名を確認 — `uTexture`, `uStrength`, `vTexCoord`, `fragColor`, `srgbToLinear`, `linearToSrgb` が他シェーダと一致しており修正不要

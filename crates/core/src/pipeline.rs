@@ -362,6 +362,36 @@ mod tests {
     }
 
     #[test]
+    fn audio_pipeline_hearing_loss_on_silence_stays_silent() {
+        // silence に HearingLoss のみを適用しても出力はゼロのまま（ゲイン低下のみ）
+        let buf = silence_buf(1000);
+        let out = AudioPipeline::new()
+            .push(HearingFilter::HearingLoss, 1.0)
+            .apply(&buf)
+            .unwrap();
+        assert!(
+            out.samples.iter().all(|&s| s == 0.0),
+            "HearingLoss on silence must keep output silent"
+        );
+    }
+
+    #[test]
+    fn audio_pipeline_hearing_loss_changes_nonzero_buffer() {
+        // 非ゼロバッファに HearingLoss(strength=1.0) を適用すると出力が入力と異なる
+        let buf = AudioBuffer {
+            samples: vec![1.0_f32; 1000],
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let out = AudioPipeline::new()
+            .push(HearingFilter::HearingLoss, 1.0)
+            .apply(&buf)
+            .unwrap();
+        let changed = out.samples.iter().zip(buf.samples.iter()).any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(changed, "HearingLoss(strength=1.0) must attenuate non-zero input");
+    }
+
+    #[test]
     fn audio_pipeline_empty_returns_same_buffer() {
         let buf = silence_buf(100);
         let out = AudioPipeline::new().apply(&buf).unwrap();

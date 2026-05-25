@@ -22,11 +22,10 @@ void main() {
     vec3 lin = vec3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
 
     // 正規化 UV (-0.5..0.5) に aspect 補正を適用して円形距離計算
+    // CPU 実装に合わせて y を aspect で割る方式: uy = (y/h - 0.5) / aspect
     vec2 uv = vTexCoord - vec2(0.5);
-    vec2 uvA = vec2(uv.x * uAspect, uv.y);
-    // コーナー距離（aspect 補正済み）: sqrt((0.5*aspect)^2 + 0.5^2)
-    float cornerDist = sqrt(0.5 * uAspect * 0.5 * uAspect + 0.5 * 0.5);
-    float dist = length(uvA) / cornerDist;
+    vec2 uvA = vec2(uv.x, uv.y / uAspect);
+    float dist = length(uvA);
 
     vec3 result = lin;
 
