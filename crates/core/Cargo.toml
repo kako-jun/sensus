@@ -15,3 +15,10 @@ categories = ["graphics", "multimedia", "accessibility"]
 [dependencies]
 image = { workspace = true, features = ["png"] }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "filters"
+harness = false

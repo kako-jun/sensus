@@ -198,6 +198,11 @@ struct Cli {
     /// Starbursts brightness threshold (0.0..=1.0). Default: 0.8
     #[arg(long, default_value = "0.8", value_parser = parse_ratio)]
     threshold: f32,
+
+    /// Read JPEG frames from stdin and write filtered JPEG frames to stdout (ffmpeg pipe mode).
+    /// Cannot be combined with --input.
+    #[arg(long, conflicts_with = "input")]
+    pipe: bool,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -318,6 +323,9 @@ enum RunError {
     /// --input が未指定で --mpo / --portrait も指定されていない
     #[error("{0}")]
     InputRequired(String),
+
+    #[error("sensus: I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 fn main() -> ExitCode {
@@ -360,6 +368,11 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), RunError> {
+    // --pipe モード: stdin から JPEG フレームを読み stdout に出力する
+    if cli.pipe {
+        return run_pipe(&cli);
+    }
+
     // --mpo が指定されている場合のバリデーションと処理
     if let Some(mpo_path) = cli.mpo {
         // 複数フィルタとの組み合わせは不可
@@ -507,8 +520,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
         step.threshold = cli.threshold;
         pipeline = pipeline.push(step);
     }
-
-    // For single-filter case, replicate legacy warnings.
     if cli.filter.len() == 1 {
         let core_filter = cli.filter[0].to_core();
         if !matches!(core_filter, CoreFilter::Astigmatism) && cli.axis != 90.0 {
@@ -562,4 +573,94 @@ fn run(cli: Cli) -> Result<(), RunError> {
         }),
         Err(e) => Err(RunError::Pipeline(format!("sensus: {e}"))),
     }
+}
+
+/// 画像にフィルタパイプラインを適用する（--pipe モードと通常モードの共通処理）。
+fn apply_filters_to_image(
+    img: image::DynamicImage,
+    cli: &Cli,
+) -> Result<image::DynamicImage, RunError> {
+    let mut pipeline = Pipeline::new();
+    for f in &cli.filter {
+        let core_filter = f.to_core();
+        let mut step = FilterStep::new(core_filter, cli.strength);
+        step.axis = cli.axis;
+        step.seed = cli.seed;
+        step.density = cli.density;
+        step.gaze_x = cli.gaze_x;
+        step.gaze_y = cli.gaze_y;
+        step.side = cli.side;
+        step.offset_x = cli.offset_x;
+        step.offset_y = cli.offset_y;
+        step.ghost_strength = cli.ghost_strength;
+        step.amplitude = cli.amplitude;
+        step.direction_deg = cli.direction_deg;
+        step.num_rays = cli.num_rays;
+        step.ray_length_ratio = cli.ray_length;
+        step.threshold = cli.threshold;
+        pipeline = pipeline.push(step);
+    }
+    pipeline
+        .apply(img)
+        .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))
+}
+
+fn run_pipe(args: &Cli) -> Result<(), RunError> {
+    use std::io::{Read, Write};
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut reader = stdin.lock();
+    let mut writer = stdout.lock();
+
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf)?;
+
+    // FFD8 から FFD9 までを 1 フレームとして切り出す
+    let frames = split_jpeg_frames(&buf);
+    for frame_data in frames {
+        let img = image::load_from_memory(frame_data).map_err(|source| RunError::InputOpen {
+            path: std::path::PathBuf::from("<stdin>"),
+            source,
+        })?;
+        let out = apply_filters_to_image(img, args)?;
+        // JPEG エンコードして stdout に書く
+        let mut jpeg_buf = Vec::new();
+        out.write_to(
+            &mut std::io::Cursor::new(&mut jpeg_buf),
+            image::ImageFormat::Jpeg,
+        )
+        .map_err(|source| RunError::OutputSave {
+            path: std::path::PathBuf::from("<stdout>"),
+            source,
+        })?;
+        writer.write_all(&jpeg_buf)?;
+    }
+    Ok(())
+}
+
+fn split_jpeg_frames(data: &[u8]) -> Vec<&[u8]> {
+    // FFD8 で始まり FFD9 で終わる区間を抽出
+    let mut frames = Vec::new();
+    let mut i = 0;
+    while i + 1 < data.len() {
+        if data[i] == 0xFF && data[i + 1] == 0xD8 {
+            let start = i;
+            // FFD9 を探す
+            let mut j = start + 2;
+            while j + 1 < data.len() {
+                if data[j] == 0xFF && data[j + 1] == 0xD9 {
+                    frames.push(&data[start..=j + 1]);
+                    i = j + 2;
+                    break;
+                }
+                j += 1;
+            }
+            if j + 1 >= data.len() {
+                break;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    frames
 }
