@@ -4631,5 +4631,53 @@ mod tests {
         let differs = out1.iter().zip(out2.iter()).any(|(a, b)| a != b);
         assert!(differs, "different seeds must produce different distortion patterns");
     }
+
+    // ---------------------------------------------------------------
+    // Issue #60: vertigo / bppv_rotation / vestibular_neuritis テスト
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn vertigo_strength_one_differs_from_input() {
+        // グラデーション画像を使う（均一色だと回転後も同一になるため）
+        let size = 64_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 100, 255]);
+        }
+        let orig_raw = img.clone().into_raw();
+        let out = vertigo(DynamicImage::ImageRgba8(img), 1.0, 0.25).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
+        assert!(differs, "vertigo strength=1 must change at least some pixels");
+    }
+
+    #[test]
+    fn bppv_rotation_strength_one_differs_from_input() {
+        let size = 64_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 100, 255]);
+        }
+        let orig_raw = img.clone().into_raw();
+        // time_t=0.1 は急速相（angle_norm > 0）
+        let out = bppv_rotation(DynamicImage::ImageRgba8(img), 1.0, 0.1).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
+        assert!(differs, "bppv_rotation strength=1 must change at least some pixels");
+    }
+
+    #[test]
+    fn vestibular_neuritis_strength_one_differs_from_input() {
+        let size = 64_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 100, 255]);
+        }
+        let orig_raw = img.clone().into_raw();
+        let out = vestibular_neuritis(DynamicImage::ImageRgba8(img), 1.0).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
+        assert!(differs, "vestibular_neuritis strength=1 must change at least some pixels");
+    }
 }
 
