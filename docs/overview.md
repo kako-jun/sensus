@@ -302,6 +302,22 @@ the darkening coefficient:
 
 The pixel multiplier is `1.0 - strength × fade`.
 
+> **Note**: The `Vignette` mode (uniform peripheral darkening) is an
+> approximation. Clinical glaucoma typically presents as **arcuate
+> (Bjerrum) scotoma** — a bow-shaped blind area that follows the nerve
+> fibre bundle from the optic disc (ON head). The `ArcuateSuperior`,
+> `ArcuateInferior`, and `Biarcuate` modes implement this more realistic
+> pattern, with the ON head offset 15% horizontally from the image centre.
+
+`GlaucomaMode` variants:
+
+| Mode | Description |
+|---|---|
+| `Vignette` | Legacy uniform peripheral darkening (backward-compatible) |
+| `ArcuateSuperior` | Superior Bjerrum scotoma (upper arcuate defect) |
+| `ArcuateInferior` | Inferior Bjerrum scotoma (lower arcuate defect) |
+| `Biarcuate` | Both superior and inferior arcuate defects (advanced glaucoma) |
+
 ### macular_degeneration
 
 Central scotoma (blind spot). The same radial scheme is inverted — the
