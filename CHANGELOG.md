@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `cataract`: ⚠️ 即受診 — 急激な視力低下・視野変化は眼科受診推奨
   - `nyctalopia`: ⚠️ 早期受診 — 夜盲の急激な悪化はビタミンA欠乏・網膜色素変性の可能性
 
+- **test: vertigo / bppv_rotation / vestibular_neuritis の strength=1 効果確認テストを追加** (#60):
+  `vertigo_strength_one_differs_from_input`、`bppv_rotation_strength_one_differs_from_input`、
+  `vestibular_neuritis_strength_one_differs_from_input` の 3 テストを追加。
+  グラデーション画像に strength=1 を適用し、少なくとも 1 ピクセルが変化することを確認する。
+
 - **vision: Metamorphopsia（歪視）フィルタを追加** (#55):
   LCG ベースの 2D グリッドノイズ変位マップで各ピクセルをリマップする `metamorphopsia()` 関数を実装。
   `strength=0` は byte-exact identity、`strength=1` で最大 8px の変位。双線形補間 + edge clamp。
