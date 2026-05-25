@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **test: diplopia/nystagmus/starbursts の shader_equivalence テストを追加** (#49):
+  `shader_equiv_diplopia_strength_1_0_psnr`、`shader_equiv_diplopia_strength_0_is_passthrough_psnr`、
+  `shader_equiv_nystagmus_horizontal_psnr`、`shader_equiv_nystagmus_strength_0_psnr`、
+  `shader_equiv_starbursts_glsl_self_consistency_psnr`、`shader_equiv_starbursts_strength_0_psnr` の 6 テストを追加。
+  diplopia/nystagmus は PSNR ≥ 30 dB、starbursts は許容差広めの PSNR ≥ 25 dB で判定。
+
 ### Changed
 
 - **perf: floaters の距離判定で sqrt を省略** (#62):
