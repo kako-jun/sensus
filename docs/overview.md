@@ -73,7 +73,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56, #57 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity, detail_loss |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
 | `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |

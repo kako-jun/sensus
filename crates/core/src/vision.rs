@@ -2444,6 +2444,71 @@ pub fn contrast_sensitivity(img: DynamicImage, strength: f32) -> Result<DynamicI
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
+// ---------------------------------------------------------------
+// Issue #57: Detail Loss フィルタ（pixelation）
+// ---------------------------------------------------------------
+
+/// 細部喪失（Detail Loss）シミュレーション。
+///
+/// 矩形タイルごとに平均色に置き換える（pixelation）。
+/// タイルサイズ = `(strength * 20.0).max(1.0) as u32` px。
+///
+/// - `strength = 0.0`: identity（タイルサイズ 1px = 変化なし）
+/// - `strength = 1.0`: 20px タイル
+pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    let tile_size = (s * 20.0).max(1.0) as u32;
+    if tile_size <= 1 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+    let width = rgba.width();
+    let height = rgba.height();
+    let mut out = rgba.clone();
+
+    let tile_cols = width.div_ceil(tile_size);
+    let tile_rows = height.div_ceil(tile_size);
+
+    for ty in 0..tile_rows {
+        for tx in 0..tile_cols {
+            let x0 = tx * tile_size;
+            let y0 = ty * tile_size;
+            let x1 = (x0 + tile_size).min(width);
+            let y1 = (y0 + tile_size).min(height);
+            let count = ((x1 - x0) * (y1 - y0)) as u64;
+            if count == 0 {
+                continue;
+            }
+
+            // タイル内の平均色を linear sRGB で計算
+            let mut sum = [0.0_f64; 3];
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let p = rgba.get_pixel(px, py);
+                    sum[0] += srgb_to_linear(p[0] as f32 / 255.0) as f64;
+                    sum[1] += srgb_to_linear(p[1] as f32 / 255.0) as f64;
+                    sum[2] += srgb_to_linear(p[2] as f32 / 255.0) as f64;
+                }
+            }
+            let avg_r = pack_u8(linear_to_srgb((sum[0] / count as f64) as f32));
+            let avg_g = pack_u8(linear_to_srgb((sum[1] / count as f64) as f32));
+            let avg_b = pack_u8(linear_to_srgb((sum[2] / count as f64) as f32));
+
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let p = out.get_pixel_mut(px, py);
+                    p[0] = avg_r;
+                    p[1] = avg_g;
+                    p[2] = avg_b;
+                    // alpha はそのまま
+                }
+            }
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5053,6 +5118,44 @@ mod tests {
         let var_in = variance(&orig);
         let var_out = variance(&out);
         assert!(var_out < var_in, "contrast_sensitivity strength=1 must reduce luminance variance (in={var_in:.2}, out={var_out:.2})");
+    }
+
+    // -------------------------------------------------------
+    // detail_loss tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn detail_loss_strength_zero_identity() {
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = detail_loss(DynamicImage::ImageRgba8(img), 0.0).unwrap().to_rgba8().into_raw();
+        assert_eq!(orig, out, "detail_loss strength=0 must be identity");
+    }
+
+    #[test]
+    fn detail_loss_strength_one_reduces_stddev() {
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig = img.clone();
+        let out = detail_loss(DynamicImage::ImageRgba8(img), 1.0).unwrap().to_rgba8();
+
+        let luma = |p: &image::Rgba<u8>| -> f64 {
+            0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64
+        };
+        let stddev = |pixels: &RgbaImage| -> f64 {
+            let vals: Vec<f64> = pixels.pixels().map(luma).collect();
+            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+            (vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / vals.len() as f64).sqrt()
+        };
+
+        let sd_in = stddev(&orig);
+        let sd_out = stddev(&out);
+        assert!(sd_out < sd_in, "detail_loss strength=1 must reduce stddev (in={sd_in:.2}, out={sd_out:.2})");
     }
 }
 

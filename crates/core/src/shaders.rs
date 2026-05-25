@@ -116,6 +116,16 @@ pub fn contrast_sensitivity_uniforms(strength: f32) -> SimpleStrengthUniforms {
     SimpleStrengthUniforms { strength }
 }
 
+/// detail_loss.frag の GLSL ES 3.00 ソースを返す。
+pub fn detail_loss_glsl() -> &'static str {
+    include_str!("shaders/detail_loss.frag")
+}
+
+/// detail_loss の uniform を返す。
+pub fn detail_loss_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    SimpleStrengthUniforms { strength }
+}
+
 /// photophobia.frag の GLSL ES 3.00 ソースを返す。
 pub fn photophobia_glsl() -> &'static str {
     include_str!("shaders/photophobia.frag")
