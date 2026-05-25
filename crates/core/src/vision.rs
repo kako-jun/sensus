@@ -3301,4 +3301,48 @@ mod tests {
         let out = result.unwrap();
         assert_eq!((out.width(), out.height()), (size, size));
     }
+
+    // ---------------------------------------------------------------
+    // DA-05: Hyperopia — 近方（depth > focus）がボケる
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_hyperopia_near_is_blurred() {
+        // 64x64 の中央に white dot。
+        // depth_map: 全画素 depth=1.0 (最近方)。focus=0.0。
+        // Hyperopia → d > focus なのでボケる。
+        let size = 64_u32;
+        let input = center_white_dot(size);
+        let depth_near = depth_map_solid(size, 255); // depth≈1.0 (近方)
+
+        let out_blurred = depth_aware_blur(
+            input.clone(),
+            &depth_near,
+            0.0,
+            0.1,
+            DepthBlurKind::Hyperopia,
+        )
+        .unwrap();
+
+        // focus と同深度（depth=0.0, val=0）はボケない
+        let depth_far = depth_map_solid(size, 0); // depth≈0.0 (遠方 = focus と同深度)
+        let out_sharp = depth_aware_blur(
+            input,
+            &depth_far,
+            0.0,
+            0.1,
+            DepthBlurKind::Hyperopia,
+        )
+        .unwrap();
+
+        let cx = size / 2;
+        let cy = size / 2;
+        let blurred_center = out_blurred.to_rgba8().get_pixel(cx, cy)[0];
+        let sharp_center = out_sharp.to_rgba8().get_pixel(cx, cy)[0];
+        assert!(
+            blurred_center < sharp_center,
+            "near pixel (depth=1.0 > focus=0.0) must be more blurred than focus pixel: \
+             blurred_center={blurred_center}, sharp_center={sharp_center}"
+        );
+    }
 }

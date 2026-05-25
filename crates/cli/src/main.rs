@@ -141,7 +141,7 @@ struct Cli {
     depth: Option<PathBuf>,
 
     /// Focus depth in 0.0..=1.0 (bright=near, dark=far). Only used with depth blur filters.
-    #[arg(long, default_value = "0.5")]
+    #[arg(long, default_value = "0.5", value_parser = parse_focus)]
     focus: f32,
 }
 
@@ -153,6 +153,17 @@ fn parse_strength(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=1.0).contains(&v) {
         return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse the `--focus` argument and reject values outside `0.0..=1.0` or NaN.
+fn parse_focus(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=1.0).contains(&v) {
+        return Err(format!("focus must be in 0.0..=1.0, got {v}"));
     }
     Ok(v)
 }
@@ -225,7 +236,13 @@ fn run(cli: Cli) -> Result<(), RunError> {
     let (width, height) = (img.width(), img.height());
 
     // depth フィルタが含まれる場合は単独処理（Pipeline を通さない）
-    if cli.filter.len() == 1 && cli.filter[0].is_depth_filter() {
+    // TODO(#19): Pipeline 統合時にここを削除し Pipeline 経由で処理する
+    if cli.filter.iter().any(|f| f.is_depth_filter()) {
+        if cli.filter.len() > 1 {
+            return Err(RunError::Pipeline(
+                "sensus: depth blur filters cannot be combined with other filters".to_string(),
+            ));
+        }
         let kind = cli.filter[0].depth_kind().unwrap();
         let depth_path = cli.depth.as_ref().ok_or_else(|| {
             RunError::Pipeline(
