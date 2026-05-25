@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] → v0.2.0
+
+### Added
+
+- **vision: diplopia / nystagmus / starbursts** (#29): three new motion /
+  visual-optics filters. `diplopia` alpha-blends a pixel-shifted ghost image
+  (linear sRGB) to simulate double vision from strabismus or nerve palsy.
+  `nystagmus` applies 1D directional motion blur (`amplitude`, `direction_deg`)
+  to represent the involuntary oscillatory eye movement visible as a static
+  snapshot. `starbursts` performs radial ray-marching from supra-threshold
+  bright pixels (`threshold`, `num_rays`, `ray_length_ratio`) to simulate
+  the starburst artefact seen after LASIK / cataract surgery or in high
+  astigmatism. All three include GLSL ES 3.00 fragment shaders
+  (`diplopia.frag`, `nystagmus.frag`, `starbursts.frag`).
+  CLI gains `--offset-x`, `--offset-y`, `--ghost-strength`, `--amplitude`,
+  `--direction-deg`, `--num-rays`, `--ray-length`, `--threshold`.
+
+- **test: CPU⇄GLSL shader equivalence regression** (#17): GPU-free software
+  simulator (`crates/core/tests/shader_equivalence.rs`) mirrors the GLSL ES
+  math in Rust and asserts that CPU and shader outputs agree within tolerance
+  — ≤ 2/255 per channel for matrix filters, PSNR ≥ 30 dB for blur/directional
+  filters. 13 tests covering protanopia/deuteranopia/tritanopia/achromatopsia
+  (strength = 0, 0.5, 1), myopia/hyperopia/presbyopia disk blur, and
+  astigmatism at 0°/45°/90°.
+
+- **vision: depth-aware blur** (#19): `vision::depth_aware_blur(img,
+  depth_map, focus_depth, max_radius_ratio, kind)` accepts a greyscale PNG
+  depth map (bright = near, dark = far) and applies per-pixel disk blur
+  whose radius scales with distance from `focus_depth`. Three kinds:
+  `Myopia` (far side blurs), `Hyperopia` (near side blurs),
+  `DepthOfField` (both sides blur). Depth maps of a different resolution
+  than the source image are auto-resized with Lanczos3. CLI gains
+  `--filter myopia-depth / hyperopia-depth / depth-of-field`,
+  `--depth <PATH>`, `--focus <f32>` (validated to 0.0..=1.0);
+  combining depth filters with other `--filter` flags is now a hard error.
+
+- **vision: GLSL ES 3.00 shader source API** (#16): `sensus_core::shaders`
+  exposes `*_glsl()` functions returning `&'static str` for each visual
+  filter, plus matching `*_uniforms()` helpers that compute ready-to-upload
+  uniform structs (`ColorMatrixUniforms`, `LumaUniforms`, `BlurUniforms`,
+  `AstigmatismUniforms`, `DiplopiaUniforms`, `NystagmusUniforms`,
+  `StarburstsUniforms`). All shaders target GLSL ES 3.00 (`#version 300 es`)
+  for Flutter `FragmentProgram` compatibility. The CPU implementation is the
+  normative reference; shaders are authored to reproduce the same math.
+
+- **hearing filters** (#7, #8, #9): `sensus_core::hearing` module with
+  `AudioBuffer` (f32 interleaved PCM), `BiquadFilter`, and 10 pure-function
+  hearing filters — `hearing_loss`, `sudden_deafness`, `noise_induced_loss`,
+  `tinnitus`, `diplacusis`, `hyperacusis`, `amusia`, `presbycusis`,
+  `recruitment`, `temporary_threshold_shift`. Three vestibular-visual filters
+  added to `vision`: `vertigo`, `bppv_rotation`, `vestibular_neuritis`.
+  `HearingFilter` enum and `apply_hearing()` added to `lib.rs`. CLI gains
+  `--filter vertigo / bppv-rotation / vestibular-neuritis`.
+
 ## [0.1.0] - 2026-05-22
 
 ### Added

@@ -34,8 +34,10 @@ sensus/
     │   ├── Cargo.toml      # crate-type = ["rlib"]
     │   └── src/
     │       ├── lib.rs
-    │       ├── vision.rs    # color vision, refraction, visual field, light
+    │       ├── vision.rs    # color vision, refraction, visual field, light, depth-aware blur, diplopia, nystagmus, starbursts
     │       ├── hearing.rs   # hearing loss, pitch shift, balance
+    │       ├── shaders.rs   # GLSL ES 3.00 shader sources + uniform structs
+    │       ├── shaders/     # *.frag shader source files (included via include_str!)
     │       └── pipeline.rs  # filter composition
     └── cli/
         ├── Cargo.toml      # [[bin]] name = "sensus"
@@ -70,9 +72,10 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1, 2, 3 | #2, #3, #4, #5, #6 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
 | `pipeline` | 4 | #10 | filter composition ✅ |
+| `shaders` | 5 | #16 | GLSL ES 3.00 shader sources + uniform structs for all visual filters |
 
 ## Pipeline (Phase 4, #10)
 
@@ -321,9 +324,79 @@ aberrations of the eye's optical medium, all in linear sRGB space.
 
 CLI flags: `--seed`, `--density`, `--gaze-x`, `--gaze-y`.
 
+## Motion / visual-optics filters (Phase 5, #29)
 
+`diplopia`, `nystagmus`, and `starbursts` add a third category of visual
+simulation beyond spatial field defects and optical blur.
 
-- **WebAssembly** — sensus is consumed by native apps; a wasm build adds
+- **diplopia**: copies the source image, translates it by
+  `(offset_x × min(W,H), offset_y × min(W,H))` pixels, and alpha-blends
+  the ghost at opacity `ghost_strength × strength` in linear sRGB.
+  Simulates double vision from strabismus or cranial nerve palsy.
+  CLI: `--offset-x`, `--offset-y`, `--ghost-strength`.
+- **nystagmus**: applies 1D directional blur (`amplitude × strength ×
+  min(W,H)` px radius, `direction_deg` in degrees) as a static snapshot of
+  the motion blur caused by involuntary oscillatory eye movement.
+  `direction_deg = 0°` is horizontal (most common). CLI: `--amplitude`,
+  `--direction-deg`.
+- **starbursts**: for each pixel whose BT.709 linear luminance exceeds
+  `threshold`, emits `num_rays` radial rays of length
+  `ray_length_ratio × min(W,H)` pixels. Each ray decays linearly with
+  distance and is additively composited onto the image in linear sRGB.
+  Simulates the starburst / spike artefact visible after LASIK, IOL
+  implantation, or in high uncorrected astigmatism.
+  CLI: `--num-rays`, `--ray-length`, `--threshold`.
+
+## Depth-aware blur (Phase 5, #19)
+
+`vision::depth_aware_blur(img, depth_map, focus_depth, max_radius_ratio, kind)`
+accepts a greyscale PNG depth map (bright = near, dark = far) alongside the
+source image and applies per-pixel disk blur whose radius scales with the
+distance from `focus_depth`:
+
+- `DepthBlurKind::Myopia` — pixels with `depth < focus_depth` (far) blur;
+  near pixels stay sharp.
+- `DepthBlurKind::Hyperopia` — pixels with `depth > focus_depth` (near)
+  blur; far pixels stay sharp.
+- `DepthBlurKind::DepthOfField` — both sides blur; simulates camera DoF.
+
+If the depth map dimensions differ from the source image, it is
+automatically resized with Lanczos3 before processing. This extends the
+uniform-blur refraction filters in #4 to spatially-varying defocus for
+scenes with a known depth channel (stereo photography, portrait-mode JPEG,
+Depth Anything V2 output, etc.).
+
+## Hearing filters (Phase 4, #7–#9)
+
+`sensus_core::hearing` is a pure-function audio processing module that
+mirrors the `vision` module's design philosophy: every filter takes a buffer
+and returns a buffer; no audio device I/O.
+
+- **`AudioBuffer`**: f32 interleaved PCM with explicit sample rate and
+  channel count.
+- **`BiquadFilter`**: second-order IIR building block (Butterworth
+  approximation) used by all hearing filters.
+- **10 hearing filters**: `hearing_loss`, `sudden_deafness`,
+  `noise_induced_loss` (volume/frequency), `tinnitus`, `diplacusis`,
+  `hyperacusis`, `amusia`, `presbycusis`, `recruitment`,
+  `temporary_threshold_shift` (quality/pitch), returned as processed
+  `AudioBuffer`. All are stateless over frames — callers supply a fresh
+  buffer per chunk.
+- **3 vestibular–visual filters** added to `vision.rs`: `vertigo` (rotating
+  radial warp), `bppv_rotation` (brief rotational jerk), `vestibular_neuritis`
+  (sustained horizontal tilt). These are image-space effects; no audio I/O.
+
+## GLSL ES 3.00 shader source API (Phase 5, #16)
+
+`sensus_core::shaders` provides `*_glsl() -> &'static str` for each visual
+filter and matching `*_uniforms()` helpers that compute ready-to-upload
+uniform structs. All shaders target GLSL ES 3.00 (`#version 300 es`) for
+compatibility with Flutter's `FragmentProgram` API.
+
+The CPU implementation is the normative specification; shaders replicate the
+same math. A GPU-free software equivalence test suite (`#17`) asserts that
+CPU and shader outputs agree within ≤ 2/255 per channel (matrix filters) or
+PSNR ≥ 30 dB (blur / directional filters). — sensus is consumed by native apps; a wasm build adds
   maintenance cost without a clear consumer.
 - **Real-time camera feeds inside this crate** — capture and display are
   the host application's responsibility. sensus only transforms buffers.
