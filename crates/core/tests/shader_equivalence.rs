@@ -587,8 +587,6 @@ fn shader_equiv_strength_zero_no_change() {
 /// `inner_r`, `outer_r` を外から渡すことで両方に使用する。
 fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
-    let cx = w as f32 * 0.5;
-    let cy = h as f32 * 0.5;
     // UV 空間でのコーナー距離: sqrt(0.5^2+0.5^2) = 0.7071...
     let corner_dist = 0.7071067811865476_f32;
     let mut out = img.clone();
