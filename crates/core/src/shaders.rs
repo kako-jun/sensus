@@ -106,6 +106,26 @@ pub fn dry_eye_glsl() -> &'static str {
     include_str!("shaders/dry_eye.frag")
 }
 
+/// glaucoma.frag の GLSL ES 3.00 ソースを返す。
+pub fn glaucoma_glsl() -> &'static str {
+    include_str!("shaders/glaucoma.frag")
+}
+
+/// macular_degeneration.frag の GLSL ES 3.00 ソースを返す。
+pub fn macular_degeneration_glsl() -> &'static str {
+    include_str!("shaders/macular_degeneration.frag")
+}
+
+/// hemianopia.frag の GLSL ES 3.00 ソースを返す。
+pub fn hemianopia_glsl() -> &'static str {
+    include_str!("shaders/hemianopia.frag")
+}
+
+/// tunnel_vision.frag の GLSL ES 3.00 ソースを返す。
+pub fn tunnel_vision_glsl() -> &'static str {
+    include_str!("shaders/tunnel_vision.frag")
+}
+
 // ---------------------------------------------------------------------------
 // uniform 構造体
 // ---------------------------------------------------------------------------
@@ -298,6 +318,61 @@ pub fn starbursts_uniforms(strength: f32, threshold: f32) -> StarburstsUniforms 
     StarburstsUniforms { strength, threshold }
 }
 
+/// 視野欠損（vignette 系）フィルタの uniform。
+/// glaucoma / tunnel_vision / macular_degeneration 共通。
+#[derive(Debug, Clone)]
+pub struct FieldOfVisionUniforms {
+    pub strength: f32,
+    /// アスペクト比（width / height）。GLSL シェーダの `uAspect` uniform に渡す。
+    /// 距離計算で UV 空間を aspect 補正して Rust 実装（pixel 座標）と一致させる。
+    pub aspect: f32,
+}
+
+/// 半盲フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct HemianopiaUniforms {
+    pub strength: f32,
+    /// 1.0=右側欠損, -1.0=左側欠損
+    pub side: f32,
+}
+
+/// glaucoma の uniform を計算する。
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
+pub fn glaucoma_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    FieldOfVisionUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
+}
+
+/// macular_degeneration の uniform を計算する。
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
+pub fn macular_degeneration_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    FieldOfVisionUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
+}
+
+/// tunnel_vision の uniform を計算する。
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
+pub fn tunnel_vision_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    FieldOfVisionUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
+}
+
+/// hemianopia の uniform を計算する。
+///
+/// `side`: 1.0=右側欠損, -1.0=左側欠損。
+pub fn hemianopia_uniforms(strength: f32, side: f32) -> HemianopiaUniforms {
+    HemianopiaUniforms { strength, side }
+}
+
 // ---------------------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------------------
@@ -434,5 +509,53 @@ mod tests {
         let u = astigmatism_uniforms(s, dim, 0.0);
         let expected = s * ASTIGMATISM_MAX_RADIUS_RATIO * 800.0;
         assert!((u.radius_px - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn glaucoma_glsl_is_not_empty() {
+        assert!(!glaucoma_glsl().is_empty());
+    }
+
+    #[test]
+    fn macular_degeneration_glsl_is_not_empty() {
+        assert!(!macular_degeneration_glsl().is_empty());
+    }
+
+    #[test]
+    fn hemianopia_glsl_is_not_empty() {
+        assert!(!hemianopia_glsl().is_empty());
+    }
+
+    #[test]
+    fn tunnel_vision_glsl_is_not_empty() {
+        assert!(!tunnel_vision_glsl().is_empty());
+    }
+
+    #[test]
+    fn glaucoma_uniforms_strength_one() {
+        let u = glaucoma_uniforms(1.0, 32, 32);
+        assert_eq!(u.strength, 1.0);
+        assert!((u.aspect - 1.0).abs() < 1e-6, "正方形は aspect=1.0");
+    }
+
+    #[test]
+    fn macular_degeneration_uniforms_strength_one() {
+        let u = macular_degeneration_uniforms(1.0, 64, 32);
+        assert_eq!(u.strength, 1.0);
+        assert!((u.aspect - 2.0).abs() < 1e-6, "横長は aspect=2.0");
+    }
+
+    #[test]
+    fn tunnel_vision_uniforms_strength_one() {
+        let u = tunnel_vision_uniforms(1.0, 32, 32);
+        assert_eq!(u.strength, 1.0);
+    }
+
+    #[test]
+    fn hemianopia_uniforms_side_values() {
+        let u = hemianopia_uniforms(1.0, 1.0);
+        assert_eq!(u.side, 1.0);
+        let u2 = hemianopia_uniforms(1.0, -1.0);
+        assert_eq!(u2.side, -1.0);
     }
 }
