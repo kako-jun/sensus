@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **vision: depth_aware_blur をビン線形補間に変更** (#54):
+  深度値を 8 段階ビンに量子化して不連続に切り替える方式を廃止し、隣接 2 ビンの blur 結果を線形補間する方式に変更。
+  `t = frac(d * 7.0)` を補間係数として `out = blur[bin_floor] * (1-t) + blur[bin_ceil] * t` を適用し、ビン境界でのバンディングアーティファクトを除去。
+  メモリ使用量を 8 枚同時保持から 2 枚逐次処理に削減。
+
 ### Fixed
 
 - **BREAKING: vision: diplopia を加算合成から alpha blend に修正** (#53):

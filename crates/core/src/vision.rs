@@ -1536,10 +1536,18 @@ pub enum DepthBlurKind {
 /// `max_radius_ratio`: 最大ボケ半径（min(W,H) 比）。0.023 が近視最大相当。
 /// `kind`: DepthBlurKind で近視・遠視・DoF を切り替え。
 ///
-/// # アルゴリズム（8段階量子化ビン方式）
+/// # アルゴリズム（8段階ビン線形補間方式）
 ///
 /// 画素ごとに異なる半径の blur を掛けると O(W×H×R²) になって遅い。
-/// 8段階の深度ビンに量子化し、各ビンに対して1枚の blur 画像を生成してブレンドする。
+/// 8段階の深度ビンを定義し、各画素の深度値 `d` に対して隣接する 2 ビン
+/// （bin_floor, bin_ceil）の blur 画像を逐次生成して線形補間する:
+///
+/// ```text
+/// t = frac(d * 7.0)   // 0.0..1.0 の小数部（最終ビンは t = 0 で固定）
+/// out = blur[bin_floor] * (1 - t) + blur[bin_ceil] * t
+/// ```
+///
+/// メモリは 8 枚同時保持から 2 枚逐次処理に変更し、アーティファクトを除去する。
 pub fn depth_aware_blur(
     img: DynamicImage,
     depth_map: &DynamicImage,
@@ -1583,27 +1591,83 @@ pub fn depth_aware_blur(
     // linear sRGB planes に変換
     let (linear, alpha) = rgba_to_linear_planes(&rgba);
 
-    // 各ビンの blur 済み全画像を生成（radius < MIN_BLUR_RADIUS_PX は元画像と同じ）
-    let bin_blurred: Vec<Vec<[f32; 3]>> = (0..N_BINS)
-        .map(|bin| {
-            let r = bin_radius[bin];
-            if r < MIN_BLUR_RADIUS_PX {
-                linear.clone()
-            } else {
-                ellipse_blur(&linear, w, h, r, r, 0.0)
-            }
-        })
+    // 出力バッファ
+    let npx = (w * h) as usize;
+    let mut out_linear: Vec<[f32; 3]> = vec![[0.0; 3]; npx];
+
+    // 各画素の深度値を事前収集（0.0..=1.0）
+    let depths: Vec<f32> = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (y, x)))
+        .map(|(y, x)| depth_gray.get_pixel(x, y)[0] as f32 / 255.0)
         .collect();
 
-    // 各画素のビンを決定して合成
-    let mut out_linear: Vec<[f32; 3]> = vec![[0.0; 3]; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let d = depth_gray.get_pixel(x, y)[0] as f32 / 255.0; // 0.0..=1.0
-            // ビン番号（0..N_BINS）に量子化
-            let bin = ((d * N_BINS as f32) as usize).min(N_BINS - 1);
-            let idx = (y * w + x) as usize;
-            out_linear[idx] = bin_blurred[bin][idx];
+    // 隣接 2 ビンを逐次処理して線形補間する。
+    // depth d に対して:
+    //   scaled = d * (N_BINS - 1) as f32   → 0.0..=7.0
+    //   bin_floor = scaled.floor() as usize  → 0..=7
+    //   bin_ceil  = (bin_floor + 1).min(N_BINS - 1)
+    //   t         = scaled.fract()           → 0.0..=1.0
+    // 出力 = lerp(blur_floor[i], blur_ceil[i], t)
+    //
+    // ビンペアを (0,1), (1,2), ..., (6,7) と順に処理し、
+    // そのペアが使われる画素にだけ書き込む（2 枚しか同時保持しない）。
+    for floor_bin in 0..(N_BINS - 1) {
+        let ceil_bin = floor_bin + 1;
+
+        // このペアを使う画素が存在するか確認
+        let pair_used = depths.iter().any(|&d| {
+            let scaled = d * (N_BINS - 1) as f32;
+            let bf = (scaled.floor() as usize).min(N_BINS - 1);
+            bf == floor_bin
+        });
+        if !pair_used {
+            continue;
+        }
+
+        // 2 枚の blur 画像を生成
+        let blur_floor = if bin_radius[floor_bin] < MIN_BLUR_RADIUS_PX {
+            linear.clone()
+        } else {
+            ellipse_blur(&linear, w, h, bin_radius[floor_bin], bin_radius[floor_bin], 0.0)
+        };
+        let blur_ceil = if bin_radius[ceil_bin] < MIN_BLUR_RADIUS_PX {
+            linear.clone()
+        } else {
+            ellipse_blur(&linear, w, h, bin_radius[ceil_bin], bin_radius[ceil_bin], 0.0)
+        };
+
+        // 該当画素に線形補間結果を書き込む
+        for (idx, &d) in depths.iter().enumerate() {
+            let scaled = d * (N_BINS - 1) as f32;
+            let bf = (scaled.floor() as usize).min(N_BINS - 1);
+            if bf == floor_bin {
+                let t = scaled.fract();
+                let f = blur_floor[idx];
+                let c = blur_ceil[idx];
+                out_linear[idx] = [
+                    lerp(f[0], c[0], t),
+                    lerp(f[1], c[1], t),
+                    lerp(f[2], c[2], t),
+                ];
+            }
+        }
+    }
+
+    // 最終ビン（bin 7）: scaled = 7.0 → fract = 0.0 → floor = 7 → ceil = 7（clamp）
+    // このケースは floor_bin が 6 のループで bf = 6 となり補間されない。
+    // d = 1.0 のとき scaled = 7.0, floor = 7 → 別途処理する。
+    {
+        let blur_last = if bin_radius[N_BINS - 1] < MIN_BLUR_RADIUS_PX {
+            linear.clone()
+        } else {
+            ellipse_blur(&linear, w, h, bin_radius[N_BINS - 1], bin_radius[N_BINS - 1], 0.0)
+        };
+        for (idx, &d) in depths.iter().enumerate() {
+            let scaled = d * (N_BINS - 1) as f32;
+            let bf = (scaled.floor() as usize).min(N_BINS - 1);
+            if bf == N_BINS - 1 {
+                out_linear[idx] = blur_last[idx];
+            }
         }
     }
 
