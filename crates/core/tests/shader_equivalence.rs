@@ -564,6 +564,10 @@ fn shader_equiv_strength_zero_no_change() {
         ("deuteranopia", deuteranopia(img.clone(), 0.0)),
         ("tritanopia", tritanopia(img.clone(), 0.0)),
         ("achromatopsia", achromatopsia(img.clone(), 0.0)),
+        ("glaucoma", glaucoma(img.clone(), 0.0)),
+        ("tunnel_vision", tunnel_vision(img.clone(), 0.0)),
+        ("macular_degeneration", macular_degeneration(img.clone(), 0.0)),
+        ("hemianopia", hemianopia(img.clone(), 0.0, 0.5)),
     ] {
         let cpu_out = cpu_result.unwrap().to_rgba8();
         let orig = img.to_rgba8();
@@ -702,7 +706,7 @@ fn sim_hemianopia(img: &RgbaImage, strength: f32, side_glsl: f32) -> RgbaImage {
 #[test]
 fn shader_equiv_glaucoma_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = glaucoma_uniforms(1.0);
+    let u = glaucoma_uniforms(1.0, 32, 32);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 1.0).unwrap().to_rgba8();
@@ -714,7 +718,7 @@ fn shader_equiv_glaucoma_strength_1_0_psnr() {
 #[test]
 fn shader_equiv_glaucoma_strength_0_5_psnr() {
     let img = color_chart_32();
-    let u = glaucoma_uniforms(0.5);
+    let u = glaucoma_uniforms(0.5, 32, 32);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 0.5).unwrap().to_rgba8();
@@ -726,7 +730,7 @@ fn shader_equiv_glaucoma_strength_0_5_psnr() {
 #[test]
 fn shader_equiv_macular_degeneration_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = macular_degeneration_uniforms(1.0);
+    let u = macular_degeneration_uniforms(1.0, 32, 32);
     let cpu_out = macular_degeneration(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
@@ -736,7 +740,7 @@ fn shader_equiv_macular_degeneration_strength_1_0_psnr() {
 #[test]
 fn shader_equiv_macular_degeneration_strength_0_5_psnr() {
     let img = color_chart_32();
-    let u = macular_degeneration_uniforms(0.5);
+    let u = macular_degeneration_uniforms(0.5, 32, 32);
     let cpu_out = macular_degeneration(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
@@ -767,7 +771,7 @@ fn shader_equiv_hemianopia_left_strength_1_0_psnr() {
 #[test]
 fn shader_equiv_tunnel_vision_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = tunnel_vision_uniforms(1.0);
+    let u = tunnel_vision_uniforms(1.0, 32, 32);
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
     let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
@@ -779,7 +783,7 @@ fn shader_equiv_tunnel_vision_strength_1_0_psnr() {
 #[test]
 fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
     let img = color_chart_32();
-    let u = tunnel_vision_uniforms(0.5);
+    let u = tunnel_vision_uniforms(0.5, 32, 32);
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
     let cpu_out = tunnel_vision(img.clone(), 0.5).unwrap().to_rgba8();

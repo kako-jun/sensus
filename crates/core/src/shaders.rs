@@ -323,6 +323,9 @@ pub fn starbursts_uniforms(strength: f32, threshold: f32) -> StarburstsUniforms 
 #[derive(Debug, Clone)]
 pub struct FieldOfVisionUniforms {
     pub strength: f32,
+    /// アスペクト比（width / height）。GLSL シェーダの `uAspect` uniform に渡す。
+    /// 距離計算で UV 空間を aspect 補正して Rust 実装（pixel 座標）と一致させる。
+    pub aspect: f32,
 }
 
 /// 半盲フィルタの uniform。
@@ -334,18 +337,33 @@ pub struct HemianopiaUniforms {
 }
 
 /// glaucoma の uniform を計算する。
-pub fn glaucoma_uniforms(strength: f32) -> FieldOfVisionUniforms {
-    FieldOfVisionUniforms { strength }
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
+pub fn glaucoma_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    FieldOfVisionUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
 }
 
 /// macular_degeneration の uniform を計算する。
-pub fn macular_degeneration_uniforms(strength: f32) -> FieldOfVisionUniforms {
-    FieldOfVisionUniforms { strength }
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
+pub fn macular_degeneration_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    FieldOfVisionUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
 }
 
 /// tunnel_vision の uniform を計算する。
-pub fn tunnel_vision_uniforms(strength: f32) -> FieldOfVisionUniforms {
-    FieldOfVisionUniforms { strength }
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
+pub fn tunnel_vision_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    FieldOfVisionUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
 }
 
 /// hemianopia の uniform を計算する。
@@ -515,19 +533,21 @@ mod tests {
 
     #[test]
     fn glaucoma_uniforms_strength_one() {
-        let u = glaucoma_uniforms(1.0);
+        let u = glaucoma_uniforms(1.0, 32, 32);
         assert_eq!(u.strength, 1.0);
+        assert!((u.aspect - 1.0).abs() < 1e-6, "正方形は aspect=1.0");
     }
 
     #[test]
     fn macular_degeneration_uniforms_strength_one() {
-        let u = macular_degeneration_uniforms(1.0);
+        let u = macular_degeneration_uniforms(1.0, 64, 32);
         assert_eq!(u.strength, 1.0);
+        assert!((u.aspect - 2.0).abs() < 1e-6, "横長は aspect=2.0");
     }
 
     #[test]
     fn tunnel_vision_uniforms_strength_one() {
-        let u = tunnel_vision_uniforms(1.0);
+        let u = tunnel_vision_uniforms(1.0, 32, 32);
         assert_eq!(u.strength, 1.0);
     }
 

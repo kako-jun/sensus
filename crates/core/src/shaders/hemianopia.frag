@@ -25,7 +25,7 @@ void main() {
 
     float x = vTexCoord.x;
     float split = 0.5;
-    float blur_w = 0.02; // vision.rs と同じ 2% ぼかし幅（UV 単位）
+    float blur_w = 0.02; // UV 単位のぼかし幅（2%）。vision.rs は pixel 単位で w_f * 0.02 と等価。
 
     float left_fade;
     if (x < split - blur_w) {

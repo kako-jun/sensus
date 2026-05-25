@@ -6,6 +6,7 @@ precision mediump float;
 
 uniform sampler2D uTexture;
 uniform float uStrength;
+uniform float uAspect;  // width / height。非正方形画像の aspect 補正に使用。
 
 in vec2 vTexCoord;
 out vec4 fragColor;
@@ -21,9 +22,13 @@ float linearToSrgb(float c) {
 void main() {
     vec4 src = texture(uTexture, vTexCoord);
 
-    // UV 空間での中心からの距離（コーナー距離 = sqrt(0.5^2+0.5^2) で正規化）
+    // UV 座標を aspect 補正してから距離計算する。
+    // Rust 実装（pixel 座標）との一致: dx/max_r = uv_x*aspect / corner
     vec2 uv = vTexCoord - vec2(0.5, 0.5);
-    float d = length(uv) / 0.7071067811865476; // sqrt(0.5^2+0.5^2)
+    vec2 uvA = vec2(uv.x * uAspect, uv.y);
+    // コーナー距離（aspect 補正済み）: sqrt((0.5*aspect)^2 + 0.5^2)
+    float cornerDist = sqrt(0.5 * uAspect * 0.5 * uAspect + 0.5 * 0.5);
+    float d = length(uvA) / cornerDist;
 
     // vision.rs と同じ定数
     float inner_r = 1.0 - uStrength * 0.7;
