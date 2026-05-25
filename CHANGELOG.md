@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **stereo: Android XMP Depth extraction** (#32):
+  `sensus_core::stereo::read_xmp_depth(data: &[u8])` extracts the depth map
+  embedded in Android portrait-mode JPEGs (Google Depth API). Scans all
+  `APP1` segments for `GDepth:Data`, decodes the base64-encoded PNG/JPEG
+  payload without external dependencies, and returns a `DynamicImage`.
+  Returns `Error::NoDepthMap` when no depth data is present.
+  CLI gains `--portrait <PATH>`: auto-extracts the XMP depth map and applies
+  depth-aware blur in one command. `--portrait` is mutually exclusive with
+  `--mpo` and `--depth`; `--input` is optional when `--portrait` is used.
+
 - **stereo: MPO stereo photography depth map generation** (#31):
   `sensus_core::stereo` module with `split_mpo(data: &[u8])` and
   `stereo_to_depth(left, right)`. `split_mpo` splits an MPO file into

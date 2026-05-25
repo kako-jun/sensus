@@ -38,4 +38,12 @@ pub enum Error {
         right_w: u32,
         right_h: u32,
     },
+
+    /// XMP メタデータに GDepth:Data が見つからない（Android XMP Depth 未対応 JPEG）
+    #[error("no depth map found in XMP metadata (GDepth:Data is absent)")]
+    NoDepthMap,
+
+    /// base64 デコードに失敗した（不正な文字が含まれていた）
+    #[error("base64 decode error: invalid character in encoded data")]
+    Base64DecodeError,
 }

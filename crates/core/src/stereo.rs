@@ -3,6 +3,7 @@
 //! # 関数
 //! - [`split_mpo`]: MPO バイト列を左目・右目 JPEG に分割する
 //! - [`stereo_to_depth`]: 左右画像から SAD ブロックマッチングで深度マップを生成する
+//! - [`read_xmp_depth`]: Android ポートレートモード JPEG から XMP 深度マップを抽出する
 
 use image::{DynamicImage, GrayImage};
 
@@ -104,10 +105,131 @@ pub fn stereo_to_depth(left: &DynamicImage, right: &DynamicImage) -> Result<Dyna
     Ok(DynamicImage::ImageLuma8(depth))
 }
 
+/// Android ポートレートモード JPEG から XMP 深度マップを抽出する。
+///
+/// Google Depth API の `GDepth:Data` フィールド（base64 エンコード PNG/JPEG）を
+/// JPEG バイト列から取り出し、グレースケール `DynamicImage` として返す。
+///
+/// # Errors
+/// - `Error::NoDepthMap`: XMP メタデータに `GDepth:Data` が見つからない
+/// - `Error::Image`: base64 デコード後の画像データが読み込めない
+pub fn read_xmp_depth(data: &[u8]) -> Result<DynamicImage> {
+    let mut i = 2usize; // SOI (FF D8) をスキップ
+    while i + 4 <= data.len() {
+        if data[i] != 0xFF {
+            break;
+        }
+        let marker = data[i + 1];
+        let seg_len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+        if seg_len < 2 {
+            break;
+        }
+        // セグメントデータ本体: i+4 から i+2+seg_len まで（長さフィールド i+2..i+4 をスキップ）
+        let seg_end = i + 2 + seg_len;
+        if seg_end > data.len() {
+            break;
+        }
+        let seg_data = &data[i + 4..seg_end];
+        if marker == 0xE1 {
+            // APP1 セグメント
+            if let Ok(s) = std::str::from_utf8(seg_data) {
+                if s.contains("GDepth:Data") {
+                    if let Some(b64) = extract_gdepth_data(s) {
+                        let decoded = base64_decode(b64.as_bytes())?;
+                        return image::load_from_memory(&decoded)
+                            .map_err(crate::Error::Image);
+                    }
+                }
+            }
+        }
+        i = seg_end;
+    }
+    Err(crate::Error::NoDepthMap)
+}
+
+/// XMP 文字列から `GDepth:Data` の値を抽出する。
+///
+/// 属性形式 `GDepth:Data="BASE64DATA"` と
+/// 要素形式 `<GDepth:Data>BASE64DATA</GDepth:Data>` の両方に対応する。
+fn extract_gdepth_data(xmp: &str) -> Option<&str> {
+    // 属性形式: GDepth:Data="..."
+    if let Some(pos) = xmp.find("GDepth:Data=\"") {
+        let start = pos + "GDepth:Data=\"".len();
+        let rest = &xmp[start..];
+        if let Some(end) = rest.find('"') {
+            return Some(&rest[..end]);
+        }
+    }
+    // 要素形式: <GDepth:Data>...</GDepth:Data>
+    if let Some(pos) = xmp.find("<GDepth:Data>") {
+        let start = pos + "<GDepth:Data>".len();
+        let rest = &xmp[start..];
+        if let Some(end) = rest.find("</GDepth:Data>") {
+            return Some(&rest[..end]);
+        }
+    }
+    None
+}
+
+/// 標準 base64 デコード（外部クレート不使用）。
+///
+/// 空白文字（改行、スペース等）はスキップ。`=` はパディングとして無視する。
+/// 不正な文字が含まれる場合は `Err(Error::Base64DecodeError)` を返す。
+///
+/// パディング文字 '=' は単純にスキップする（RFC 4648 厳密モードではない）。
+/// GDepth:Data の base64 はパディングが正しいことが前提。
+fn base64_decode(input: &[u8]) -> Result<Vec<u8>> {
+    const TABLE: [i8; 256] = {
+        let mut t = [-1i8; 256];
+        let mut i = 0u8;
+        // A-Z = 0-25
+        while i < 26 {
+            t[(b'A' + i) as usize] = i as i8;
+            i += 1;
+        }
+        // a-z = 26-51
+        i = 0;
+        while i < 26 {
+            t[(b'a' + i) as usize] = (26 + i) as i8;
+            i += 1;
+        }
+        // 0-9 = 52-61
+        i = 0;
+        while i < 10 {
+            t[(b'0' + i) as usize] = (52 + i) as i8;
+            i += 1;
+        }
+        t[b'+' as usize] = 62;
+        t[b'/' as usize] = 63;
+        t
+    };
+
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+
+    for &b in input {
+        if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
+            continue;
+        }
+        let v = TABLE[b as usize];
+        if v < 0 {
+            return Err(crate::Error::Base64DecodeError);
+        }
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, RgbImage};
+    use image::{DynamicImage, ImageFormat, RgbImage};
 
     // ---------------------------------------------------------------
     // ヘルパー
@@ -389,5 +511,224 @@ mod tests {
         for px in luma.pixels() {
             assert_eq!(px[0], 0, "uniform gray should produce zero disparity (dark output)");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // ヘルパー: read_xmp_depth / base64_decode テスト用
+    // ---------------------------------------------------------------
+
+    fn make_tiny_gray_png() -> Vec<u8> {
+        let img = image::GrayImage::from_pixel(1, 1, image::Luma([128u8]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageLuma8(img)
+            .write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+            .unwrap();
+        buf
+    }
+
+    fn base64_encode_test(data: &[u8]) -> String {
+        const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in data.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+            let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+            let n = (b0 << 16) | (b1 << 8) | b2;
+            out.push(CHARS[(n >> 18) as usize] as char);
+            out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
+            out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] as char } else { '=' });
+            out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] as char } else { '=' });
+        }
+        out
+    }
+
+    fn make_portrait_jpeg_with_xmp_attr(gdepth_b64: &str) -> Vec<u8> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" GDepth:Data="{gdepth_b64}"/></rdf:RDF></x:xmpmeta>"#
+        );
+        let xmp_bytes = xmp.as_bytes();
+        let seg_len = (xmp_bytes.len() + 2) as u16;
+        let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        data.extend_from_slice(&seg_len.to_be_bytes());
+        data.extend_from_slice(xmp_bytes);
+        data.extend_from_slice(&[0xFF, 0xD9]);
+        data
+    }
+
+    fn make_portrait_jpeg_with_xmp_element(gdepth_b64: &str) -> Vec<u8> {
+        let xmp = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/"><GDepth:Data>{gdepth_b64}</GDepth:Data></rdf:Description></rdf:RDF></x:xmpmeta>"#
+        );
+        let xmp_bytes = xmp.as_bytes();
+        let seg_len = (xmp_bytes.len() + 2) as u16;
+        let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        data.extend_from_slice(&seg_len.to_be_bytes());
+        data.extend_from_slice(xmp_bytes);
+        data.extend_from_slice(&[0xFF, 0xD9]);
+        data
+    }
+
+    fn make_portrait_jpeg_no_gdepth() -> Vec<u8> {
+        let xmp = r#"<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta><?xpacket end="w"?>"#;
+        let xmp_bytes = xmp.as_bytes();
+        let seg_len = (xmp_bytes.len() + 2) as u16;
+        let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        data.extend_from_slice(&seg_len.to_be_bytes());
+        data.extend_from_slice(xmp_bytes);
+        data.extend_from_slice(&[0xFF, 0xD9]);
+        data
+    }
+
+    // ---------------------------------------------------------------
+    // read_xmp_depth 正常系
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn read_xmp_depth_attribute_form() {
+        let png = make_tiny_gray_png();
+        let b64 = base64_encode_test(&png);
+        let jpeg = make_portrait_jpeg_with_xmp_attr(&b64);
+        let result = read_xmp_depth(&jpeg);
+        assert!(result.is_ok(), "attribute-form GDepth:Data should succeed, got: {:?}", result.err());
+    }
+
+    #[test]
+    fn read_xmp_depth_element_form() {
+        let png = make_tiny_gray_png();
+        let b64 = base64_encode_test(&png);
+        let jpeg = make_portrait_jpeg_with_xmp_element(&b64);
+        let result = read_xmp_depth(&jpeg);
+        assert!(result.is_ok(), "element-form GDepth:Data should succeed, got: {:?}", result.err());
+    }
+
+    #[test]
+    fn read_xmp_depth_returns_image() {
+        let png = make_tiny_gray_png();
+        let b64 = base64_encode_test(&png);
+        let jpeg = make_portrait_jpeg_with_xmp_attr(&b64);
+        let img = read_xmp_depth(&jpeg).unwrap();
+        assert_eq!(img.width(), 1, "decoded depth image should be 1px wide");
+        assert_eq!(img.height(), 1, "decoded depth image should be 1px tall");
+    }
+
+    // ---------------------------------------------------------------
+    // read_xmp_depth 異常系
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn read_xmp_depth_no_gdepth_data_returns_error() {
+        let jpeg = make_portrait_jpeg_no_gdepth();
+        let result = read_xmp_depth(&jpeg);
+        assert!(
+            matches!(result, Err(crate::Error::NoDepthMap)),
+            "XMP without GDepth:Data should return NoDepthMap, got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn read_xmp_depth_no_app1_returns_error() {
+        // APP1マーカーが全くないバイト列（ただのSOI+EOI）
+        let data = vec![0xFF, 0xD8, 0xFF, 0xD9];
+        let result = read_xmp_depth(&data);
+        assert!(
+            matches!(result, Err(crate::Error::NoDepthMap)),
+            "no APP1 segment should return NoDepthMap, got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn read_xmp_depth_invalid_base64_returns_error() {
+        // 不正な base64 文字 '@' を含むデータ
+        let jpeg = make_portrait_jpeg_with_xmp_attr("@@@@INVALID@@@@");
+        let result = read_xmp_depth(&jpeg);
+        assert!(result.is_err(), "invalid base64 should return error, got Ok");
+    }
+
+    #[test]
+    fn read_xmp_depth_empty_bytes_returns_error() {
+        let result = read_xmp_depth(&[]);
+        assert!(
+            matches!(result, Err(crate::Error::NoDepthMap)),
+            "empty bytes should return NoDepthMap, got: {:?}", result
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // read_xmp_depth 境界値
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn read_xmp_depth_multiple_app1_segments() {
+        // 1つ目のAPP1: GDepth:Data なし
+        // 2つ目のAPP1: GDepth:Data あり
+        let png = make_tiny_gray_png();
+        let b64 = base64_encode_test(&png);
+
+        // 1つ目: GDepth:Data なし（短い ASCII XMP）
+        let xmp_no_depth = "X".repeat(52); // 52 bytes → seg_len=54
+        // 2つ目: GDepth:Data あり
+        let xmp_with_depth = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" GDepth:Data="{b64}"/></rdf:RDF></x:xmpmeta>"#
+        );
+
+        let mut data = vec![0xFF, 0xD8];
+        // 1つ目 APP1（GDepth:Data なし）
+        let b1 = xmp_no_depth.as_bytes();
+        let len1 = (b1.len() + 2) as u16;
+        data.extend_from_slice(&[0xFF, 0xE1]);
+        data.extend_from_slice(&len1.to_be_bytes());
+        data.extend_from_slice(b1);
+        // 2つ目 APP1（GDepth:Data あり）
+        let b2 = xmp_with_depth.as_bytes();
+        let len2 = (b2.len() + 2) as u16;
+        data.extend_from_slice(&[0xFF, 0xE1]);
+        data.extend_from_slice(&len2.to_be_bytes());
+        data.extend_from_slice(b2);
+        data.extend_from_slice(&[0xFF, 0xD9]);
+
+        let result = read_xmp_depth(&data);
+        assert!(result.is_ok(), "GDepth:Data in second APP1 should be found, got: {:?}", result.err());
+    }
+
+    // ---------------------------------------------------------------
+    // base64_decode ユニットテスト
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn base64_decode_hello_world() {
+        let result = base64_decode(b"SGVsbG8gV29ybGQ=");
+        assert!(result.is_ok(), "Hello World decode should succeed");
+        assert_eq!(result.unwrap(), b"Hello World");
+    }
+
+    #[test]
+    fn base64_decode_with_newlines() {
+        // 改行を含む base64 文字列もデコードできること
+        let input = b"SGVs\nbG8g\r\nV29y\nbGQ=";
+        let result = base64_decode(input);
+        assert!(result.is_ok(), "base64 with newlines should succeed");
+        assert_eq!(result.unwrap(), b"Hello World");
+    }
+
+    #[test]
+    fn base64_decode_invalid_char_returns_error() {
+        // '@' は base64 不正文字
+        let result = base64_decode(b"SGVs@G8=");
+        assert!(
+            matches!(result, Err(crate::Error::Base64DecodeError)),
+            "invalid char '@' should return Base64DecodeError, got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn read_xmp_depth_zero_seg_len_does_not_panic() {
+        // seg_len == 0 のとき無限ループ・パニックしないこと
+        let data = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x00];
+        let result = read_xmp_depth(&data);
+        // panicせず NoDepthMap エラーを返すこと
+        assert!(
+            matches!(result, Err(crate::Error::NoDepthMap)),
+            "zero seg_len should return NoDepthMap without panic, got: {:?}", result
+        );
     }
 }
