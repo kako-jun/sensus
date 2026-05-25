@@ -1372,6 +1372,105 @@ pub fn vestibular_neuritis(img: DynamicImage, strength: f32) -> Result<DynamicIm
     }
 }
 
+// ---------------------------------------------------------------
+// Phase N (Issue #19): depth-aware blur — 深度マップ付き距離依存ぼけ
+// ---------------------------------------------------------------
+
+/// 深度ブラーの種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DepthBlurKind {
+    /// 遠方（depth < focus_depth）がボケる（近視的な見え方）
+    Myopia,
+    /// 近方（depth > focus_depth）がボケる（遠視的な見え方）
+    Hyperopia,
+    /// 両側がボケる（カメラ被写界深度 DoF 風）
+    DepthOfField,
+}
+
+/// 深度マップを使った距離依存ぼけ（depth-aware defocus blur）。
+///
+/// `depth_map`: 元画像と同サイズのグレースケール（またはカラー）画像。
+///   明るい画素（1.0）= 近い、暗い画素（0.0）= 遠い。
+///   カラー画像の場合は luma8 変換で単チャンネルに変換する。
+/// `focus_depth`: ピントを合わせる深度値（0.0..=1.0）。この深度の画素はボケなし。
+/// `max_radius_ratio`: 最大ボケ半径（min(W,H) 比）。0.023 が近視最大相当。
+/// `kind`: DepthBlurKind で近視・遠視・DoF を切り替え。
+///
+/// # アルゴリズム（8段階量子化ビン方式）
+///
+/// 画素ごとに異なる半径の blur を掛けると O(W×H×R²) になって遅い。
+/// 8段階の深度ビンに量子化し、各ビンに対して1枚の blur 画像を生成してブレンドする。
+pub fn depth_aware_blur(
+    img: DynamicImage,
+    depth_map: &DynamicImage,
+    focus_depth: f32,
+    max_radius_ratio: f32,
+    kind: DepthBlurKind,
+) -> Result<DynamicImage> {
+    let (w, h) = (img.width(), img.height());
+    let min_dim = w.min(h) as f32;
+    let rgba = img.to_rgba8();
+
+    // depth map をグレースケール u8 に変換
+    let depth_gray_raw = depth_map.to_luma8();
+    // depth_map のサイズが img と異なる場合はリサイズ
+    let depth_gray = if depth_gray_raw.width() != w || depth_gray_raw.height() != h {
+        image::imageops::resize(&depth_gray_raw, w, h, image::imageops::FilterType::Lanczos3)
+    } else {
+        depth_gray_raw
+    };
+
+    const N_BINS: usize = 8;
+
+    // 各ビンの中心深度と radius_px を計算
+    let mut bin_radius: [f32; N_BINS] = [0.0; N_BINS];
+    for bin in 0..N_BINS {
+        let bin_center = (bin as f32 + 0.5) / N_BINS as f32; // 0.0625..0.9375
+        let delta = bin_center - focus_depth;
+        bin_radius[bin] = match kind {
+            DepthBlurKind::Myopia => {
+                if delta < 0.0 { (-delta) * max_radius_ratio * min_dim } else { 0.0 }
+            }
+            DepthBlurKind::Hyperopia => {
+                if delta > 0.0 { delta * max_radius_ratio * min_dim } else { 0.0 }
+            }
+            DepthBlurKind::DepthOfField => {
+                delta.abs() * max_radius_ratio * min_dim
+            }
+        };
+    }
+
+    // linear sRGB planes に変換
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+
+    // 各ビンの blur 済み全画像を生成（radius < MIN_BLUR_RADIUS_PX は元画像と同じ）
+    let bin_blurred: Vec<Vec<[f32; 3]>> = (0..N_BINS)
+        .map(|bin| {
+            let r = bin_radius[bin];
+            if r < MIN_BLUR_RADIUS_PX {
+                linear.clone()
+            } else {
+                ellipse_blur(&linear, w, h, r, r, 0.0)
+            }
+        })
+        .collect();
+
+    // 各画素のビンを決定して合成
+    let mut out_linear: Vec<[f32; 3]> = vec![[0.0; 3]; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let d = depth_gray.get_pixel(x, y)[0] as f32 / 255.0; // 0.0..=1.0
+            // ビン番号（0..N_BINS）に量子化
+            let bin = ((d * N_BINS as f32) as usize).min(N_BINS - 1);
+            let idx = (y * w + x) as usize;
+            out_linear[idx] = bin_blurred[bin][idx];
+        }
+    }
+
+    let out_rgba = linear_planes_to_rgba(&out_linear, &alpha, w, h);
+    Ok(DynamicImage::ImageRgba8(out_rgba))
+}
+
 /// 視野狭窄（tunnel vision）シミュレーション。
 ///
 /// 全般的に視野が狭窄し、極端な場合は穴を通して見るような視野になる。
@@ -3027,5 +3126,179 @@ mod tests {
     fn vestibular_neuritis_1x1_image_does_not_panic() {
         let input = pixel(128, 128, 128, 255);
         let _ = vestibular_neuritis(input, 1.0).unwrap();
+    }
+
+    // =================================================================
+    // Phase N (#19): depth-aware blur tests
+    // =================================================================
+
+    /// 32x32 の2段グラデーション深度マップを作るヘルパー。
+    /// 左半分 = 暗い (0), 右半分 = 明るい (255)。
+    fn depth_map_half(size: u32, left_val: u8, right_val: u8) -> DynamicImage {
+        use image::GrayImage;
+        let mut d = GrayImage::new(size, size);
+        for y in 0..size {
+            for x in 0..size {
+                let v = if x < size / 2 { left_val } else { right_val };
+                d.put_pixel(x, y, image::Luma([v]));
+            }
+        }
+        DynamicImage::ImageLuma8(d)
+    }
+
+    /// 単色 depth map（全面同じ深度値）を作るヘルパー。
+    fn depth_map_solid(size: u32, val: u8) -> DynamicImage {
+        use image::GrayImage;
+        DynamicImage::ImageLuma8(GrayImage::from_pixel(size, size, image::Luma([val])))
+    }
+
+    // ---------------------------------------------------------------
+    // DA-01: Myopia — 遠方（depth < focus）がボケる
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_myopia_far_is_blurred() {
+        // 64x64 の中央に white dot。
+        // depth_map: 全画素 depth=0.0 (最遠方)。focus=1.0。
+        // Myopia → d < focus なのでボケる。max_radius_ratio=0.1 で radius = 1.0 * 0.1 * 64 = 6.4px
+        let size = 64_u32;
+        let input = center_white_dot(size);
+        let depth_far = depth_map_solid(size, 0); // depth≈0.0 (遠方)
+
+        let out_blurred = depth_aware_blur(
+            input.clone(),
+            &depth_far,
+            1.0,
+            0.1,
+            DepthBlurKind::Myopia,
+        )
+        .unwrap();
+
+        // focus と同深度（depth=1.0, val=255）はボケない
+        let depth_focus = depth_map_solid(size, 255); // depth≈1.0 (focus と同深度)
+        let out_sharp = depth_aware_blur(
+            input,
+            &depth_focus,
+            1.0,
+            0.1,
+            DepthBlurKind::Myopia,
+        )
+        .unwrap();
+
+        let cx = size / 2;
+        let cy = size / 2;
+        let blurred_center = out_blurred.to_rgba8().get_pixel(cx, cy)[0];
+        let sharp_center = out_sharp.to_rgba8().get_pixel(cx, cy)[0];
+        assert!(
+            blurred_center < sharp_center,
+            "far pixel (depth=0.0, focus=1.0) must be more blurred than focus pixel: \
+             blurred_center={blurred_center}, sharp_center={sharp_center}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // DA-02: Myopia — 近方（depth > focus）はシャープ
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_myopia_near_is_sharp() {
+        // 32x32 の中央に white dot。
+        // depth_map: 全画素 depth=1.0 (最近方)。focus=0.0。
+        // Myopia → d > focus なのでボケない（radius=0）。
+        let size = 32_u32;
+        let input = center_white_dot(size);
+        let depth = depth_map_solid(size, 255); // depth≈1.0 (近方)
+
+        let out = depth_aware_blur(
+            input.clone(),
+            &depth,
+            0.0,
+            0.1,
+            DepthBlurKind::Myopia,
+        )
+        .unwrap();
+
+        // ボケなし: 中心は元の白 (255) のまま
+        let cx = size / 2;
+        let cy = size / 2;
+        let center = out.to_rgba8().get_pixel(cx, cy)[0];
+        assert_eq!(center, 255, "near pixel (depth=1.0 > focus=0.0) must stay sharp");
+    }
+
+    // ---------------------------------------------------------------
+    // DA-03: DepthOfField — 両側がボケる
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_dof_both_blurred() {
+        // focus=0.5。depth=0.0 (遠方) と depth=1.0 (近方) の両方がボケる。
+        // max_radius_ratio=0.1, size=64 → ビン0の radius ≈ 0.4375 * 0.1 * 64 = 2.8px
+        let size = 64_u32;
+        let input = center_white_dot(size);
+
+        // 遠方 depth=0 (ビン0, center=0.0625, delta=-0.4375)
+        let depth_far = depth_map_solid(size, 0);
+        let out_far = depth_aware_blur(
+            input.clone(),
+            &depth_far,
+            0.5,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        // 近方 depth=255 (ビン7, center=0.9375, delta=0.4375)
+        let depth_near = depth_map_solid(size, 255);
+        let out_near = depth_aware_blur(
+            input.clone(),
+            &depth_near,
+            0.5,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        // focus と同じ depth=128 (ビン3 or 4, delta≈0)
+        let depth_focus = depth_map_solid(size, 128);
+        let out_focus = depth_aware_blur(
+            input,
+            &depth_focus,
+            0.5,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        let cx = size / 2;
+        let cy = size / 2;
+        let far_center = out_far.to_rgba8().get_pixel(cx, cy)[0];
+        let near_center = out_near.to_rgba8().get_pixel(cx, cy)[0];
+        let focus_center = out_focus.to_rgba8().get_pixel(cx, cy)[0];
+
+        assert!(
+            far_center < focus_center,
+            "DoF: far must be more blurred than focus: far={far_center}, focus={focus_center}"
+        );
+        assert!(
+            near_center < focus_center,
+            "DoF: near must be more blurred than focus: near={near_center}, focus={focus_center}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // DA-04: depth_map のサイズが異なっても動作する（リサイズされる）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_wrong_size_depth_map_does_not_panic() {
+        // 32x32 の画像に対して 16x16 の depth_map を渡す
+        let size = 32_u32;
+        let input = solid_rgba(size, size, [100, 150, 200, 255]);
+        let depth = depth_map_solid(16, 128); // 異なるサイズ
+
+        let result = depth_aware_blur(input, &depth, 0.5, 0.023, DepthBlurKind::DepthOfField);
+        assert!(result.is_ok(), "mismatched depth map size must not panic");
+        let out = result.unwrap();
+        assert_eq!((out.width(), out.height()), (size, size));
     }
 }
