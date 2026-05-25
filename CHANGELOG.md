@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **perf: floaters の距離判定で sqrt を省略** (#62):
+  ループ内の `dist = (dx*dx + dy*dy).sqrt()` を除去し、`dist_sq < half_w_sq` による二乗比較に変更。
+  マスク値の計算には依然 `dist_sq.sqrt()` を使用するが、大多数のピクセルはガード条件で早期 skip されるため全体のコストを削減。
+
 ### Added
 
 - **docs: 医学的緊急注記を diplopia/vestibular_neuritis/cataract/nyctalopia に追加** (#64):

@@ -963,13 +963,14 @@ pub fn floaters(
                 let py0 = ((ly - half_w).floor() as i32 - hw_ceil).max(0);
                 let py1 = ((ly + half_w).ceil() as i32 + hw_ceil).min(height as i32 - 1);
 
+                let half_w_sq = half_w * half_w;
                 for py in py0..=py1 {
                     for ppx in px0..=px1 {
                         let dx = ppx as f32 - lx;
                         let dy = py as f32 - ly;
-                        let dist = (dx * dx + dy * dy).sqrt();
-                        if dist < half_w {
-                            let m = (dist / half_w).clamp(0.0, 1.0);
+                        let dist_sq = dx * dx + dy * dy;
+                        if dist_sq < half_w_sq {
+                            let m = (dist_sq.sqrt() / half_w).clamp(0.0, 1.0);
                             let idx = py as usize * width as usize + ppx as usize;
                             if m < mask_buf[idx] {
                                 mask_buf[idx] = m;
