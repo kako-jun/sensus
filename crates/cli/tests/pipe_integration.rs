@@ -20,13 +20,11 @@ fn make_tiny_jpeg() -> Vec<u8> {
 }
 
 fn sensus_bin() -> std::path::PathBuf {
-    // CARGO_BIN_EXE_ 経由でビルド済みバイナリを取得する
-    let mut path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("../../target/debug/sensus");
-    path
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_sensus"))
 }
 
 /// 2 フレーム分の JPEG を stdin に流し、stdout に 2 フレーム出力されることを確認する。
+/// must-1 の修正により --pipe 時は --output なしで動作することも検証する。
 #[test]
 fn pipe_two_frames_output_two_jpegs() {
     let frame = make_tiny_jpeg();
@@ -35,8 +33,9 @@ fn pipe_two_frames_output_two_jpegs() {
     two_frames.extend_from_slice(&frame);
 
     let bin = sensus_bin();
+    // must-1: --output なしで --pipe が動作することを確認
     let mut child = Command::new(&bin)
-        .args(["--filter", "protanopia", "--pipe", "--output", "/dev/null"])
+        .args(["--filter", "protanopia", "--pipe"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

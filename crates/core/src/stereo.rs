@@ -232,7 +232,7 @@ fn base64_decode(input: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, ImageFormat, RgbImage};
+    use image::{DynamicImage, RgbImage};
 
     // ---------------------------------------------------------------
     // ヘルパー

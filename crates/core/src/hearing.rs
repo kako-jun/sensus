@@ -556,7 +556,7 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
     // Step 2: FIR スミア（隣接 3 サンプルの加重平均: 0.25, 0.5, 0.25）
     // strength に応じて元とブレンド
     let w_center = 1.0 - s * 0.5; // strength=1.0 で center=0.5
-    let w_side = s * 0.25;         // strength=1.0 で side=0.25 (合計 = 0.5 + 0.5*2 = 1.0 が成立)
+    let w_side = s * 0.25;         // strength=1.0 で w_center=0.5, w_side=0.25 → 合計 0.5 + 0.25×2 = 1.0
     let mut smeared = noisy.clone();
     for i in 0..n {
         let prev = if i >= ch { noisy[i - ch] } else { noisy[i] };

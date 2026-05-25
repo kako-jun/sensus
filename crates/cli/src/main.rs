@@ -109,9 +109,9 @@ struct Cli {
     #[arg(short, long)]
     input: Option<PathBuf>,
 
-    /// Output image path. Format is inferred from the extension.
-    #[arg(short, long)]
-    output: PathBuf,
+    /// 出力ファイルパス（--pipe 時は不要）
+    #[arg(short, long, required_unless_present = "pipe")]
+    output: Option<PathBuf>,
 
     /// Filter(s) to apply. Specify multiple times to chain filters.
     #[arg(short, long, value_enum, num_args = 1..)]
@@ -405,8 +405,9 @@ fn run(cli: Cli) -> Result<(), RunError> {
             .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
         let out = depth_aware_blur(left, &depth_img, cli.focus, cli.strength * 0.023, kind)
             .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
-        return out.save(&cli.output).map_err(|source| RunError::OutputSave {
-            path: cli.output.clone(),
+        let out_path = cli.output.as_ref().unwrap();
+        return out.save(out_path).map_err(|source| RunError::OutputSave {
+            path: out_path.clone(),
             source,
         });
     }
@@ -452,8 +453,9 @@ fn run(cli: Cli) -> Result<(), RunError> {
         let kind = cli.filter[0].depth_kind().unwrap();
         let out = depth_aware_blur(source_img, &depth_map, cli.focus, cli.strength * 0.023, kind)
             .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
-        return out.save(&cli.output).map_err(|source| RunError::OutputSave {
-            path: cli.output.clone(),
+        let out_path = cli.output.as_ref().unwrap();
+        return out.save(out_path).map_err(|source| RunError::OutputSave {
+            path: out_path.clone(),
             source,
         });
     }
@@ -493,8 +495,9 @@ fn run(cli: Cli) -> Result<(), RunError> {
         })?;
         let out = depth_aware_blur(img, &depth_img, cli.focus, cli.strength * 0.023, kind)
             .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
-        return out.save(&cli.output).map_err(|source| RunError::OutputSave {
-            path: cli.output.clone(),
+        let out_path = cli.output.as_ref().unwrap();
+        return out.save(out_path).map_err(|source| RunError::OutputSave {
+            path: out_path.clone(),
             source,
         });
     }
@@ -551,9 +554,10 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
     match result {
         Ok(out) => {
-            out.save(&cli.output)
+            let out_path = cli.output.as_ref().unwrap();
+            out.save(out_path)
                 .map_err(|source| RunError::OutputSave {
-                    path: cli.output.clone(),
+                    path: out_path.clone(),
                     source,
                 })?;
             Ok(())
@@ -576,6 +580,11 @@ fn run(cli: Cli) -> Result<(), RunError> {
 }
 
 /// 画像にフィルタパイプラインを適用する（--pipe モードと通常モードの共通処理）。
+///
+/// # 通常モードとの差分
+/// 通常モードの `run()` では pipeline 構築後に warning 出力（--axis / --seed 等の
+/// 使われていないフラグに対する注意喚起）を行うが、--pipe モードでは省略している。
+/// これはフレームごとに同じ warning が大量に出力されることを防ぐためである。
 fn apply_filters_to_image(
     img: image::DynamicImage,
     cli: &Cli,
@@ -639,27 +648,54 @@ fn run_pipe(args: &Cli) -> Result<(), RunError> {
 }
 
 fn split_jpeg_frames(data: &[u8]) -> Vec<&[u8]> {
-    // FFD8 で始まり FFD9 で終わる区間を抽出
     let mut frames = Vec::new();
     let mut i = 0;
     while i + 1 < data.len() {
-        if data[i] == 0xFF && data[i + 1] == 0xD8 {
-            let start = i;
-            // FFD9 を探す
-            let mut j = start + 2;
-            while j + 1 < data.len() {
-                if data[j] == 0xFF && data[j + 1] == 0xD9 {
-                    frames.push(&data[start..=j + 1]);
-                    i = j + 2;
-                    break;
-                }
-                j += 1;
-            }
-            if j + 1 >= data.len() {
-                break;
-            }
-        } else {
+        // フレーム開始: SOI (FFD8)
+        if data[i] != 0xFF || data[i + 1] != 0xD8 {
             i += 1;
+            continue;
+        }
+        let frame_start = i;
+        i += 2; // SOI を消費
+        // マーカーを走査して EOI (FFD9) を探す
+        'frame: loop {
+            // 0xFF を探す
+            while i < data.len() && data[i] != 0xFF {
+                i += 1;
+            }
+            if i + 1 >= data.len() {
+                break 'frame;
+            }
+            let marker = data[i + 1];
+            match marker {
+                0xD9 => {
+                    // EOI: フレーム終端
+                    frames.push(&data[frame_start..=i + 1]);
+                    i += 2;
+                    break 'frame;
+                }
+                0xD8 => {
+                    // 別の SOI は不正（スキップ）
+                    i += 2;
+                }
+                0x00 | 0xFF => {
+                    // スタッフドバイト or padding、スキップ
+                    i += 1;
+                }
+                0xD0..=0xD7 | 0x01 => {
+                    // RST0-7, TEM: length フィールドなし
+                    i += 2;
+                }
+                _ => {
+                    // 通常マーカー: 2バイト length フィールドあり
+                    if i + 3 >= data.len() {
+                        break 'frame;
+                    }
+                    let len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+                    i += 2 + len; // マーカー2バイト + length (length 自身の2バイトを含む)
+                }
+            }
         }
     }
     frames

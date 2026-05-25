@@ -890,12 +890,10 @@ pub fn floaters(
         let cy = fy * h_f + offset_y;
 
         // AABB で描画範囲を絞る
-        let r_ceil = blob_radius.ceil() as i32;
         let x0 = ((cx - blob_radius).floor() as i32).max(0);
         let x1 = ((cx + blob_radius).ceil() as i32).min(width as i32 - 1);
         let y0 = ((cy - blob_radius).floor() as i32).max(0);
         let y1 = ((cy + blob_radius).ceil() as i32).min(height as i32 - 1);
-        let _ = r_ceil;
 
         for py in y0..=y1 {
             for px in x0..=x1 {
@@ -936,14 +934,16 @@ pub fn floaters(
         let mut cur_y = sy;
         let mut cur_angle = f_angle * std::f32::consts::TAU;
 
-        for seg in 0..n_seg {
-            // セグメント長 5..=15 px
-            let (s_len, f_len) = lcg_next(state.wrapping_add(seg as u64));
+        for _seg in 0..n_seg {
+            // セグメント長 5..=15 px（連続した LCG チェーン）
+            let (s_next, _) = lcg_next(state);
+            state = s_next;
+            let s_len = ((state >> 33) % 11 + 5) as f32 + 5.0;
             // 角度変化 ±45°
-            let (s_da, f_da) = lcg_next(s_len);
+            let (s_da, f_da) = lcg_next(state);
             state = s_da;
 
-            let seg_len = f_len * 10.0 + 5.0;
+            let seg_len = s_len;
             let delta_angle = (f_da - 0.5) * std::f32::consts::FRAC_PI_2; // ±45°
             cur_angle += delta_angle;
 
@@ -1908,7 +1908,6 @@ pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let h_f = height as f32;
     let cx = w_f * 0.5;
     let cy = h_f * 0.5;
-    let max_r = (cx * cx + cy * cy).sqrt();
 
     // コントラスト圧縮係数
     let contrast_factor = 1.0 - s * 0.15;
@@ -1921,17 +1920,20 @@ pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
         .map(|(i, &[r, g, b])| {
             let x = (i as u32 % width) as f32;
             let y = (i as u32 / width) as f32;
-            let dx = x - cx;
-            let dy = y - cy;
-            let d_sq = (dx * dx + dy * dy) / (max_r * max_r);
+            let ux = (x - cx) / cx;  // -1.0..=1.0
+            let uy = (y - cy) / cy;
+            let d = ux * ux + uy * uy;  // 0.0（中心）〜 2.0+（角）
 
             // コントラスト圧縮（linear 空間で 0.5 中心に圧縮）
             let cr = 0.5 + (r - 0.5) * contrast_factor;
             let cg = 0.5 + (g - 0.5) * contrast_factor;
             let cb = 0.5 + (b - 0.5) * contrast_factor;
 
-            // vignette（周辺を軽く暗化）
-            let vignette = 1.0 - s * 0.3 * d_sq.clamp(0.3, 1.2).powi(2).sqrt();
+            // vignette: 中心は暗化なし、周辺に向かって smoothstep で暗化
+            // smoothstep(0.3, 1.2, d)
+            let t = ((d - 0.3) / (1.2 - 0.3)).clamp(0.0, 1.0);
+            let sm = t * t * (3.0 - 2.0 * t);
+            let vignette = 1.0 - s * 0.3 * sm;
 
             [
                 (cr * vignette).clamp(0.0, 1.0),
@@ -1969,49 +1971,67 @@ pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let (linear, alpha) = rgba_to_linear_planes(&rgba);
 
     const TILE_SIZE: u32 = 32;
-    const LCG_SEED: u64 = 42;
+
     // LCG 定数（Numerical Recipes）
-    const LCG_A: u64 = 1664525;
-    const LCG_C: u64 = 1013904223;
+    let lcg_next = |state: u64| -> u64 {
+        state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407)
+    };
 
     // タイル数を計算
     let tile_cols = width.div_ceil(TILE_SIZE);
     let tile_rows = height.div_ceil(TILE_SIZE);
 
-    // LCG でタイルごとのノイズ値を生成
-    let mut noise_map: Vec<f32> = Vec::with_capacity((tile_cols * tile_rows) as usize);
-    let mut state = LCG_SEED;
-    for _ in 0..(tile_cols * tile_rows) {
-        state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
-        let n = (state >> 33) as f32 / (u32::MAX >> 1) as f32; // 0.0..=1.0
-        noise_map.push(n);
-    }
-
     // 出力バッファを元画像で初期化
     let mut out_linear = linear.clone();
 
-    // タイルごとに blur を適用して出力バッファに書き込む
+    // タイルごとに disk blur を適用して出力バッファに書き込む
+    let mut state: u64 = 42u64.wrapping_mul(6364136223846793005).wrapping_add(1);
     for ty in 0..tile_rows {
         for tx in 0..tile_cols {
-            let noise = noise_map[(ty * tile_cols + tx) as usize];
+            state = lcg_next(state);
+            // 0.0..=1.0 のノイズ値（nit-2: (state >> 33) as f32 / (1u64 << 31) as f32）
+            let noise = (state >> 33) as f32 / (1u64 << 31) as f32;
             let blur_radius = noise * s * 3.0;
             if blur_radius < MIN_BLUR_RADIUS_PX {
                 // blur なし: 元の値をそのままコピー（既に out_linear に入っている）
                 continue;
             }
 
-            // タイル領域を blur した結果を全画像で計算して、タイル部分だけを採用する
-            let blurred = ellipse_blur(&linear, width, height, blur_radius, blur_radius, 0.0);
+            // タイル境界（オーバーラップ付き）
+            let r_u = blur_radius as u32 + 1;
+            let x0 = (tx * TILE_SIZE).saturating_sub(r_u);
+            let y0 = (ty * TILE_SIZE).saturating_sub(r_u);
+            let x1 = ((tx + 1) * TILE_SIZE + r_u).min(width);
+            let y1 = ((ty + 1) * TILE_SIZE + r_u).min(height);
 
-            let x_start = tx * TILE_SIZE;
-            let y_start = ty * TILE_SIZE;
-            let x_end = ((tx + 1) * TILE_SIZE).min(width);
-            let y_end = ((ty + 1) * TILE_SIZE).min(height);
+            // タイル内（出力に書く範囲）
+            let x0_tile = tx * TILE_SIZE;
+            let y0_tile = ty * TILE_SIZE;
+            let x1_tile = ((tx + 1) * TILE_SIZE).min(width);
+            let y1_tile = ((ty + 1) * TILE_SIZE).min(height);
 
-            for y in y_start..y_end {
-                for x in x_start..x_end {
-                    let idx = (y * width + x) as usize;
-                    out_linear[idx] = blurred[idx];
+            // 拡張領域だけを切り出した sub-image を blur して、タイル内だけ out に書く
+            let sub_w = x1 - x0;
+            let sub_h = y1 - y0;
+            let sub_len = (sub_w * sub_h) as usize;
+            let mut sub_linear: Vec<[f32; 3]> = Vec::with_capacity(sub_len);
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    sub_linear.push(linear[(sy * width + sx) as usize]);
+                }
+            }
+            let sub_blurred = ellipse_blur(&sub_linear, sub_w, sub_h, blur_radius, blur_radius, 0.0);
+
+            // タイル内のピクセルだけ out に書く
+            for y in y0_tile..y1_tile {
+                for x in x0_tile..x1_tile {
+                    let sub_x = x - x0;
+                    let sub_y = y - y0;
+                    let sub_idx = (sub_y * sub_w + sub_x) as usize;
+                    let out_idx = (y * width + x) as usize;
+                    out_linear[out_idx] = sub_blurred[sub_idx];
                 }
             }
         }

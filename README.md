@@ -78,6 +78,12 @@ sensus -i photo.png -o photo-cataract.png     --filter cataract      --strength 
 # Pipeline: chain multiple filters in one pass
 sensus -i photo.png -o out.png --filter deuteranopia --filter myopia --strength 1.0
 sensus -i photo.png -o out.png --filter glaucoma --filter cataract --strength 0.7
+
+# Pipe mode: read JPEG frames from stdin, write filtered frames to stdout (ffmpeg integration)
+# --output is not required when --pipe is used
+ffmpeg -i video.mp4 -f image2pipe -vcodec mjpeg - | \
+    sensus --filter deuteranopia --pipe | \
+    ffmpeg -f mjpeg -i - -c:v libx264 out.mp4
 ```
 
 Flags:

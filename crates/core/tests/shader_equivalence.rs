@@ -17,8 +17,8 @@ use sensus_core::shaders::{
     myopia_uniforms, presbyopia_uniforms, protanopia_uniforms, tritanopia_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, deuteranopia, hyperopia, myopia, presbyopia, protanopia,
-    tritanopia,
+    achromatopsia, astigmatism, deuteranopia, eye_strain, hyperopia, myopia, presbyopia,
+    protanopia, tritanopia,
 };
 
 // ---------------------------------------------------------------------------
@@ -483,6 +483,67 @@ fn shader_equiv_astigmatism_axis_90_psnr() {
         db >= 30.0,
         "astigmatism axis=90°: PSNR {db:.1} dB < 30 dB"
     );
+}
+
+/// テスト用の 32x32 グラデーション画像を作るヘルパー。
+fn make_test_image() -> DynamicImage {
+    gradient_32()
+}
+
+/// eye_strain の GLSL シェーダ処理を Rust で再現する。
+/// sRGB decode → contrast compression → vignette → sRGB encode
+fn simulate_eye_strain_glsl(img: &DynamicImage, strength: f32) -> RgbaImage {
+    let src = img.to_rgba8();
+    let (w, h) = src.dimensions();
+    let mut out = src.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = src.get_pixel(x, y);
+            // decode to linear
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+            // contrast compression in linear space
+            let cr = 0.5 + (r - 0.5) * (1.0 - strength * 0.15);
+            let cg = 0.5 + (g - 0.5) * (1.0 - strength * 0.15);
+            let cb = 0.5 + (b - 0.5) * (1.0 - strength * 0.15);
+            // vignette: v_texcoord = (x+0.5)/w, (y+0.5)/h → uv = texcoord*2-1
+            let uv_x = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
+            let uv_y = (y as f32 + 0.5) / h as f32 * 2.0 - 1.0;
+            let d = uv_x * uv_x + uv_y * uv_y;
+            let t = ((d - 0.3) / (1.2 - 0.3)).clamp(0.0, 1.0);
+            let sm = t * t * (3.0 - 2.0 * t);
+            let vignette = 1.0 - strength * 0.3 * sm;
+            let fr = (cr * vignette).clamp(0.0, 1.0);
+            let fg = (cg * vignette).clamp(0.0, 1.0);
+            let fb = (cb * vignette).clamp(0.0, 1.0);
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(fr) * 255.0).round() as u8,
+                (linear_to_srgb(fg) * 255.0).round() as u8,
+                (linear_to_srgb(fb) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// eye_strain シェーダ等価性テスト（PSNR ≥ 30 dB）
+// ---------------------------------------------------------------------------
+// 注意: dry_eye は空間ランダム処理（タイルごとにランダム blur radius）のため、
+// GLSL シェーダと CPU の1:1比較は意味を持たない（シェーダ側も同一乱数で同じ
+// タイルパターンを再現する必要があり、実用上不可能）。そのため dry_eye の
+// シェーダ等価性テストは省略する。
+
+#[test]
+fn shader_equiv_eye_strain_strength_1_0_psnr() {
+    // CPU と GLSL シミュレータの一致を PSNR ≥ 30 dB で確認
+    let img = make_test_image();
+    let cpu_out = eye_strain(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl_out = simulate_eye_strain_glsl(&img, 1.0);
+    let db = psnr(&cpu_out, &glsl_out);
+    assert!(db >= 30.0, "eye_strain PSNR {db:.1} dB < 30 dB");
 }
 
 // ---------------------------------------------------------------------------

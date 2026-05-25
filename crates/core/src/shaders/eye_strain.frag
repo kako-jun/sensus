@@ -4,13 +4,29 @@ uniform sampler2D u_image;
 uniform float u_strength;
 in vec2 v_texcoord;
 out vec4 out_color;
+
+// sRGB -> linear
+float srgb_to_linear(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+// linear -> sRGB
+float linear_to_srgb(float c) {
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
+}
+
 void main() {
     vec4 c = texture(u_image, v_texcoord);
-    // contrast compression
-    vec3 compressed = vec3(0.5) + (c.rgb - vec3(0.5)) * (1.0 - u_strength * 0.15);
+    // decode to linear
+    vec3 lin = vec3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
+    // contrast compression in linear space
+    vec3 compressed = vec3(0.5) + (lin - vec3(0.5)) * (1.0 - u_strength * 0.15);
     // vignette
     vec2 uv = v_texcoord * 2.0 - 1.0;
     float d = dot(uv, uv);
-    float vignette = 1.0 - u_strength * 0.3 * smoothstep(0.3, 1.2, d);
-    out_color = vec4(clamp(compressed * vignette, 0.0, 1.0), c.a);
+    float t = clamp((d - 0.3) / (1.2 - 0.3), 0.0, 1.0);
+    float sm = t * t * (3.0 - 2.0 * t);
+    float vignette = 1.0 - u_strength * 0.3 * sm;
+    vec3 result = clamp(compressed * vignette, 0.0, 1.0);
+    // encode back to sRGB
+    out_color = vec4(linear_to_srgb(result.r), linear_to_srgb(result.g), linear_to_srgb(result.b), c.a);
 }

@@ -73,7 +73,7 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye |
 | `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
 | `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
 | `pipeline` | 4 | #10 | filter composition ✅ |
@@ -98,6 +98,29 @@ let result = Pipeline::new()
 - **Error propagation**: if a step fails, `Error::Pipeline { step, filter, source }` reports which step index and filter name caused the error.
 - **CLI**: pass `--filter` multiple times: `sensus -i in.png -o out.png --filter myopia --filter cataract`
 
+
+## Eye Fatigue filters (Phase 4, #36)
+
+`sensus_core::vision` includes two eye fatigue filters:
+
+- **`eye_strain`**: Simulates visual fatigue through contrast compression
+  (`v' = 0.5 + (v - 0.5) × (1 - strength × 0.15)`) in linear sRGB, a light
+  disk blur (`radius = strength × 1.5 px`), and a peripheral vignette using
+  `smoothstep(0.3, 1.2, d)` where `d = uv·uv` with `uv ∈ [-1, 1]²`. Both CPU
+  and GLSL implementations operate in linear sRGB space and apply identical
+  vignette math, verified by PSNR ≥ 30 dB equivalence test.
+- **`dry_eye`**: Applies random per-tile disk blur (tile = 32×32 px). Each
+  tile's blur radius is determined by a fixed-seed (42) LCG. Only the tile
+  region (with a blur-radius overlap) is blurred rather than the full image,
+  making processing O(tile_area × kernel_height) instead of O(W×H × kernel_height).
+  Because the blur radius varies spatially per tile with a fixed seed, this
+  filter is not amenable to a GLSL equivalence test.
+
+## Auditory Processing Disorder (APD) (Issue #38)
+
+APD simulation is deferred to a later phase. It would be implemented in
+`sensus_core::hearing` alongside existing hearing filters and would simulate
+difficulty distinguishing speech in noisy environments.
 
 See [`roadmap.md`](roadmap.md) for the per-phase implementation plan.
 
