@@ -117,6 +117,9 @@ pub fn read_xmp_depth(data: &[u8]) -> Result<DynamicImage> {
     let mut i = 2usize; // SOI (FF D8) をスキップ
     while i + 4 <= data.len() {
         if data[i] != 0xFF {
+            // JPEG マーカーは必ず 0xFF で始まる。
+            // SOS (0xFFDA) 以降はエントロピー符号化データが続くため
+            // マーカー形式ではなくなる。その時点で APP1 探索を打ち切る。
             break;
         }
         let marker = data[i + 1];

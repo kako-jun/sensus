@@ -309,6 +309,10 @@ enum RunError {
 
     #[error("{0}")]
     PortraitError(String),
+
+    /// --input が未指定で --mpo / --portrait も指定されていない
+    #[error("{0}")]
+    InputRequired(String),
 }
 
 fn main() -> ExitCode {
@@ -327,8 +331,16 @@ fn main() -> ExitCode {
             eprintln!("{msg}");
             ExitCode::FAILURE
         }
+        Err(err @ RunError::MpoRead { .. }) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
         Err(err @ RunError::PortraitRead { .. }) => {
             eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+        Err(RunError::InputRequired(msg)) => {
+            eprintln!("{msg}");
             ExitCode::FAILURE
         }
         Err(RunError::NotImplemented(msg)) => {
@@ -430,7 +442,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
     // --mpo なし・--portrait なし → --input が必須
     let input_path = cli.input.ok_or_else(|| {
-        RunError::MpoError(
+        RunError::InputRequired(
             "sensus: --input is required when --mpo and --portrait are not specified".to_string(),
         )
     })?;
