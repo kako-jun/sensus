@@ -5,7 +5,7 @@
 //! # 音声バッファ
 //!
 //! - [`AudioBuffer`] — `Vec<f32>` の PCM サンプル列（normalized, -1.0..=1.0）
-//! - サンプルはインターリーブ: ch0[0], ch1[0], ch0[1], ch1[0], ...
+//! - サンプルはインターリーブ: ch0[0], ch1[0], ch0[1], ch1[1], ...
 //! - `channels` が 1 のときはモノラル
 //!
 //! # 周波数フィルタ
@@ -95,7 +95,7 @@ pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
     // バイリニア変換による Butterworth 2 次 LP
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
-    let q = 0.7071_f32; // Butterworth Q = 1/sqrt(2)
+    let q = std::f32::consts::FRAC_1_SQRT_2; // Butterworth Q = 1/sqrt(2)
     let alpha = w0.sin() / (2.0 * q);
     let cos_w0 = w0.cos();
 
@@ -122,10 +122,10 @@ pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = sample_rate as f32;
+    let fs = if sample_rate == 0 { 44100.0 } else { sample_rate as f32 };
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
-    let q = 0.7071_f32;
+    let q = std::f32::consts::FRAC_1_SQRT_2;
     let alpha = w0.sin() / (2.0 * q);
     let cos_w0 = w0.cos();
 
@@ -153,7 +153,7 @@ pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `bandwidth_hz`: 帯域幅 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn band_reject_biquad(center_hz: f32, bandwidth_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = sample_rate as f32;
+    let fs = if sample_rate == 0 { 44100.0 } else { sample_rate as f32 };
     let f0 = center_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let bw = bandwidth_hz.max(1.0);
@@ -195,6 +195,7 @@ fn apply_biquad_all_channels(buf: &AudioBuffer, make_filter: impl Fn() -> Biquad
     let mut out = buf.samples.clone();
     let frames = buf.frames();
     for frame in 0..frames {
+        #[allow(clippy::needless_range_loop)] // idx = frame * ch + c のインターリーブ計算が必要
         for c in 0..ch {
             let idx = frame * ch + c;
             out[idx] = filters[c].process(buf.samples[idx]);
