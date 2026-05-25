@@ -13,12 +13,15 @@
 
 use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
-    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms, hyperopia_uniforms,
-    myopia_uniforms, presbyopia_uniforms, protanopia_uniforms, tritanopia_uniforms,
+    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms,
+    glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
+    macular_degeneration_uniforms, myopia_uniforms, presbyopia_uniforms,
+    protanopia_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, deuteranopia, eye_strain, hyperopia, myopia, presbyopia,
-    protanopia, tritanopia,
+    achromatopsia, astigmatism, deuteranopia, eye_strain, glaucoma, hemianopia,
+    hyperopia, macular_degeneration, myopia, presbyopia, protanopia, tritanopia,
+    tunnel_vision,
 };
 
 // ---------------------------------------------------------------------------
@@ -570,4 +573,217 @@ fn shader_equiv_strength_zero_no_change() {
             "{name} strength=0.0: output differs from input by {err}/255 > 1"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 視野欠損フィルタシェーダシミュレータ
+// ---------------------------------------------------------------------------
+
+/// glaucoma.frag / tunnel_vision.frag の計算を Rust で再現する。
+/// `inner_r`, `outer_r` を外から渡すことで両方に使用する。
+fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let cx = w as f32 * 0.5;
+    let cy = h as f32 * 0.5;
+    // UV 空間でのコーナー距離: sqrt(0.5^2+0.5^2) = 0.7071...
+    let corner_dist = 0.7071067811865476_f32;
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            // UV 座標 (pixel center)
+            let uv_x = (x as f32 + 0.5) / w as f32 - 0.5;
+            let uv_y = (y as f32 + 0.5) / h as f32 - 0.5;
+            let d = (uv_x * uv_x + uv_y * uv_y).sqrt() / corner_dist;
+
+            let t = ((d - inner_r) / (outer_r - inner_r)).clamp(0.0, 1.0);
+            let fade = t * t * (3.0 - 2.0 * t);
+            let mul = 1.0 - strength * fade;
+
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
+/// macular_degeneration.frag の計算を Rust で再現する。
+fn sim_macular_degeneration(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let corner_dist = 0.7071067811865476_f32;
+    let inner_r = strength * 0.25;
+    let outer_r = strength * 0.4;
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let uv_x = (x as f32 + 0.5) / w as f32 - 0.5;
+            let uv_y = (y as f32 + 0.5) / h as f32 - 0.5;
+            let d = (uv_x * uv_x + uv_y * uv_y).sqrt() / corner_dist;
+
+            let range = (outer_r - inner_r).max(1e-5);
+            let u_t = ((d - inner_r) / range).clamp(0.0, 1.0);
+            let t = 1.0 - u_t * u_t * (3.0 - 2.0 * u_t);
+
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+
+            let lum = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+            let darkened = lum * (1.0 - strength * 0.95);
+            let out_r = (rl + (darkened - rl) * t).clamp(0.0, 1.0);
+            let out_g = (gl + (darkened - gl) * t).clamp(0.0, 1.0);
+            let out_b = (bl + (darkened - bl) * t).clamp(0.0, 1.0);
+
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(out_r) * 255.0).round() as u8,
+                (linear_to_srgb(out_g) * 255.0).round() as u8,
+                (linear_to_srgb(out_b) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
+/// hemianopia.frag の計算を Rust で再現する。
+/// `side_glsl`: 1.0=右側欠損, -1.0=左側欠損（GLSL uSide 値）
+fn sim_hemianopia(img: &RgbaImage, strength: f32, side_glsl: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let w_f = w as f32;
+    let blur_w = w_f * 0.02; // vision.rs と同じ pixel 単位
+    let split_x = w_f * 0.5;
+    // GLSL uSide: 1.0=右欠損, -1.0=左欠損 → vision.rs side: 1.0=右欠損, 0.0=左欠損
+    let side = (side_glsl + 1.0) * 0.5; // [-1,1] → [0,1]
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let xf = x as f32;
+
+            let left_fade = if xf < split_x - blur_w {
+                1.0_f32
+            } else if xf > split_x + blur_w {
+                0.0_f32
+            } else {
+                let t = (xf - (split_x - blur_w)) / (2.0 * blur_w);
+                1.0 - t * t * (3.0 - 2.0 * t)
+            };
+
+            // vision.rs: fade = lerp(left_fade, 1-left_fade, side)
+            let fade = left_fade + (1.0 - left_fade - left_fade) * side;
+            let mul = 1.0 - fade * strength;
+
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// 視野欠損フィルタ等価性テスト（PSNR ≥ 30 dB）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_glaucoma_strength_1_0_psnr() {
+    let img = gradient_32();
+    let u = glaucoma_uniforms(1.0);
+    let inner_r = 1.0 - u.strength * 0.7;
+    let outer_r = (inner_r + 0.2_f32).min(1.0);
+    let cpu_out = glaucoma(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "glaucoma strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_glaucoma_strength_0_5_psnr() {
+    let img = color_chart_32();
+    let u = glaucoma_uniforms(0.5);
+    let inner_r = 1.0 - u.strength * 0.7;
+    let outer_r = (inner_r + 0.2_f32).min(1.0);
+    let cpu_out = glaucoma(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "glaucoma strength=0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_macular_degeneration_strength_1_0_psnr() {
+    let img = gradient_32();
+    let u = macular_degeneration_uniforms(1.0);
+    let cpu_out = macular_degeneration(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "macular_degeneration strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_macular_degeneration_strength_0_5_psnr() {
+    let img = color_chart_32();
+    let u = macular_degeneration_uniforms(0.5);
+    let cpu_out = macular_degeneration(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "macular_degeneration strength=0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_hemianopia_right_strength_1_0_psnr() {
+    let img = gradient_32();
+    let u = hemianopia_uniforms(1.0, 1.0); // 右側欠損
+    let cpu_out = hemianopia(img.clone(), 1.0, 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_hemianopia(&img.to_rgba8(), u.strength, u.side);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "hemianopia right strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_hemianopia_left_strength_1_0_psnr() {
+    let img = gradient_32();
+    let u = hemianopia_uniforms(1.0, -1.0); // 左側欠損
+    // vision::hemianopia は side=0.0 で左欠損
+    let cpu_out = hemianopia(img.clone(), 1.0, 0.0).unwrap().to_rgba8();
+    let gpu_sim = sim_hemianopia(&img.to_rgba8(), u.strength, u.side);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "hemianopia left strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_tunnel_vision_strength_1_0_psnr() {
+    let img = gradient_32();
+    let u = tunnel_vision_uniforms(1.0);
+    let inner_r = (1.0 - u.strength) * 0.5;
+    let outer_r = (inner_r + 0.05_f32).min(1.0);
+    let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "tunnel_vision strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
+    let img = color_chart_32();
+    let u = tunnel_vision_uniforms(0.5);
+    let inner_r = (1.0 - u.strength) * 0.5;
+    let outer_r = (inner_r + 0.05_f32).min(1.0);
+    let cpu_out = tunnel_vision(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "tunnel_vision strength=0.5: PSNR {db:.1} dB < 30 dB");
 }
