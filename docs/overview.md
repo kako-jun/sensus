@@ -399,8 +399,9 @@ At `strength = 1.0` only the single central pixel escapes darkening.
 `cataract`, `photophobia`, `nyctalopia`, and `floaters` simulate
 aberrations of the eye's optical medium, all in linear sRGB space.
 
-- **cataract**: per-channel attenuation (`R×0.7, G×0.7, B×0.4`) for
-  yellowing, plus 8×8 block-hash noise for scatter haze.
+- **cataract**: yellowing via Pokorny et al. (1987) / van Norren & Vos (1974)
+  chromatic matrix applied in linear sRGB, plus 32×32 bilinear-interpolated
+  scatter noise (LCG-based, spatially correlated).
   ⚠️ 即受診 — 急激な視力低下・視野変化は眼科受診推奨。
 - **photophobia**: extracts pixels above BT.709 luminance threshold 0.5,
   applies disk blur, and adds the result back as bloom.

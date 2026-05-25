@@ -1048,27 +1048,18 @@ fn sim_detail_loss_shader(img: &RgbaImage, strength: f32) -> RgbaImage {
             let tile_ox = (px_x / tile_size).floor() * tile_size;
             let tile_oy = (px_y / tile_size).floor() * tile_size;
             let center_px = (tile_ox + tile_size * 0.5, tile_oy + tile_size * 0.5);
-            // 3×3 グリッドサンプル
-            let mut acc = [0.0_f32; 3];
-            let count = 9.0_f32;
-            for dy in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    let sx = ((center_px.0 + dx as f32 * tile_size / 3.0).clamp(0.0, (w - 1) as f32)) as u32;
-                    let sy = ((center_px.1 + dy as f32 * tile_size / 3.0).clamp(0.0, (h - 1) as f32)) as u32;
-                    let s = img.get_pixel(sx, sy);
-                    acc[0] += srgb_to_linear(s[0] as f32 / 255.0);
-                    acc[1] += srgb_to_linear(s[1] as f32 / 255.0);
-                    acc[2] += srgb_to_linear(s[2] as f32 / 255.0);
-                }
-            }
-            let avg_r = linear_to_srgb((acc[0] / count).clamp(0.0, 1.0));
-            let avg_g = linear_to_srgb((acc[1] / count).clamp(0.0, 1.0));
-            let avg_b = linear_to_srgb((acc[2] / count).clamp(0.0, 1.0));
+            // 中心1点サンプリング（M-2: CPU/GPU 統一）
+            let sx = (center_px.0.clamp(0.0, (w - 1) as f32)) as u32;
+            let sy = (center_px.1.clamp(0.0, (h - 1) as f32)) as u32;
+            let s = img.get_pixel(sx, sy);
+            let lin_r = srgb_to_linear(s[0] as f32 / 255.0);
+            let lin_g = srgb_to_linear(s[1] as f32 / 255.0);
+            let lin_b = srgb_to_linear(s[2] as f32 / 255.0);
             let orig_alpha = img.get_pixel(x, y)[3];
             out.put_pixel(x, y, image::Rgba([
-                (avg_r * 255.0).round() as u8,
-                (avg_g * 255.0).round() as u8,
-                (avg_b * 255.0).round() as u8,
+                (linear_to_srgb(lin_r.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(lin_g.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(lin_b.clamp(0.0, 1.0)) * 255.0).round() as u8,
                 orig_alpha,
             ]));
         }
@@ -1097,6 +1088,17 @@ fn shader_equiv_detail_loss_cpu_gpu_psnr() {
     assert!(db >= 30.0, "detail_loss CPU/GPU strength=0.5: PSNR {db:.1} dB < 30 dB");
 }
 
+/// [M-2] detail_loss strength=1.0: CPU と GPU シミュレータが一致（PSNR ≥ 30 dB）
+#[test]
+fn shader_equiv_detail_loss_strength_1_psnr() {
+    use sensus_core::vision::detail_loss;
+    let img = color_chart_32();
+    let cpu_out = detail_loss(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader(&img.to_rgba8(), 1.0);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "detail_loss CPU/GPU strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
 /// teichopsia コンパイルテスト + strength=0 で元画像と近い（PSNR ≥ 25 dB）
 #[test]
 fn shader_equiv_teichopsia_strength_0_near_identity() {
@@ -1113,6 +1115,62 @@ fn shader_teichopsia_glsl_compiles() {
     use sensus_core::shaders::teichopsia_glsl;
     // コンパイルテスト: glsl ソースが空でないこと
     assert!(!teichopsia_glsl().is_empty());
+}
+
+/// [M-1] teichopsia strength=0.5: CPU と GLSL シミュレータが近い（PSNR ≥ 25 dB）
+/// GLSL は y / uAspect 方式、CPU も同じ方式に揃えたことを確認する。
+fn sim_teichopsia(img: &RgbaImage, strength: f32) -> RgbaImage {
+    use std::f32::consts::PI;
+    let (w, h) = img.dimensions();
+    let aspect = w as f32 / h as f32;
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+
+            let uv_x = (x as f32 / w as f32) - 0.5;
+            let uv_y = (y as f32 / h as f32) - 0.5;
+            // GLSL: vec2 uvA = vec2(uv.x, uv.y / uAspect)
+            let ua_x = uv_x;
+            let ua_y = uv_y / aspect;
+            let dist = (ua_x * ua_x + ua_y * ua_y).sqrt();
+
+            let (nr, ng, nb) = if dist < 0.2 {
+                let dark = 1.0 - strength * 0.7 * (1.0 - dist / 0.2);
+                (rl * dark, gl * dark, bl * dark)
+            } else if dist <= 0.5 {
+                let angle = ua_y.atan2(ua_x);
+                let saw = (angle / PI * 8.0).fract();
+                let ring_t = (dist - 0.2) / 0.3;
+                let fade = (ring_t * (1.0 - ring_t) * 4.0).clamp(0.0, 1.0);
+                let brightness = saw * strength * fade * 0.6;
+                ((rl + brightness).clamp(0.0, 1.0), (gl + brightness).clamp(0.0, 1.0), (bl + brightness).clamp(0.0, 1.0))
+            } else {
+                (rl, gl, bl)
+            };
+
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(nr.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(ng.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(nb.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_teichopsia_strength_05_psnr() {
+    use sensus_core::vision::teichopsia;
+    let img = color_chart_32();
+    let cpu_out = teichopsia(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_teichopsia(&img.to_rgba8(), 0.5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 25.0, "teichopsia CPU/GPU strength=0.5: PSNR {db:.1} dB < 25 dB");
 }
 
 /// flickering_stars: コンパイルテスト（ランダム描画なので等価テストは行わない）

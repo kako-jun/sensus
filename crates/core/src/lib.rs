@@ -56,6 +56,8 @@ pub enum Filter {
     // vision (Phase 3: light / transparency)
     Cataract,
     /// 飛蚊症。`seed`: ランダムシード, `density`: blob 密度, `size`: blob 相対サイズ係数
+    ///
+    /// `size`: 将来の blob_radius_ratio に使用予定。現在は無視される（0.0 を渡すこと）。
     Floaters { seed: u64, density: f32, size: f32 },
     Photophobia,
     NightBlindness,

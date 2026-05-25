@@ -1,8 +1,7 @@
 #version 300 es
-// M-2 実装方針: GLSL側を9点平均（3×3カーネル）に変更してCPU実装（タイル内全画素平均）に近似させる。
-// 厳密には CPU は全タイル内ピクセル平均だが、GLSL は GPU loop 制限のため
-// タイル中心を含む 3×3 グリッドサンプル平均で近似する。
-// 小さいタイル（< 3px）では中心1点と同じになる。PSNR ≥ 30 dB を満たす。
+// M-2 実装方針: GLSL・CPU ともに「タイル中心1点サンプリング（pixelation）」に統一。
+// CPU の全ピクセル平均から中心点参照に変更し、GPU と厳密に一致させる。
+// これにより CPU/GPU の PSNR ≥ 30 dB が保証される。
 precision mediump float;
 uniform sampler2D uTexture;
 uniform float uStrength;
@@ -23,24 +22,14 @@ void main() {
     // tile_size = (strength * 20.0).max(1.0)
     float tile_size = max(uStrength * 20.0, 1.0);
 
-    // UV をタイル境界にスナップ（タイル中心）
+    // UV をタイル境界にスナップし、タイル中心1点をサンプリング
     vec2 px = vTexCoord * uResolution;
     vec2 tile_origin = floor(px / tile_size) * tile_size;
     vec2 center_px = tile_origin + tile_size * 0.5;
+    vec2 center_uv = clamp(center_px / uResolution, 0.0, 1.0);
 
-    // 3×3 グリッドサンプルで平均を計算（CPU タイル平均の近似）
-    vec3 acc = vec3(0.0);
-    float count = 0.0;
-    for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-            vec2 sample_px = center_px + vec2(float(dx), float(dy)) * (tile_size / 3.0);
-            vec2 sample_uv = clamp(sample_px / uResolution, 0.0, 1.0);
-            vec4 s = texture(uTexture, sample_uv);
-            acc += vec3(srgb_to_linear(s.r), srgb_to_linear(s.g), srgb_to_linear(s.b));
-            count += 1.0;
-        }
-    }
-    vec3 avg_lin = acc / count;
-    vec4 orig = texture(uTexture, clamp(center_px / uResolution, 0.0, 1.0));
-    fragColor = vec4(linear_to_srgb(avg_lin.r), linear_to_srgb(avg_lin.g), linear_to_srgb(avg_lin.b), orig.a);
+    vec4 s = texture(uTexture, center_uv);
+    vec3 lin = vec3(srgb_to_linear(s.r), srgb_to_linear(s.g), srgb_to_linear(s.b));
+    vec4 orig = texture(uTexture, vTexCoord);
+    fragColor = vec4(linear_to_srgb(lin.r), linear_to_srgb(lin.g), linear_to_srgb(lin.b), orig.a);
 }
