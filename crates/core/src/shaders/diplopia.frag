@@ -22,7 +22,7 @@ void main() {
     vec2 ghostUV = clamp(vTexCoord - vec2(uOffsetX, uOffsetY), 0.0, 1.0);
     vec4 ghost = texture(uTexture, ghostUV);
 
-    float alpha = uGhostStrength * uStrength;
+    float alpha = clamp(uGhostStrength * uStrength, 0.0, 1.0);
 
     vec3 o = vec3(srgbToLinear(orig.r), srgbToLinear(orig.g), srgbToLinear(orig.b));
     vec3 g = vec3(srgbToLinear(ghost.r), srgbToLinear(ghost.g), srgbToLinear(ghost.b));

@@ -4000,8 +4000,8 @@ mod tests {
         // linear sRGB 空間で 0.5 blendすると sRGB変換後は約 188 になる（ガンマ補正の影響）
         // 単純な加算合成なら 255 になっていたが、alpha blend では中間値に抑えられる
         assert!(
-            val >= 100 && val <= 210,
-            "half ghost_strength alpha blend should produce intermediate value (not 0 or 255), got {val}"
+            val >= 183 && val <= 193,
+            "half ghost_strength alpha blend should produce ≈188 (sRGB of linear 0.5), got {val}"
         );
         // また、orig(0) と ghost(255) の単純平均 127 より大きいはず（linear→sRGB変換で増加）
         assert!(val > 50, "blend result should be clearly above black, got {val}");
@@ -4027,10 +4027,14 @@ mod tests {
 
     #[test]
     fn diplopia_output_never_exceeds_max() {
-        // pixel clamp: 全白画像で strength=1, ghost_strength=1 → 全ch が 0..=255 に収まること
-        let size = 16_u32;
-        let img = RgbaImage::from_pixel(size, size, Rgba([255, 255, 255, 255]));
-        let out = diplopia(DynamicImage::ImageRgba8(img), 1.0, 0.1, 0.0, 1.0).unwrap();
+        // pixel clamp: グラデーション画像で strength=0.7, ghost_strength=0.8 → 全ch が 0..=255 に収まること
+        // 白飛びしないことを確認する (diplopia_white_on_white_no_overflow とは異なるシナリオ)
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 8) as u8, (y * 8) as u8, 200, 255]);
+        }
+        let out = diplopia(DynamicImage::ImageRgba8(img), 0.7, 0.2, 0.1, 0.8).unwrap();
         let out_rgba = out.to_rgba8();
         for px in out_rgba.pixels() {
             // u8 は常に 0..=255 だが、alpha blend で overflow しないことを確認
