@@ -1324,3 +1324,40 @@ fn shader_equiv_cataract_strength_zero_psnr() {
     // シェーダ文字列が空でないこともチェック
     assert!(!cataract_glsl().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// S-2: apply(Filter::DetailLoss) 経由のテスト
+// ---------------------------------------------------------------------------
+
+#[test]
+fn apply_detail_loss_strength_0_identity() {
+    use sensus_core::{apply, Filter};
+    let img = gradient_32();
+    // cell_size=1 のとき早期リターンで identity
+    let out = apply(Filter::DetailLoss { cell_size: 1 }, img.clone(), 0.0).unwrap().to_rgba8();
+    let orig = img.to_rgba8();
+    let db = psnr(&out, &orig);
+    assert!(db >= 60.0, "apply(DetailLoss, cell_size=1) should be identity: PSNR {db:.1} dB < 60 dB");
+}
+
+#[test]
+fn apply_detail_loss_strength_1_runs_without_crash() {
+    use sensus_core::{apply, Filter};
+    let img = color_chart_32();
+    let out = apply(Filter::DetailLoss { cell_size: 20 }, img.clone(), 1.0).unwrap().to_rgba8();
+    // 出力が入力と異なること（詳細消失フィルタが適用されている）
+    assert_ne!(out.as_raw(), img.to_rgba8().as_raw(), "apply(DetailLoss) strength=1 should change image");
+}
+
+// ---------------------------------------------------------------------------
+// S-3: cataract strength=1.0 のクラッシュ/動作確認テスト
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_cataract_strength_1_runs_without_crash() {
+    use sensus_core::vision::cataract;
+    let img = gradient_32();
+    let out = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
+    // 出力が入力と異なること（白内障フィルタが適用されている）
+    assert_ne!(out.as_raw(), img.to_rgba8().as_raw(), "cataract strength=1 should change image");
+}

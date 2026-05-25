@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix: review 指摘全件修正 round4（must×2 / should×5 / nit×4）**:
+- **fix: review 指摘全件修正 round5（should×2 / nit×4）**:
+  - [S-1] `eye_strain.frag` / `dry_eye.frag` の uniform・input・output 命名を camelCase に統一（`u_image`→`uTexture`, `u_strength`→`uStrength`, `v_texcoord`→`vTexCoord`, `out_color`→`fragColor`）。関数名も `srgbToLinear`/`linearToSrgb` に統一
+  - [S-2] `apply(Filter::DetailLoss)` 経由のテスト追加（`cell_size=1` で identity、`cell_size=20` で変換確認）
+  - [S-3] `cataract` strength=1.0 のクラッシュ/動作確認テスト追加
+  - [N-1] `detail_loss.frag` の設計コメントを過去の経緯説明から仕様説明に清書き
+  - [N-2] `detail_loss_with_cell_size` の `_strength` 引数に `#[allow(unused_variables)]` 追加
+  - [N-3] `floaters.frag` に sRGB/linear 差異（GPU 版は sRGB 空間でブレンド、CPU は linear sRGB）のコメントを追記
+
+
   - [M-1] `cataract_uniforms` に `seed: u32` フィールドを追加。`CataractUniforms` 構造体を新設し、`cataract_uniforms(strength, seed: u64)` シグネチャに変更。これにより `cataract.frag` の `uniform uint uSeed` に正しく seed を渡せるようになった
   - [M-2] `cataract.frag` の LCG 定数を CPU 実装（Knuth 64bit LCG）に統一。旧: Numerical Recipes 定数（`* 1664525u + 1013904223u`）→ 新: Knuth 定数の下位 32bit（`* 0x4c957f2du + 0xf767814fu`）。`shader_equiv_cataract_strength_zero_psnr` テスト追加
   - [S-1] `vestibular_neuritis_uniforms` 付近（`shaders.rs` の `VestibularNeuritisUniforms` 構造体と `vision.rs` の `vestibular_neuritis` 関数）に CPU/GLSL シフト定義の対応関係コメントを追加
