@@ -619,15 +619,26 @@ pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<Dy
 /// 白内障（Cataract）シミュレーション。
 ///
 /// linear sRGB 空間で黄変マトリクスを適用してコントラストを圧縮し、
-/// その後に局所白濁ノイズ（haze）を重ねる。
+/// その後に空間相関を持つ LCG ベースの Simplex-like ノイズで局所白濁を重ねる。
 ///
 /// ### 黄変マトリクス
+///
+/// 以下の係数は Pokorny et al. (1987) "Aging of the human lens" *Applied Optics* 26(8):
+/// 1437–1440 および van Norren & Vos (1974) "Spectral transmission of the human ocular
+/// media" *Vision Research* 14(11): 1237–1244 に基づく水晶体黄変の近似。
+///
 /// ```text
 /// R' = R * 1.00 + G * 0.05 + B * (-0.05)
 /// G' = R * 0.02 + G * 1.00 + B * (-0.02)
 /// B' = R * 0.00 + G * 0.00 + B *  0.85
 /// ```
 /// strength でブレンド: `final = orig * (1-s) + yellowed * s`
+///
+/// ### 散乱ノイズ（Simplex-like LCG ノイズ）
+///
+/// 旧実装の 8×8 矩形ブロックノイズを空間相関を持つ格子補間ノイズに置き換え。
+/// 各格子頂点に LCG シードを割り当て、4 頂点を bilinear 補間することで
+/// 連続的な滑らかな白濁パターンを生成する。
 ///
 /// - `strength`: 0.0 = 元画像, 1.0 = 強度白内障
 /// - `seed`: 白濁ノイズのランダムシード
@@ -644,26 +655,57 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
 
     // 白濁ノイズの最大ブレンド量
     const WHITE_BLEND_MAX: f32 = 0.4;
-    // 8x8 ブロック単位でノイズを決定（白内障の白濁は粗い濁り）
-    const BLOCK_SIZE: u32 = 8;
+    // 格子セルサイズ（旧 BLOCK_SIZE=8 より大きい 32px で空間相関を確保）
+    const CELL_SIZE: u32 = 32;
 
-    // ブロックノイズ値を事前計算
-    let block_cols = width.div_ceil(BLOCK_SIZE);
-    let block_rows = height.div_ceil(BLOCK_SIZE);
-    let mut block_noise: Vec<f32> =
-        Vec::with_capacity((block_cols * block_rows) as usize);
-    for by in 0..block_rows {
-        for bx in 0..block_cols {
-            // ハッシュで擬似ランダム値を生成
+    // 格子頂点数（+1 は境界含むため）
+    let grid_cols = width.div_ceil(CELL_SIZE) + 1;
+    let grid_rows = height.div_ceil(CELL_SIZE) + 1;
+
+    // 各格子頂点の LCG ノイズ値を事前計算
+    let mut grid_noise: Vec<f32> = Vec::with_capacity((grid_cols * grid_rows) as usize);
+    for gy in 0..grid_rows {
+        for gx in 0..grid_cols {
+            // 頂点ごとに独立したシードを生成（空間ハッシュ）
             let h = seed
                 .wrapping_mul(0x9e3779b97f4a7c15)
-                .wrapping_add((bx as u64).wrapping_mul(0x517cc1b727220a95))
-                .wrapping_add((by as u64).wrapping_mul(0x6c62272e07bb0142));
-            // 上位ビットを使って 0.0..=1.0 に正規化
-            let n = (h >> 32) as f32 / u32::MAX as f32;
-            block_noise.push(n);
+                .wrapping_add((gx as u64).wrapping_mul(0x517cc1b727220a95))
+                .wrapping_add((gy as u64).wrapping_mul(0x6c62272e07bb0142));
+            // LCG を 1 ステップ回して上位 32bit を 0.0..=1.0 に正規化
+            let lcg = h.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let n = (lcg >> 32) as f32 / u32::MAX as f32;
+            grid_noise.push(n);
         }
     }
+
+    // 格子頂点の値を bilinear 補間する内部関数
+    let grid_sample = |px: u32, py: u32| -> f32 {
+        // セル内の位置（0.0..=1.0）
+        let fx = px as f32 / CELL_SIZE as f32;
+        let fy = py as f32 / CELL_SIZE as f32;
+        let gx0 = (px / CELL_SIZE) as usize;
+        let gy0 = (py / CELL_SIZE) as usize;
+        let gx1 = (gx0 + 1).min(grid_cols as usize - 1);
+        let gy1 = (gy0 + 1).min(grid_rows as usize - 1);
+        let tx = fx - gx0 as f32; // セル内 x 位置
+        let ty = fy - gy0 as f32; // セル内 y 位置
+
+        // 4 頂点の値を取得
+        let v00 = grid_noise[gy0 * grid_cols as usize + gx0];
+        let v10 = grid_noise[gy0 * grid_cols as usize + gx1];
+        let v01 = grid_noise[gy1 * grid_cols as usize + gx0];
+        let v11 = grid_noise[gy1 * grid_cols as usize + gx1];
+
+        // smoothstep で補間（線形補間より自然な見た目）
+        let stx = tx * tx * (3.0 - 2.0 * tx);
+        let sty = ty * ty * (3.0 - 2.0 * ty);
+
+        // bilinear 補間
+        v00 * (1.0 - stx) * (1.0 - sty)
+            + v10 * stx * (1.0 - sty)
+            + v01 * (1.0 - stx) * sty
+            + v11 * stx * sty
+    };
 
     for y in 0..height {
         for x in 0..width {
@@ -675,6 +717,7 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let b = srgb_to_linear(px[2] as f32 / 255.0);
 
             // 黄変マトリクスを適用
+            // 係数出典: Pokorny et al. (1987) / van Norren & Vos (1974)
             let yr = (r * 1.00 + g * 0.05 + b * (-0.05)).clamp(0.0, 1.0);
             let yg = (r * 0.02 + g * 1.00 + b * (-0.02)).clamp(0.0, 1.0);
             let yb = (r * 0.00 + g * 0.00 + b * 0.85).clamp(0.0, 1.0);
@@ -684,10 +727,8 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let ng = g + (yg - g) * strength;
             let nb = b + (yb - b) * strength;
 
-            // ブロックノイズによる白濁
-            let bx = (x / BLOCK_SIZE) as usize;
-            let by = (y / BLOCK_SIZE) as usize;
-            let noise = block_noise[by * block_cols as usize + bx];
+            // Simplex-like ノイズによる白濁（空間相関あり）
+            let noise = grid_sample(x, y);
             let white_blend = strength * noise * WHITE_BLEND_MAX;
 
             let fr = nr + (1.0 - nr) * white_blend;
