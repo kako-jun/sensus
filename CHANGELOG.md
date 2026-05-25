@@ -9,11 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **test: diplopia/nystagmus/starbursts の shader_equivalence テストを追加** (#49):
-  `shader_equiv_diplopia_strength_1_0_psnr`、`shader_equiv_diplopia_strength_0_is_passthrough_psnr`、
-  `shader_equiv_nystagmus_horizontal_psnr`、`shader_equiv_nystagmus_strength_0_psnr`、
-  `shader_equiv_starbursts_glsl_self_consistency_psnr`、`shader_equiv_starbursts_strength_0_psnr` の 6 テストを追加。
-  diplopia/nystagmus は PSNR ≥ 30 dB、starbursts は許容差広めの PSNR ≥ 25 dB で判定。
+- **shader: photophobia/nyctalopia/cataract の GLSL シェーダ追加** (#47):
+  - `photophobia.frag` — 高輝度領域の bloom boost + `PhotophobiaUniforms`
+  - `nyctalopia.frag` — 暗化 + 脱色（CPU 実装と同一アルゴリズム）+ `NyctalopiaUniforms`
+  - `cataract.frag` — 黄変マトリクス + haze overlay（平均 noise=0.5 固定）+ `CataractUniforms`
+  - `shaders.rs` に `photophobia_glsl()` / `nyctalopia_glsl()` / `cataract_glsl()` と
+    各 `*_uniforms()` 関数を追加。
+
+- **test: photophobia/nyctalopia/cataract の shader_equivalence テストを追加** (#47):
+  `shader_equiv_photophobia_*`、`shader_equiv_nyctalopia_*`、`shader_equiv_cataract_*` の 6 テストを追加。
+  各フィルタ strength=0 / strength=1 で PSNR ≥ 30 dB を確認。
 
 ### Changed
 

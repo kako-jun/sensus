@@ -106,6 +106,21 @@ pub fn dry_eye_glsl() -> &'static str {
     include_str!("shaders/dry_eye.frag")
 }
 
+/// photophobia.frag の GLSL ES 3.00 ソースを返す。
+pub fn photophobia_glsl() -> &'static str {
+    include_str!("shaders/photophobia.frag")
+}
+
+/// nyctalopia.frag の GLSL ES 3.00 ソースを返す。
+pub fn nyctalopia_glsl() -> &'static str {
+    include_str!("shaders/nyctalopia.frag")
+}
+
+/// cataract.frag の GLSL ES 3.00 ソースを返す。
+pub fn cataract_glsl() -> &'static str {
+    include_str!("shaders/cataract.frag")
+}
+
 /// glaucoma.frag の GLSL ES 3.00 ソースを返す。
 pub fn glaucoma_glsl() -> &'static str {
     include_str!("shaders/glaucoma.frag")
@@ -371,6 +386,43 @@ pub fn tunnel_vision_uniforms(strength: f32, width: u32, height: u32) -> FieldOf
 /// `side`: 1.0=右側欠損, -1.0=左側欠損。
 pub fn hemianopia_uniforms(strength: f32, side: f32) -> HemianopiaUniforms {
     HemianopiaUniforms { strength, side }
+}
+
+// ---------------------------------------------------------------------------
+// photophobia / nyctalopia / cataract (#47)
+// ---------------------------------------------------------------------------
+
+/// photophobia フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct PhotophobiaUniforms {
+    pub strength: f32,
+}
+
+/// nyctalopia フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct NyctalopiaUniforms {
+    pub strength: f32,
+}
+
+/// cataract フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct CataractUniforms {
+    pub strength: f32,
+}
+
+/// photophobia の uniform を計算する。
+pub fn photophobia_uniforms(strength: f32) -> PhotophobiaUniforms {
+    PhotophobiaUniforms { strength }
+}
+
+/// nyctalopia の uniform を計算する。
+pub fn nyctalopia_uniforms(strength: f32) -> NyctalopiaUniforms {
+    NyctalopiaUniforms { strength }
+}
+
+/// cataract の uniform を計算する。
+pub fn cataract_uniforms(strength: f32) -> CataractUniforms {
+    CataractUniforms { strength }
 }
 
 // ---------------------------------------------------------------------------
