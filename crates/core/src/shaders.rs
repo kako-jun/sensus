@@ -356,6 +356,7 @@ pub struct NystagmusUniforms {
 pub struct StarburstsUniforms {
     pub strength: f32,
     pub threshold: f32,
+    pub dispersion: f32,
 }
 
 /// diplopia の uniform を計算する。
@@ -391,8 +392,8 @@ pub fn nystagmus_uniforms(
 }
 
 /// starbursts の uniform を計算する。
-pub fn starbursts_uniforms(strength: f32, threshold: f32) -> StarburstsUniforms {
-    StarburstsUniforms { strength, threshold }
+pub fn starbursts_uniforms(strength: f32, threshold: f32, dispersion: f32) -> StarburstsUniforms {
+    StarburstsUniforms { strength, threshold, dispersion }
 }
 
 /// 視野欠損（vignette 系）フィルタの uniform。

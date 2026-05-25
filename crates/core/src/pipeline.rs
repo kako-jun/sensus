@@ -40,6 +40,8 @@ pub struct FilterStep {
     pub ray_length_ratio: f32,
     /// starbursts 輝度閾値。デフォルト: 0.8
     pub threshold: f32,
+    /// starbursts 波長分散（虹色光芒）。デフォルト: 0.0（白）
+    pub dispersion: f32,
     /// metamorphopsia 空間周波数。デフォルト: 4.0
     pub meta_freq: f32,
     /// metamorphopsia LCG シード。デフォルト: 0
@@ -66,6 +68,7 @@ impl FilterStep {
             num_rays: 6,
             ray_length_ratio: 0.1,
             threshold: 0.8,
+            dispersion: 0.0,
             meta_freq: 4.0,
             meta_seed: 0,
         }
@@ -83,7 +86,7 @@ impl FilterStep {
             Filter::Hemianopia => vision::hemianopia(img, self.strength, self.side),
             Filter::Diplopia => vision::diplopia(img, self.strength, self.offset_x, self.offset_y, self.ghost_strength),
             Filter::Nystagmus => vision::nystagmus(img, self.strength, self.amplitude, self.direction_deg),
-            Filter::Starbursts => vision::starbursts(img, self.strength, self.num_rays, self.ray_length_ratio, self.threshold),
+            Filter::Starbursts => vision::starbursts(img, self.strength, self.num_rays, self.ray_length_ratio, self.threshold, self.dispersion),
             Filter::Metamorphopsia => vision::metamorphopsia(img, self.strength, self.meta_freq, self.meta_seed),
             Filter::FlickeringStars => vision::flickering_stars(img, self.strength, self.seed),
             f => crate::apply(f, img, self.strength),

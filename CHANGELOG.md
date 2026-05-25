@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vision: starbursts に波長分散（虹色光芒）オプション追加** (#67):
+  `starbursts()` シグネチャに `dispersion: f32` パラメータを追加。
+  `dispersion=0.0`（デフォルト）は既存の白い光芒と後方互換。
+  `dispersion=1.0` では各 ray の角度を色相に対応した HSL 虹色（S=1, L=0.5）で着色し additive blend する。
+  `pipeline.rs` の `FilterStep` に `dispersion` フィールドを追加（デフォルト: 0.0）。
+  `shaders.rs` の `StarburstsUniforms` に `dispersion` フィールドを追加し `starbursts_uniforms()` の引数を更新。
+  `starbursts.frag` に `uDispersion` uniform を追加し UV 角度ベースの虹色近似を実装。
+  テスト: `dispersion=0.0` → 既存テスト通過、`dispersion=1.0` → 非グレー（虹色）ピクセル生成確認。
+
 - **vision: Flickering Stars フィルタ追加** (#59):
   `flickering_stars(img, strength, seed)` を `vision.rs` に追加。
   LCG でランダムな光点を生成して additive blend する。光点数 = `(strength × 200.0) as usize`。

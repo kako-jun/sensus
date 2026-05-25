@@ -109,7 +109,7 @@ pub fn apply(
         Filter::VestibularNeuritis => vision::vestibular_neuritis(img, strength),
         Filter::Diplopia => vision::diplopia(img, strength, 0.02, 0.01, 0.7),
         Filter::Nystagmus => vision::nystagmus(img, strength, 0.03, 0.0),
-        Filter::Starbursts => vision::starbursts(img, strength, 6, 0.1, 0.8),
+        Filter::Starbursts => vision::starbursts(img, strength, 6, 0.1, 0.8, 0.0),
         Filter::EyeStrain => vision::eye_strain(img, strength),
         Filter::DryEye => vision::dry_eye(img, strength),
         Filter::Metamorphopsia => vision::metamorphopsia(img, strength, 4.0, 0),
