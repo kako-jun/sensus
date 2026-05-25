@@ -1745,6 +1745,143 @@ pub fn starbursts(
     Ok(DynamicImage::ImageRgba8(out))
 }
 
+// ---------------------------------------------------------------
+// Phase 4 (#36): eye fatigue — eye_strain / dry_eye
+// ---------------------------------------------------------------
+
+/// 眼精疲労（eye strain）シミュレーション。
+///
+/// - コントラスト圧縮: `v' = 0.5 + (v - 0.5) * (1.0 - strength * 0.15)`
+/// - 微小 disk blur（radius = strength * 1.5 px）
+/// - 周辺 vignette（軽め）
+///
+/// `strength = 0.0` は元画像と完全一致。
+pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if s == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+    let cx = w_f * 0.5;
+    let cy = h_f * 0.5;
+    let max_r = (cx * cx + cy * cy).sqrt();
+
+    // コントラスト圧縮係数
+    let contrast_factor = 1.0 - s * 0.15;
+
+    // Step 1: linear sRGB 空間でコントラスト圧縮 + vignette
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+    let mut compressed: Vec<[f32; 3]> = linear
+        .iter()
+        .enumerate()
+        .map(|(i, &[r, g, b])| {
+            let x = (i as u32 % width) as f32;
+            let y = (i as u32 / width) as f32;
+            let dx = x - cx;
+            let dy = y - cy;
+            let d_sq = (dx * dx + dy * dy) / (max_r * max_r);
+
+            // コントラスト圧縮（linear 空間で 0.5 中心に圧縮）
+            let cr = 0.5 + (r - 0.5) * contrast_factor;
+            let cg = 0.5 + (g - 0.5) * contrast_factor;
+            let cb = 0.5 + (b - 0.5) * contrast_factor;
+
+            // vignette（周辺を軽く暗化）
+            let vignette = 1.0 - s * 0.3 * d_sq.clamp(0.3, 1.2).powi(2).sqrt();
+
+            [
+                (cr * vignette).clamp(0.0, 1.0),
+                (cg * vignette).clamp(0.0, 1.0),
+                (cb * vignette).clamp(0.0, 1.0),
+            ]
+        })
+        .collect();
+
+    // Step 2: 微小 disk blur（radius = strength * 1.5 px、min 0.5 px で有効）
+    let blur_radius = s * 1.5;
+    if blur_radius >= MIN_BLUR_RADIUS_PX {
+        compressed = ellipse_blur(&compressed, width, height, blur_radius, blur_radius, 0.0);
+    }
+
+    let out = linear_planes_to_rgba(&compressed, &alpha, width, height);
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
+/// ドライアイ（dry eye）シミュレーション。
+///
+/// LCG（seed=42 固定）で生成したノイズマスクを基に、
+/// 32×32 タイルごとに異なる disk blur radius を適用する。
+///
+/// `strength = 0.0` は元画像と完全一致。
+pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if s == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+
+    const TILE_SIZE: u32 = 32;
+    const LCG_SEED: u64 = 42;
+    // LCG 定数（Numerical Recipes）
+    const LCG_A: u64 = 1664525;
+    const LCG_C: u64 = 1013904223;
+
+    // タイル数を計算
+    let tile_cols = width.div_ceil(TILE_SIZE);
+    let tile_rows = height.div_ceil(TILE_SIZE);
+
+    // LCG でタイルごとのノイズ値を生成
+    let mut noise_map: Vec<f32> = Vec::with_capacity((tile_cols * tile_rows) as usize);
+    let mut state = LCG_SEED;
+    for _ in 0..(tile_cols * tile_rows) {
+        state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
+        let n = (state >> 33) as f32 / (u32::MAX >> 1) as f32; // 0.0..=1.0
+        noise_map.push(n);
+    }
+
+    // 出力バッファを元画像で初期化
+    let mut out_linear = linear.clone();
+
+    // タイルごとに blur を適用して出力バッファに書き込む
+    for ty in 0..tile_rows {
+        for tx in 0..tile_cols {
+            let noise = noise_map[(ty * tile_cols + tx) as usize];
+            let blur_radius = noise * s * 3.0;
+            if blur_radius < MIN_BLUR_RADIUS_PX {
+                // blur なし: 元の値をそのままコピー（既に out_linear に入っている）
+                continue;
+            }
+
+            // タイル領域を blur した結果を全画像で計算して、タイル部分だけを採用する
+            let blurred = ellipse_blur(&linear, width, height, blur_radius, blur_radius, 0.0);
+
+            let x_start = tx * TILE_SIZE;
+            let y_start = ty * TILE_SIZE;
+            let x_end = ((tx + 1) * TILE_SIZE).min(width);
+            let y_end = ((ty + 1) * TILE_SIZE).min(height);
+
+            for y in y_start..y_end {
+                for x in x_start..x_end {
+                    let idx = (y * width + x) as usize;
+                    out_linear[idx] = blurred[idx];
+                }
+            }
+        }
+    }
+
+    let out = linear_planes_to_rgba(&out_linear, &alpha, width, height);
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3667,5 +3804,51 @@ mod tests {
             .unwrap_or(0);
         // strength=0 は early return するため byte-exact 一致するはず
         assert!(max_err == 0, "strength=0 should be byte-exact identity, max_err={max_err}");
+    }
+
+    #[test]
+    fn eye_strain_strength_zero_is_identity() {
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 7) as u8, (y * 7) as u8, 128, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = eye_strain(DynamicImage::ImageRgba8(img), 0.0).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        assert_eq!(orig, out_raw, "eye_strain strength=0 should be byte-exact identity");
+    }
+
+    #[test]
+    fn dry_eye_strength_zero_is_identity() {
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 7) as u8, (y * 7) as u8, 128, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = dry_eye(DynamicImage::ImageRgba8(img), 0.0).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        assert_eq!(orig, out_raw, "dry_eye strength=0 should be byte-exact identity");
+    }
+
+    #[test]
+    fn eye_strain_reduces_contrast() {
+        // 真っ白と真っ黒が混在する画像で strength=1 の分散が strength=0 より小さいことを確認
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, _y, px) in img.enumerate_pixels_mut() {
+            let v = if x < size / 2 { 0u8 } else { 255u8 };
+            *px = Rgba([v, v, v, 255]);
+        }
+        let out = eye_strain(DynamicImage::ImageRgba8(img), 1.0).unwrap();
+        let out_raw = out.to_rgba8();
+        // 最大値 - 最小値がコントラスト圧縮で小さくなっているはず
+        let min_r = out_raw.pixels().map(|p| p[0]).min().unwrap_or(0);
+        let max_r = out_raw.pixels().map(|p| p[0]).max().unwrap_or(255);
+        assert!(
+            (max_r as i32 - min_r as i32) < 255,
+            "eye_strain should reduce contrast: min={min_r} max={max_r}"
+        );
     }
 }

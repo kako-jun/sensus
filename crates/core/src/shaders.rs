@@ -96,6 +96,16 @@ pub fn starbursts_glsl() -> &'static str {
     include_str!("shaders/starbursts.frag")
 }
 
+/// eye_strain.frag の GLSL ES 3.00 ソースを返す。
+pub fn eye_strain_glsl() -> &'static str {
+    include_str!("shaders/eye_strain.frag")
+}
+
+/// dry_eye.frag の GLSL ES 3.00 ソースを返す。
+pub fn dry_eye_glsl() -> &'static str {
+    include_str!("shaders/dry_eye.frag")
+}
+
 // ---------------------------------------------------------------------------
 // uniform 構造体
 // ---------------------------------------------------------------------------

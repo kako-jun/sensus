@@ -42,6 +42,9 @@ enum Filter {
     Diplopia,
     Nystagmus,
     Starbursts,
+    // Phase 4: 眼精疲労・ドライアイ (Issue #36)
+    EyeStrain,
+    DryEye,
     // Phase N: 深度マップ対応距離依存ぼけ (Issue #19)
     MyopiaDepth,
     HyperopiaDepth,
@@ -88,6 +91,8 @@ impl Filter {
             Filter::Diplopia => CoreFilter::Diplopia,
             Filter::Nystagmus => CoreFilter::Nystagmus,
             Filter::Starbursts => CoreFilter::Starbursts,
+            Filter::EyeStrain => CoreFilter::EyeStrain,
+            Filter::DryEye => CoreFilter::DryEye,
             Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField => {
                 // depth フィルタは pipeline を通さないため、ここには来ない
                 unreachable!("depth filters must be handled separately")
