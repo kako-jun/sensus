@@ -12,6 +12,7 @@
 pub mod error;
 pub mod hearing;
 pub mod pipeline;
+pub mod shaders;
 pub mod vision;
 
 pub use error::Error;
