@@ -121,6 +121,28 @@ pub fn cataract_glsl() -> &'static str {
     include_str!("shaders/cataract.frag")
 }
 
+/// photophobia / nyctalopia / cataract の共通 uniform（strength のみ）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SimpleStrengthUniforms {
+    /// strength (0.0..=1.0)
+    pub strength: f32,
+}
+
+/// photophobia の uniform を返す。
+pub fn photophobia_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    SimpleStrengthUniforms { strength }
+}
+
+/// nyctalopia の uniform を返す。
+pub fn nyctalopia_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    SimpleStrengthUniforms { strength }
+}
+
+/// cataract の uniform を返す。
+pub fn cataract_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    SimpleStrengthUniforms { strength }
+}
+
 /// glaucoma.frag の GLSL ES 3.00 ソースを返す。
 pub fn glaucoma_glsl() -> &'static str {
     include_str!("shaders/glaucoma.frag")
