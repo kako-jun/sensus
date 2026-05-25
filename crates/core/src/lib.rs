@@ -23,11 +23,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// All sensory filters planned for sensus.
 ///
+/// v0.4.0 以降、一部バリアントはパラメータを直接 enum に埋め込む形式（案 A）。
+/// パラメータなしバリアントは `apply()` でデフォルト値を使用して適用される。
+///
 /// Implemented filters return their result via [`apply`]; variants whose
 /// implementation has not yet landed return [`Error::NotImplemented`].
 /// The enum lives in `sensus-core` so non-CLI consumers (GUI, library
 /// users) can refer to filters without pulling in clap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Filter {
     // vision (Phase 1: color vision deficiency)
     Protanopia,
@@ -39,16 +42,20 @@ pub enum Filter {
     // vision (Phase 2: focus / refraction)
     Myopia,
     Hyperopia,
-    Astigmatism,
+    /// 乱視。`axis_deg` はシャープ方向の経線角（医学的慣習）。デフォルト: 90°
+    Astigmatism { axis_deg: f32 },
     Presbyopia,
     // vision (Phase 3: visual field)
-    Glaucoma,
+    /// 緑内障。`mode` は [`vision::GlaucomaMode`] を参照。デフォルト: Vignette
+    Glaucoma { mode: vision::GlaucomaMode },
     MacularDegeneration,
-    Hemianopia,
+    /// 半盲。`side`: 0.0 = 左視野消失, 1.0 = 右視野消失
+    Hemianopia { side: f32 },
     TunnelVision,
     // vision (Phase 3: light / transparency)
     Cataract,
-    Floaters,
+    /// 飛蚊症。`seed`: ランダムシード, `density`: blob 密度, `size`: blob 相対サイズ係数
+    Floaters { seed: u64, density: f32, size: f32 },
     Photophobia,
     NightBlindness,
     // vision (Phase 4 / #9: balance / vertigo)
@@ -58,7 +65,8 @@ pub enum Filter {
     // vision (Phase 4 / #29: diplopia / nystagmus / starbursts)
     Diplopia,
     Nystagmus,
-    Starbursts,
+    /// 光芒。`num_rays`: 本数, `ray_length_ratio`: 長さ比, `threshold`: 輝度閾値, `dispersion`: 虹色度
+    Starbursts { num_rays: u32, ray_length_ratio: f32, threshold: f32, dispersion: f32 },
     // vision (Phase 4: eye fatigue / #36)
     EyeStrain,
     DryEye,
@@ -66,12 +74,12 @@ pub enum Filter {
     Metamorphopsia,
     // vision (Phase N / #56: contrast sensitivity)
     ContrastSensitivity,
-    // vision (Phase N / #57: detail loss)
-    DetailLoss,
+    /// ディテールロス（ピクセル化）。`cell_size`: タイルサイズ (px)
+    DetailLoss { cell_size: u32 },
     // vision (Phase N / #58: teichopsia)
     Teichopsia,
-    // vision (Phase N / #59: flickering stars)
-    FlickeringStars,
+    /// 閃輝暗点・光の星。`seed`: ランダムシード
+    FlickeringStars { seed: u64 },
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -79,8 +87,8 @@ pub enum Filter {
 /// Phase 1 (#2) で色覚特性 4 種、Phase 1+ (#3) で四色型色覚、
 /// Phase 2 (#4) で焦点・屈折 4 種、Phase 3 (#5/#6) で視野異常・光透明度を実装済み。
 ///
-/// `Astigmatism` は軸 90°（with-the-rule）の既定値で適用される。任意の軸を
-/// 指定したい場合は [`vision::astigmatism`] を直接呼ぶこと。
+/// パラメータ付きバリアントはそのパラメータを直接使用する。
+/// パラメータなしバリアントはデフォルト値を使用する。
 pub fn apply(
     filter: Filter,
     img: image::DynamicImage,
@@ -94,14 +102,18 @@ pub fn apply(
         Filter::Myopia => vision::myopia(img, strength),
         Filter::Hyperopia => vision::hyperopia(img, strength),
         Filter::Presbyopia => vision::presbyopia(img, strength),
-        Filter::Astigmatism => vision::astigmatism(img, strength, 90.0),
+        Filter::Astigmatism { axis_deg } => vision::astigmatism(img, strength, axis_deg),
         Filter::Cataract => vision::cataract(img, strength, 0),
         Filter::Photophobia => vision::photophobia(img, strength),
         Filter::NightBlindness => vision::nyctalopia(img, strength),
-        Filter::Floaters => vision::floaters(img, strength, 0.5, 0, 0.5, 0.5),
-        Filter::Glaucoma => vision::glaucoma(img, strength, vision::GlaucomaMode::Vignette),
+        Filter::Floaters { seed, density, size } => {
+            // size は blob サイズ係数として gaze_x/gaze_y の中央値と組み合わせる
+            let _ = size; // size フィールドは将来の blob_radius_ratio に使用予定; 現在は無視
+            vision::floaters(img, strength, density, seed, 0.5, 0.5)
+        }
+        Filter::Glaucoma { mode } => vision::glaucoma(img, strength, mode),
         Filter::MacularDegeneration => vision::macular_degeneration(img, strength),
-        Filter::Hemianopia => vision::hemianopia(img, strength, 0.0),
+        Filter::Hemianopia { side } => vision::hemianopia(img, strength, side),
         Filter::TunnelVision => vision::tunnel_vision(img, strength),
         Filter::Tetrachromacy => vision::tetrachromacy(img, strength),
         Filter::Vertigo => vision::vertigo(img, strength, 0.0),
@@ -109,14 +121,16 @@ pub fn apply(
         Filter::VestibularNeuritis => vision::vestibular_neuritis(img, strength),
         Filter::Diplopia => vision::diplopia(img, strength, 0.02, 0.01, 0.7),
         Filter::Nystagmus => vision::nystagmus(img, strength, 0.03, 0.0),
-        Filter::Starbursts => vision::starbursts(img, strength, 6, 0.1, 0.8, 0.0),
+        Filter::Starbursts { num_rays, ray_length_ratio, threshold, dispersion } => {
+            vision::starbursts(img, strength, num_rays, ray_length_ratio, threshold, dispersion)
+        }
         Filter::EyeStrain => vision::eye_strain(img, strength),
         Filter::DryEye => vision::dry_eye(img, strength),
         Filter::Metamorphopsia => vision::metamorphopsia(img, strength, 4.0, 0),
         Filter::ContrastSensitivity => vision::contrast_sensitivity(img, strength),
-        Filter::DetailLoss => vision::detail_loss(img, strength),
+        Filter::DetailLoss { cell_size } => vision::detail_loss_with_cell_size(img, strength, cell_size),
         Filter::Teichopsia => vision::teichopsia(img, strength),
-        Filter::FlickeringStars => vision::flickering_stars(img, strength, 0),
+        Filter::FlickeringStars { seed } => vision::flickering_stars(img, strength, seed),
     }
 }
 
