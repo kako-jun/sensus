@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-25
+
 ### Fixed
 
 - **fix: review 指摘全件修正 round5（should×2 / nit×4）**:
@@ -389,6 +391,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLAUDE.md` (Japanese, AI-facing internal notes). (#1)
 - MIT license. (#1)
 
+[0.4.0]: https://github.com/kako-jun/sensus/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kako-jun/sensus/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kako-jun/sensus/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kako-jun/sensus/releases/tag/v0.1.0
