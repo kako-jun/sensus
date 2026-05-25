@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **stereo: MPO stereo photography depth map generation** (#31):
+  `sensus_core::stereo` module with `split_mpo(data: &[u8])` and
+  `stereo_to_depth(left, right)`. `split_mpo` splits an MPO file into
+  left- and right-eye `DynamicImage` by scanning for the `FFD9 FFD8`
+  (JPEG EOI + SOI) boundary. `stereo_to_depth` computes a greyscale depth
+  map via block-matching SAD (`BLOCK_SIZE = 7`, `MAX_DISPARITY = 64`);
+  brighter pixels are closer. The depth map can be passed directly to
+  `depth_aware_blur`. CLI gains `--mpo <PATH>` for fully automated
+  MPO → depth → blur in a single command.
+
 - **vision: diplopia / nystagmus / starbursts** (#29): three new motion /
   visual-optics filters. `diplopia` alpha-blends a pixel-shifted ghost image
   (linear sRGB) to simulate double vision from strabismus or nerve palsy.
