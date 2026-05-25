@@ -118,9 +118,19 @@ let result = Pipeline::new()
 
 ## Auditory Processing Disorder (APD) (Issue #38)
 
-APD simulation is deferred to a later phase. It would be implemented in
-`sensus_core::hearing` alongside existing hearing filters and would simulate
-difficulty distinguishing speech in noisy environments.
+APD simulation is implemented in `sensus_core::hearing` as
+`auditory_processing_disorder(buf, strength)`. It approximates the
+difficulty of distinguishing speech in noisy environments through three
+stages:
+
+1. White-noise injection (LCG seed 42) proportional to `strength`.
+2. Weighted FIR smearing over adjacent 3 samples (temporal resolution
+   reduction).
+3. Gap-filling: silent intervals shorter than ~5 ms are bridged by
+   interpolation from surrounding samples.
+
+`strength = 0.0` is sample-exact identity; `strength = 1.0` is the full
+clinical effect.
 
 See [`roadmap.md`](roadmap.md) for the per-phase implementation plan.
 
@@ -471,12 +481,11 @@ and returns a buffer; no audio device I/O.
   channel count.
 - **`BiquadFilter`**: second-order IIR building block (Butterworth
   approximation) used by all hearing filters.
-- **10 hearing filters**: `hearing_loss`, `sudden_deafness`,
-  `noise_induced_loss` (volume/frequency), `tinnitus`, `diplacusis`,
-  `hyperacusis`, `amusia`, `presbycusis`, `recruitment`,
-  `temporary_threshold_shift` (quality/pitch), returned as processed
-  `AudioBuffer`. All are stateless over frames — callers supply a fresh
-  buffer per chunk.
+- **11 hearing filters**: `hearing_loss`, `sudden_hearing_loss`,
+  `noise_induced_hearing_loss`, `tinnitus`, `hyperacusis`, `paracusis`,
+  `amusia`, `dysmelodia`, `pitch_shift_semitones`, `diplacusis`,
+  `auditory_processing_disorder`, returned as processed `AudioBuffer`.
+  All are stateless over frames — callers supply a fresh buffer per chunk.
 - **3 vestibular–visual filters** added to `vision.rs`: `vertigo` (rotating
   radial warp), `bppv_rotation` (brief rotational jerk), `vestibular_neuritis`
   (sustained horizontal tilt). These are image-space effects; no audio I/O.

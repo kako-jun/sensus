@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **docs: overview.md の APD・hearing フィルタ名の乖離を修正** (#63):
+  APD セクションを「後回し」から「実装済み」に更新し、実装詳細（ノイズ注入・FIR スミア・gap 埋め）を記載。
+  hearing フィルタ一覧を実際の関数名（`hearing_loss`, `sudden_hearing_loss`, `noise_induced_hearing_loss`,
+  `tinnitus`, `hyperacusis`, `paracusis`, `amusia`, `dysmelodia`, `pitch_shift_semitones`,
+  `diplacusis`, `auditory_processing_disorder`）に修正し、フィルタ数を 10 → 11 に訂正。
+
 - **vision: depth_aware_blur をビン線形補間に変更** (#54):
   深度値を 8 段階ビンに量子化して不連続に切り替える方式を廃止し、隣接 2 ビンの blur 結果を線形補間する方式に変更。
   `t = frac(d * 7.0)` を補間係数として `out = blur[bin_floor] * (1-t) + blur[bin_ceil] * t` を適用し、ビン境界でのバンディングアーティファクトを除去。
