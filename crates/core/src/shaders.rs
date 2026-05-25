@@ -123,7 +123,9 @@ pub struct AstigmatismUniforms {
     pub strength: f32,
     /// ぼかし半径（ピクセル単位）
     pub radius_px: f32,
-    /// 軸角度（度数法）
+    /// **ぼかし方向**の軸角度（度数法）。
+    /// `astigmatism_uniforms()` が入力の「シャープ方向」から +90° した値を設定済み。
+    /// シェーダ (`astigmatism.frag`) の `uAxisDeg` に直接渡す。
     pub axis_deg: f32,
 }
 
@@ -192,14 +194,19 @@ pub fn presbyopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 /// astigmatism の uniform を計算する。
 ///
 /// `image_min_dim`: 画像の `min(width, height)`（ピクセル）。
-/// `axis_deg`: 軸角度（度数法。0°=水平, 90°=垂直）。
+/// `axis_deg`: **シャープ方向**の軸角度（度数法。0°=水平, 90°=垂直）。
+///   vision::astigmatism() と同じ規約で、**ぼかし方向 = axis_deg + 90°**。
+///   シェーダ (`astigmatism.frag`) の `uAxisDeg` uniform にはぼかし方向を渡す。
+///   呼び出し元は vision.rs と同じ「シャープ方向」で渡せばよい。
 pub fn astigmatism_uniforms(strength: f32, image_min_dim: u32, axis_deg: f32) -> AstigmatismUniforms {
     let radius_px =
         strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
+    // vision.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
+    let blur_axis_deg = axis_deg + 90.0;
     AstigmatismUniforms {
         strength,
         radius_px,
-        axis_deg,
+        axis_deg: blur_axis_deg,
     }
 }
 
@@ -304,14 +311,40 @@ mod tests {
     }
 
     #[test]
-    fn astigmatism_uniforms_preserves_axis() {
+    fn astigmatism_uniforms_blur_axis_is_sharp_plus_90() {
+        // vision.rs 規約: axis_deg はシャープ方向。ぼかし方向 = axis_deg + 90°
         let u = astigmatism_uniforms(1.0, 1000, 45.0);
-        assert_eq!(u.axis_deg, 45.0);
+        assert!((u.axis_deg - 135.0).abs() < 1e-4, "45° シャープ → 135° ぼかし");
+        let u2 = astigmatism_uniforms(1.0, 1000, 90.0);
+        assert!((u2.axis_deg - 180.0).abs() < 1e-4, "90° シャープ → 180° ぼかし");
     }
 
     #[test]
     fn astigmatism_uniforms_strength_zero_has_zero_radius() {
         let u = astigmatism_uniforms(0.0, 1000, 90.0);
         assert!(u.radius_px < 0.001);
+    }
+
+    #[test]
+    fn hyperopia_uniforms_strength_one_correct_radius() {
+        let u = hyperopia_uniforms(1.0, 800);
+        let expected = HYPEROPIA_MAX_RADIUS_RATIO * 800.0;
+        assert!((u.radius_px - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn presbyopia_uniforms_strength_one_correct_radius() {
+        let u = presbyopia_uniforms(1.0, 800);
+        let expected = PRESBYOPIA_MAX_RADIUS_RATIO * 800.0;
+        assert!((u.radius_px - expected).abs() < 1e-4);
+    }
+
+    #[test]
+    fn astigmatism_uniforms_radius_matches_formula() {
+        let s = 0.75_f32;
+        let dim = 800_u32;
+        let u = astigmatism_uniforms(s, dim, 0.0);
+        let expected = s * ASTIGMATISM_MAX_RADIUS_RATIO * 800.0;
+        assert!((u.radius_px - expected).abs() < 1e-4);
     }
 }
