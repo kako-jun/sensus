@@ -374,6 +374,48 @@ pub fn hemianopia_uniforms(strength: f32, side: f32) -> HemianopiaUniforms {
 }
 
 // ---------------------------------------------------------------------------
+// Metamorphopsia (#55)
+// ---------------------------------------------------------------------------
+
+/// metamorphopsia.frag の GLSL ソースコードを返す。
+pub fn metamorphopsia_glsl() -> &'static str {
+    include_str!("shaders/metamorphopsia.frag")
+}
+
+/// Metamorphopsia シェーダーの uniform 値。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetamorphopsiaUniforms {
+    /// 歪み強度（0.0..=1.0）
+    pub strength: f32,
+    /// 空間周波数（グリッド分割数）
+    pub freq: f32,
+    /// LCG シード（整数を f32 で渡す）
+    pub seed: f32,
+    /// テクセルサイズ (1/width, 1/height)
+    pub texel_size: [f32; 2],
+}
+
+/// metamorphopsia の uniform を計算する。
+///
+/// `freq`: 空間周波数（グリッド分割数）。
+/// `seed`: LCG シード。
+/// `width`, `height`: 画像サイズ（ピクセル）。
+pub fn metamorphopsia_uniforms(
+    strength: f32,
+    freq: f32,
+    seed: u64,
+    width: u32,
+    height: u32,
+) -> MetamorphopsiaUniforms {
+    MetamorphopsiaUniforms {
+        strength,
+        freq,
+        seed: seed as f32,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
+}
+
+// ---------------------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------------------
 

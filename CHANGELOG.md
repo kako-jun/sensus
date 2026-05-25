@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vision: Metamorphopsia（歪視）フィルタを追加** (#55):
+  LCG ベースの 2D グリッドノイズ変位マップで各ピクセルをリマップする `metamorphopsia()` 関数を実装。
+  `strength=0` は byte-exact identity、`strength=1` で最大 8px の変位。双線形補間 + edge clamp。
+  `Filter::Metamorphopsia` を enum に追加し、`apply()` / Pipeline の `apply()` に対応。
+  GLSL シェーダー `metamorphopsia.frag`（hash2D ベースの smooth noise）と `metamorphopsia_glsl()` / `MetamorphopsiaUniforms` / `metamorphopsia_uniforms()` を追加。
+
 - **shader: 視野欠損 4 種の GLSL ES 3.00 シェーダを追加** (#46):
   `glaucoma.frag`（周辺ビネット、smoothstep マスク）、`macular_degeneration.frag`（中心暗化、foveal smoothstep マスク）、`hemianopia.frag`（左右半側マスク）、`tunnel_vision.frag`（急峻なトンネルビネット）の 4 シェーダを `crates/core/src/shaders/` に追加。
   `shaders.rs` に `glaucoma_glsl()` / `macular_degeneration_glsl()` / `hemianopia_glsl()` / `tunnel_vision_glsl()` および対応する uniform 構造体・計算関数を追加。

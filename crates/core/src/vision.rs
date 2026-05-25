@@ -2018,6 +2018,136 @@ pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgba8(out))
 }
 
+// ---------------------------------------------------------------
+// Phase N (Issue #55): Metamorphopsia — 歪視フィルタ
+// ---------------------------------------------------------------
+
+/// 歪視（Metamorphopsia）シミュレーション。
+///
+/// 黄斑疾患（黄斑円孔・黄斑上膜・加齢黄斑変性など）で生じる格子状の歪み（Amsler grid
+/// 歪曲）を模擬する。LCG ベースのグリッドノイズで各ピクセルを変位座標からサンプリングする。
+///
+/// ## アルゴリズム
+///
+/// 画像を `1/freq` ピクセル単位の仮想グリッドに分割し、各グリッド頂点に
+/// LCG 擬似ランダムな変位ベクトル `(dx, dy)` を割り当てる。
+/// 各出力ピクセルについて、所属するグリッドセルの 4 頂点の変位を双線形補間し、
+/// その変位でサンプリング座標を移動して元画像をサンプリングする。
+/// エッジは clamp で処理する。
+///
+/// 変位量: `strength × MAX_DISPLACEMENT_PX`（最大 8 ピクセル）。
+/// `strength = 0.0` は identity（元画像と byte-exact 一致）。
+///
+/// # 引数
+/// - `img`: 入力画像
+/// - `strength`: 歪み強度（0.0..=1.0）
+/// - `freq`: 空間周波数（グリッドセルサイズ = `max(1, 画像短辺 / freq) px`）
+/// - `seed`: LCG シード（同じ seed なら同じ歪みパターン）
+pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    if s == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+
+    // 変位幅の最大値（ピクセル）
+    const MAX_DISPLACEMENT_PX: f32 = 8.0;
+    let max_disp = s * MAX_DISPLACEMENT_PX;
+
+    // グリッドセルサイズ（ピクセル単位）。freq が大きいほど細かいグリッド。
+    let min_dim = width.min(height) as f32;
+    let freq_clamped = freq.clamp(0.1, 1000.0);
+    let cell_size = (min_dim / freq_clamped).max(1.0);
+
+    // グリッド頂点数
+    let grid_w = (width as f32 / cell_size).ceil() as usize + 2;
+    let grid_h = (height as f32 / cell_size).ceil() as usize + 2;
+
+    // LCG 定数（Knuth / Numerical Recipes）
+    let lcg_step = |state: u64| -> u64 {
+        state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407)
+    };
+
+    // 各グリッド頂点の変位 (dx, dy) を LCG で生成する。
+    // シードは頂点座標とグローバルシードを混合して決定する（空間的再現性を確保）。
+    let grid_disp: Vec<(f32, f32)> = (0..grid_h)
+        .flat_map(|gy| (0..grid_w).map(move |gx| (gx, gy)))
+        .map(|(gx, gy)| {
+            // 頂点ごとに独立したシードを生成する。
+            // seed との混合で異なる grid_size でもシードが衝突しにくい。
+            let h0 = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let h1 = h0
+                .wrapping_add((gx as u64).wrapping_mul(0x9e3779b97f4a7c15))
+                .wrapping_add((gy as u64).wrapping_mul(0x6c62272e07bb0142));
+            // dx
+            let s1 = lcg_step(h1);
+            let dx_norm = (s1 >> 32) as f32 / u32::MAX as f32; // 0.0..=1.0
+            // dy
+            let s2 = lcg_step(s1);
+            let dy_norm = (s2 >> 32) as f32 / u32::MAX as f32;
+            // [-1, 1] に変換してから max_disp を掛ける
+            let dx = (dx_norm * 2.0 - 1.0) * max_disp;
+            let dy = (dy_norm * 2.0 - 1.0) * max_disp;
+            (dx, dy)
+        })
+        .collect();
+
+    let get_grid = |gx: usize, gy: usize| -> (f32, f32) {
+        let gx = gx.min(grid_w - 1);
+        let gy = gy.min(grid_h - 1);
+        grid_disp[gy * grid_w + gx]
+    };
+
+    // 各出力ピクセルについて変位後座標をサンプリングする。
+    let mut out = image::RgbaImage::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            // ピクセルがどのグリッドセルに属するか
+            let fx = x as f32 / cell_size;
+            let fy = y as f32 / cell_size;
+            let gx0 = fx.floor() as usize;
+            let gy0 = fy.floor() as usize;
+            let gx1 = gx0 + 1;
+            let gy1 = gy0 + 1;
+            let tx = fx - fx.floor(); // 0.0..=1.0 のセル内位置
+            let ty = fy - fy.floor();
+
+            // 4 頂点の変位を双線形補間
+            let (d00x, d00y) = get_grid(gx0, gy0);
+            let (d10x, d10y) = get_grid(gx1, gy0);
+            let (d01x, d01y) = get_grid(gx0, gy1);
+            let (d11x, d11y) = get_grid(gx1, gy1);
+
+            let disp_x = d00x * (1.0 - tx) * (1.0 - ty)
+                + d10x * tx * (1.0 - ty)
+                + d01x * (1.0 - tx) * ty
+                + d11x * tx * ty;
+            let disp_y = d00y * (1.0 - tx) * (1.0 - ty)
+                + d10y * tx * (1.0 - ty)
+                + d01y * (1.0 - tx) * ty
+                + d11y * tx * ty;
+
+            // サンプリング座標（clamp でエッジ処理）
+            let src_x = (x as f32 + disp_x)
+                .clamp(0.0, (width - 1) as f32);
+            let src_y = (y as f32 + disp_y)
+                .clamp(0.0, (height - 1) as f32);
+
+            let px = sample_bilinear(&rgba, src_x, src_y);
+            out.put_pixel(x, y, px);
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
 /// ドライアイ（dry eye）シミュレーション。
 ///
 /// LCG（seed=42 固定）で生成したノイズマスクを基に、
@@ -4425,4 +4555,80 @@ mod tests {
             "eye_strain should reduce contrast: min={min_r} max={max_r}"
         );
     }
+
+    // =================================================================
+    // Issue #55: Metamorphopsia（歪視）テスト
+    // =================================================================
+
+    #[test]
+    fn metamorphopsia_strength_zero_is_identity() {
+        // strength=0 → byte-exact identity（max_err ≤ 1 を許容するが実際は完全一致）
+        let size = 64_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig_raw = img.clone().into_raw();
+        let out = metamorphopsia(DynamicImage::ImageRgba8(img), 0.0, 4.0, 42).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        // strength=0 では byte-exact identity
+        assert_eq!(
+            orig_raw, out_raw,
+            "metamorphopsia strength=0 must be byte-exact identity"
+        );
+    }
+
+    #[test]
+    fn metamorphopsia_strength_one_changes_pixels() {
+        // strength=1 → 少なくとも一部のピクセルが元画像と異なること
+        let size = 64_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 100, 255]);
+        }
+        let orig_raw = img.clone().into_raw();
+        let out = metamorphopsia(DynamicImage::ImageRgba8(img), 1.0, 4.0, 42).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        // 少なくとも 1 バイト異なることを確認
+        let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
+        assert!(differs, "metamorphopsia strength=1 must change at least some pixels");
+    }
+
+    #[test]
+    fn metamorphopsia_preserves_image_size() {
+        let img = solid_rgba(48, 32, [200, 100, 50, 255]);
+        let out = metamorphopsia(img, 0.8, 4.0, 123).unwrap();
+        assert_eq!(out.width(), 48);
+        assert_eq!(out.height(), 32);
+    }
+
+    #[test]
+    fn metamorphopsia_preserves_alpha() {
+        // alpha チャンネルは sample_bilinear が保持するので確認
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for px in img.pixels_mut() {
+            *px = Rgba([128, 64, 32, 200]);
+        }
+        let out = metamorphopsia(DynamicImage::ImageRgba8(img), 1.0, 4.0, 1).unwrap();
+        for px in out.to_rgba8().pixels() {
+            assert_eq!(px[3], 200, "alpha must be preserved through metamorphopsia");
+        }
+    }
+
+    #[test]
+    fn metamorphopsia_different_seeds_give_different_results() {
+        // 異なる seed では異なる歪みパターンになること
+        let size = 64_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 100, 255]);
+        }
+        let dyn_img = DynamicImage::ImageRgba8(img);
+        let out1 = metamorphopsia(dyn_img.clone(), 1.0, 4.0, 1).unwrap().to_rgba8().into_raw();
+        let out2 = metamorphopsia(dyn_img, 1.0, 4.0, 99999).unwrap().to_rgba8().into_raw();
+        let differs = out1.iter().zip(out2.iter()).any(|(a, b)| a != b);
+        assert!(differs, "different seeds must produce different distortion patterns");
+    }
 }
+
