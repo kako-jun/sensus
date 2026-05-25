@@ -963,3 +963,9 @@ fn shader_contrast_sensitivity_glsl_is_not_empty() {
     use sensus_core::shaders::contrast_sensitivity_glsl;
     assert!(!contrast_sensitivity_glsl().is_empty());
 }
+
+#[test]
+fn shader_detail_loss_glsl_is_not_empty() {
+    use sensus_core::shaders::detail_loss_glsl;
+    assert!(!detail_loss_glsl().is_empty());
+}

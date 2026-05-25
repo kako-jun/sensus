@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vision: Detail Loss フィルタ追加** (#57):
+  `detail_loss(img, strength)` を `vision.rs` に追加。矩形タイルごとに平均色に置き換える（pixelation）。
+  タイルサイズ = `(strength × 20.0).max(1.0) as u32` px（strength=1 で 20px タイル）。
+  `strength=0` で identity、`strength=1` で標準偏差が入力より低くなること。
+  `Filter::DetailLoss` を `lib.rs` に追加。
+  `detail_loss.frag` GLSL シェーダ追加。
+  テスト: strength=0 → identity、strength=1 → 輝度標準偏差が入力より低いこと。
+
 - **vision: Contrast Sensitivity フィルタ追加** (#56):
   `contrast_sensitivity(img, strength)` を `vision.rs` に追加。
   輝度コントラストを linear sRGB 空間で midpoint (0.5) に引き寄せる。
