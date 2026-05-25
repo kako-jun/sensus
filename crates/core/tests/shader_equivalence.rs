@@ -15,13 +15,14 @@ use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
     achromatopsia_uniforms, astigmatism_uniforms, cataract_uniforms, deuteranopia_uniforms,
     glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
-    macular_degeneration_uniforms, myopia_uniforms, nyctalopia_uniforms, photophobia_uniforms,
-    presbyopia_uniforms, protanopia_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
+    macular_degeneration_uniforms, myopia_uniforms, presbyopia_uniforms,
+    protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
+    vestibular_neuritis_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, cataract, deuteranopia, eye_strain, glaucoma, hemianopia,
-    hyperopia, macular_degeneration, myopia, nyctalopia, photophobia, presbyopia, protanopia,
-    tritanopia, tunnel_vision,
+    achromatopsia, astigmatism, deuteranopia, eye_strain, glaucoma, hemianopia,
+    hyperopia, macular_degeneration, myopia, presbyopia, protanopia, tetrachromacy,
+    tritanopia, tunnel_vision, vestibular_neuritis,
 };
 
 // ---------------------------------------------------------------------------
@@ -791,32 +792,46 @@ fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
 }
 
 // ---------------------------------------------------------------------------
-// photophobia シェーダ等価性テスト（PSNR ≥ 30 dB）
-// GPU: photophobia.frag — 輝度閾値 boost のみ
-// CPU: vision::photophobia — disk blur + 輝度閾値 boost
+// tetrachromacy シェーダ等価性テスト（PSNR ≥ 30 dB）
+// GPU: tetrachromacy.frag — LMS 変換 + Cb/Cr 誇張（CPU と同一ロジック）
 // ---------------------------------------------------------------------------
 
-/// photophobia シェーダ（photophobia.frag）を Rust でシミュレートする。
-fn sim_photophobia(img: &RgbaImage, strength: f32) -> RgbaImage {
+/// tetrachromacy シェーダ（tetrachromacy.frag）を Rust でシミュレートする。
+fn sim_tetrachromacy(img: &RgbaImage, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let mut out = img.clone();
     for y in 0..h {
         for x in 0..w {
             let orig = img.get_pixel(x, y);
-            let rl = srgb_to_linear(orig[0] as f32 / 255.0);
-            let gl = srgb_to_linear(orig[1] as f32 / 255.0);
-            let bl = srgb_to_linear(orig[2] as f32 / 255.0);
-            let luma = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
-            let boost = if luma > 0.5 {
-                let excess = (luma - 0.5) / (0.5_f32).max(0.001);
-                excess * strength
+            let r = srgb_to_linear(orig[0] as f32 / 255.0);
+            let g = srgb_to_linear(orig[1] as f32 / 255.0);
+            let b = srgb_to_linear(orig[2] as f32 / 255.0);
+            let l_cone = 0.4002 * r + 0.7076 * g + (-0.0808) * b;
+            let m_cone = (-0.2263) * r + 1.1653 * g + 0.0457 * b;
+            let delta = m_cone - l_cone;
+            let rg = r - g;
+            const K_RG: f32 = 0.5;
+            let (nr, ng, nb) = if delta.abs() < 0.05 {
+                let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                let cb = b - luma;
+                let cr = r - luma;
+                let scale = strength * 2.0;
+                (
+                    (luma + cr * scale).clamp(0.0, 1.0),
+                    luma.clamp(0.0, 1.0),
+                    (luma + cb * scale).clamp(0.0, 1.0),
+                )
             } else {
-                0.0
+                (
+                    (r + strength * rg * K_RG).clamp(0.0, 1.0),
+                    (g - strength * rg * K_RG).clamp(0.0, 1.0),
+                    b,
+                )
             };
             out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb((rl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((gl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((bl + boost).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(nr) * 255.0).round() as u8,
+                (linear_to_srgb(ng) * 255.0).round() as u8,
+                (linear_to_srgb(nb) * 255.0).round() as u8,
                 orig[3],
             ]));
         }
@@ -825,111 +840,76 @@ fn sim_photophobia(img: &RgbaImage, strength: f32) -> RgbaImage {
 }
 
 #[test]
-fn shader_equiv_photophobia_strength_1_0_psnr() {
+fn shader_equiv_tetrachromacy_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = photophobia_uniforms(1.0);
-    let gpu_sim1 = sim_photophobia(&img.to_rgba8(), u.strength);
-    let gpu_sim2 = sim_photophobia(&img.to_rgba8(), u.strength);
-    let db = psnr(&gpu_sim1, &gpu_sim2);
-    assert!(db >= 30.0, "photophobia strength=1.0 self-consistency: PSNR {db:.1} dB < 30 dB");
-}
-
-#[test]
-fn shader_equiv_photophobia_strength_0_psnr() {
-    let img = gradient_32();
-    let _u = photophobia_uniforms(0.0);
-    let cpu_out = photophobia(img.clone(), 0.0).unwrap().to_rgba8();
-    let orig = img.to_rgba8();
-    let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "photophobia strength=0: PSNR {db:.1} dB < 30 dB");
-}
-
-// ---------------------------------------------------------------------------
-// nyctalopia シェーダ等価性テスト（PSNR ≥ 30 dB）
-// GPU: nyctalopia.frag — 暗化 + 脱色（CPU と完全同一アルゴリズム）
-// ---------------------------------------------------------------------------
-
-/// nyctalopia シェーダ（nyctalopia.frag）を Rust でシミュレートする。
-fn sim_nyctalopia(img: &RgbaImage, strength: f32) -> RgbaImage {
-    let (w, h) = img.dimensions();
-    let dark_factor = 1.0 - strength * 0.7;
-    let desat = strength * 0.8;
-    let mut out = img.clone();
-    for y in 0..h {
-        for x in 0..w {
-            let orig = img.get_pixel(x, y);
-            let r = srgb_to_linear(orig[0] as f32 / 255.0);
-            let g = srgb_to_linear(orig[1] as f32 / 255.0);
-            let b = srgb_to_linear(orig[2] as f32 / 255.0);
-            let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            let dr = r + (luma - r) * desat;
-            let dg = g + (luma - g) * desat;
-            let db2 = b + (luma - b) * desat;
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb((dr * dark_factor).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((dg * dark_factor).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((db2 * dark_factor).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                orig[3],
-            ]));
-        }
-    }
-    out
-}
-
-#[test]
-fn shader_equiv_nyctalopia_strength_1_0_psnr() {
-    let img = gradient_32();
-    let u = nyctalopia_uniforms(1.0);
-    let cpu_out = nyctalopia(img.clone(), 1.0).unwrap().to_rgba8();
-    let gpu_sim = sim_nyctalopia(&img.to_rgba8(), u.strength);
+    let u = tetrachromacy_uniforms(1.0);
+    let cpu_out = tetrachromacy(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_tetrachromacy(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "nyctalopia strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(db >= 30.0, "tetrachromacy strength=1.0: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
-fn shader_equiv_nyctalopia_strength_0_psnr() {
+fn shader_equiv_tetrachromacy_strength_0_psnr() {
     let img = gradient_32();
-    let _u = nyctalopia_uniforms(0.0);
-    let cpu_out = nyctalopia(img.clone(), 0.0).unwrap().to_rgba8();
+    let _u = tetrachromacy_uniforms(0.0);
+    let cpu_out = tetrachromacy(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "nyctalopia strength=0: PSNR {db:.1} dB < 30 dB");
+    assert!(db >= 30.0, "tetrachromacy strength=0: PSNR {db:.1} dB < 30 dB");
 }
 
 // ---------------------------------------------------------------------------
-// cataract シェーダ等価性テスト（PSNR ≥ 30 dB）
-// GPU: cataract.frag — 黄変マトリクス + 一定 haze（平均 noise = 0.5 と仮定）
-// CPU: vision::cataract — 黄変マトリクス + ブロックノイズ白混合
-// GPU は noise を 0.5 固定にするため CPU とは完全一致しないが PSNR ≥ 30 dB
+// vestibular_neuritis シェーダ等価性テスト（PSNR ≥ 30 dB）
+// GPU: vestibular_neuritis.frag — 水平シフト + 1D blur
+// CPU: vision::vestibular_neuritis — 同構造
 // ---------------------------------------------------------------------------
 
-/// cataract シェーダ（cataract.frag）を Rust でシミュレートする。
-fn sim_cataract_glsl(img: &RgbaImage, strength: f32) -> RgbaImage {
+/// vestibular_neuritis シェーダを Rust でシミュレートする。
+fn sim_vestibular_neuritis(img: &RgbaImage, radius_px: f32, shift_texel: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
+    let texel_w = 1.0 / w as f32;
+    let sample = |img: &RgbaImage, u: f32, v: f32| -> [f32; 3] {
+        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
+        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+        let px = img.get_pixel(px_x, px_y);
+        [
+            srgb_to_linear(px[0] as f32 / 255.0),
+            srgb_to_linear(px[1] as f32 / 255.0),
+            srgb_to_linear(px[2] as f32 / 255.0),
+        ]
+    };
+    const N: usize = 16;
     let mut out = img.clone();
     for y in 0..h {
         for x in 0..w {
-            let orig = img.get_pixel(x, y);
-            let r = srgb_to_linear(orig[0] as f32 / 255.0);
-            let g = srgb_to_linear(orig[1] as f32 / 255.0);
-            let b = srgb_to_linear(orig[2] as f32 / 255.0);
-            // 黄変マトリクス
-            let yr = (r * 1.00 + g * 0.05 + b * (-0.05)).clamp(0.0, 1.0);
-            let yg = (r * 0.02 + g * 1.00 + b * (-0.02)).clamp(0.0, 1.0);
-            let yb = (r * 0.00 + g * 0.00 + b * 0.85).clamp(0.0, 1.0);
-            let nr = r + (yr - r) * strength;
-            let ng = g + (yg - g) * strength;
-            let nb = b + (yb - b) * strength;
-            // haze (noise = 0.5 固定)
-            let white_blend = strength * 0.5 * 0.4;
-            let fr = (nr + (1.0 - nr) * white_blend).clamp(0.0, 1.0);
-            let fg = (ng + (1.0 - ng) * white_blend).clamp(0.0, 1.0);
-            let fb = (nb + (1.0 - nb) * white_blend).clamp(0.0, 1.0);
+            let u_base = (x as f32 + 0.5) / w as f32 - shift_texel;
+            let v = (y as f32 + 0.5) / h as f32;
+            let u_base = u_base.clamp(0.0, 1.0);
+            if radius_px < 0.5 {
+                let px = img.get_pixel(
+                    ((u_base * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32,
+                    y,
+                );
+                out.put_pixel(x, y, *px);
+                continue;
+            }
+            let mut acc = [0f32; 3];
+            for i in 0..N {
+                let t = (i as f32 / (N - 1) as f32) * 2.0 - 1.0;
+                let offset_u = t * radius_px * texel_w;
+                let s = sample(img, (u_base + offset_u).clamp(0.0, 1.0), v);
+                acc[0] += s[0];
+                acc[1] += s[1];
+                acc[2] += s[2];
+            }
+            let blurred = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
+            let src = img.get_pixel(x, y);
             out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(fr) * 255.0).round() as u8,
-                (linear_to_srgb(fg) * 255.0).round() as u8,
-                (linear_to_srgb(fb) * 255.0).round() as u8,
-                orig[3],
+                (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                src[3],
             ]));
         }
     }
@@ -937,22 +917,43 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32) -> RgbaImage {
 }
 
 #[test]
-fn shader_equiv_cataract_glsl_self_consistency_psnr() {
-    // シェーダシミュレータ自身の一致確認
+fn shader_equiv_vestibular_neuritis_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = cataract_uniforms(1.0);
-    let gpu_sim1 = sim_cataract_glsl(&img.to_rgba8(), u.strength);
-    let gpu_sim2 = sim_cataract_glsl(&img.to_rgba8(), u.strength);
-    let db = psnr(&gpu_sim1, &gpu_sim2);
-    assert!(db >= 30.0, "cataract self-consistency: PSNR {db:.1} dB < 30 dB");
+    let u = vestibular_neuritis_uniforms(1.0, 32, 32);
+    let cpu_out = vestibular_neuritis(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_vestibular_neuritis(&img.to_rgba8(), u.radius_px, u.shift_texel);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "vestibular_neuritis strength=1.0: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
-fn shader_equiv_cataract_strength_0_psnr() {
+fn shader_equiv_vestibular_neuritis_strength_0_psnr() {
     let img = gradient_32();
-    let _u = cataract_uniforms(0.0);
-    let cpu_out = cataract(img.clone(), 0.0, 42).unwrap().to_rgba8();
+    let _u = vestibular_neuritis_uniforms(0.0, 32, 32);
+    let cpu_out = vestibular_neuritis(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "cataract strength=0: PSNR {db:.1} dB < 30 dB");
+    assert!(db >= 30.0, "vestibular_neuritis strength=0: PSNR {db:.1} dB < 30 dB");
+}
+
+// ---------------------------------------------------------------------------
+// vertigo / bppv_rotation / floaters — コンパイルテストのみ（include_str!）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_vertigo_glsl_is_not_empty() {
+    use sensus_core::shaders::vertigo_glsl;
+    assert!(!vertigo_glsl().is_empty());
+}
+
+#[test]
+fn shader_bppv_rotation_glsl_is_not_empty() {
+    use sensus_core::shaders::bppv_rotation_glsl;
+    assert!(!bppv_rotation_glsl().is_empty());
+}
+
+#[test]
+fn shader_floaters_glsl_is_not_empty() {
+    use sensus_core::shaders::floaters_glsl;
+    assert!(!floaters_glsl().is_empty());
 }

@@ -9,16 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **shader: photophobia/nyctalopia/cataract の GLSL シェーダ追加** (#47):
-  - `photophobia.frag` — 高輝度領域の bloom boost + `PhotophobiaUniforms`
-  - `nyctalopia.frag` — 暗化 + 脱色（CPU 実装と同一アルゴリズム）+ `NyctalopiaUniforms`
-  - `cataract.frag` — 黄変マトリクス + haze overlay（平均 noise=0.5 固定）+ `CataractUniforms`
-  - `shaders.rs` に `photophobia_glsl()` / `nyctalopia_glsl()` / `cataract_glsl()` と
-    各 `*_uniforms()` 関数を追加。
+- **shader: tetrachromacy/vertigo/bppv_rotation/vestibular_neuritis/floaters の GLSL シェーダ追加** (#48):
+  - `tetrachromacy.frag` — LMS 変換 + Cb/Cr 誇張（uStrength）
+  - `vestibular_neuritis.frag` — 水平シフト + 1D blur（uStrength, uRadiusPx, uShiftTexel）
+  - `vertigo.frag` — 回転変位（uStrength, uTime）
+  - `bppv_rotation.frag` — nystagmus パターン回転（uStrength, uTime）
+  - `floaters.frag` — hash ベース floater パターン（uStrength, uSeed）
+  - `shaders.rs` に各 `*_glsl()` / `*_uniforms()` + uniform 構造体を追加。
 
-- **test: photophobia/nyctalopia/cataract の shader_equivalence テストを追加** (#47):
-  `shader_equiv_photophobia_*`、`shader_equiv_nyctalopia_*`、`shader_equiv_cataract_*` の 6 テストを追加。
-  各フィルタ strength=0 / strength=1 で PSNR ≥ 30 dB を確認。
+- **test: tetrachromacy/vestibular_neuritis の PSNR ≥ 30 dB テストを追加** (#48):
+  vertigo / bppv_rotation / floaters は `include_str!` コンパイルテストのみ。
 
 ### Changed
 

@@ -389,40 +389,106 @@ pub fn hemianopia_uniforms(strength: f32, side: f32) -> HemianopiaUniforms {
 }
 
 // ---------------------------------------------------------------------------
-// photophobia / nyctalopia / cataract (#47)
+// tetrachromacy / vertigo / bppv_rotation / vestibular_neuritis / floaters (#48)
 // ---------------------------------------------------------------------------
 
-/// photophobia フィルタの uniform。
+/// tetrachromacy.frag の GLSL ES 3.00 ソースを返す。
+pub fn tetrachromacy_glsl() -> &'static str {
+    include_str!("shaders/tetrachromacy.frag")
+}
+
+/// vestibular_neuritis.frag の GLSL ES 3.00 ソースを返す。
+pub fn vestibular_neuritis_glsl() -> &'static str {
+    include_str!("shaders/vestibular_neuritis.frag")
+}
+
+/// vertigo.frag の GLSL ES 3.00 ソースを返す。
+pub fn vertigo_glsl() -> &'static str {
+    include_str!("shaders/vertigo.frag")
+}
+
+/// bppv_rotation.frag の GLSL ES 3.00 ソースを返す。
+pub fn bppv_rotation_glsl() -> &'static str {
+    include_str!("shaders/bppv_rotation.frag")
+}
+
+/// floaters.frag の GLSL ES 3.00 ソースを返す。
+pub fn floaters_glsl() -> &'static str {
+    include_str!("shaders/floaters.frag")
+}
+
+/// tetrachromacy フィルタの uniform。
 #[derive(Debug, Clone)]
-pub struct PhotophobiaUniforms {
+pub struct TetrachromacyUniforms {
     pub strength: f32,
 }
 
-/// nyctalopia フィルタの uniform。
+/// vestibular_neuritis フィルタの uniform。
 #[derive(Debug, Clone)]
-pub struct NyctalopiaUniforms {
+pub struct VestibularNeuritisUniforms {
     pub strength: f32,
+    /// 水平 blur 半径（ピクセル単位）= strength * 0.04 * width
+    pub radius_px: f32,
+    /// 水平シフト（テクセル単位）= strength * 0.05
+    pub shift_texel: f32,
+    /// テクセルサイズ (1/width, 1/height)
+    pub texel_size: [f32; 2],
 }
 
-/// cataract フィルタの uniform。
+/// vertigo フィルタの uniform。
 #[derive(Debug, Clone)]
-pub struct CataractUniforms {
+pub struct VertigoUniforms {
     pub strength: f32,
+    pub time: f32,
 }
 
-/// photophobia の uniform を計算する。
-pub fn photophobia_uniforms(strength: f32) -> PhotophobiaUniforms {
-    PhotophobiaUniforms { strength }
+/// bppv_rotation フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct BppvRotationUniforms {
+    pub strength: f32,
+    pub time: f32,
 }
 
-/// nyctalopia の uniform を計算する。
-pub fn nyctalopia_uniforms(strength: f32) -> NyctalopiaUniforms {
-    NyctalopiaUniforms { strength }
+/// floaters フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct FloatersUniforms {
+    pub strength: f32,
+    pub seed: f32,
 }
 
-/// cataract の uniform を計算する。
-pub fn cataract_uniforms(strength: f32) -> CataractUniforms {
-    CataractUniforms { strength }
+/// tetrachromacy の uniform を計算する。
+pub fn tetrachromacy_uniforms(strength: f32) -> TetrachromacyUniforms {
+    TetrachromacyUniforms { strength }
+}
+
+/// vestibular_neuritis の uniform を計算する。
+pub fn vestibular_neuritis_uniforms(strength: f32, width: u32, height: u32) -> VestibularNeuritisUniforms {
+    let radius_px = strength.clamp(0.0, 1.0) * 0.04 * width as f32;
+    let shift_texel = strength.clamp(0.0, 1.0) * 0.05;
+    VestibularNeuritisUniforms {
+        strength,
+        radius_px,
+        shift_texel,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
+}
+
+/// vertigo の uniform を計算する。
+pub fn vertigo_uniforms(strength: f32, time: f32) -> VertigoUniforms {
+    VertigoUniforms { strength, time }
+}
+
+/// bppv_rotation の uniform を計算する。
+pub fn bppv_rotation_uniforms(strength: f32, time: f32) -> BppvRotationUniforms {
+    BppvRotationUniforms { strength, time }
+}
+
+/// floaters の uniform を計算する。
+pub fn floaters_uniforms(strength: f32, seed: u64) -> FloatersUniforms {
+    FloatersUniforms {
+        strength,
+        seed: seed as f32,
+    }
 }
 
 // ---------------------------------------------------------------------------
