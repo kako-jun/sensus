@@ -136,6 +136,16 @@ pub fn teichopsia_uniforms(strength: f32) -> SimpleStrengthUniforms {
     SimpleStrengthUniforms { strength }
 }
 
+/// flickering_stars.frag の GLSL ES 3.00 ソースを返す。
+pub fn flickering_stars_glsl() -> &'static str {
+    include_str!("shaders/flickering_stars.frag")
+}
+
+/// flickering_stars の uniform を返す。
+pub fn flickering_stars_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    SimpleStrengthUniforms { strength }
+}
+
 /// photophobia.frag の GLSL ES 3.00 ソースを返す。
 pub fn photophobia_glsl() -> &'static str {
     include_str!("shaders/photophobia.frag")

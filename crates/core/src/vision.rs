@@ -2581,6 +2581,80 @@ pub fn teichopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
+// ---------------------------------------------------------------
+// Issue #59: Flickering Stars フィルタ
+// ---------------------------------------------------------------
+
+/// 閃光光点（Flickering Stars）シミュレーション。
+///
+/// LCG でランダムな光点を生成して additive blend する。
+/// 各光点は半径 2 px の矩形ブロブ（簡易実装）。
+///
+/// > **医学的注記**: 急激な光点の増加・カーテン状の視野欠損を伴う場合は
+/// > 網膜剥離の前兆。即受診。
+///
+/// - `strength`: 0.0 = 光点ゼロ（identity）, 1.0 = 200 点
+/// - `seed`: LCG の初期シード（フレーム間の一貫性に使用）
+pub fn flickering_stars(img: DynamicImage, strength: f32, seed: u64) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
+    let rgba = img.to_rgba8();
+    let count = (s * 200.0) as usize;
+    if count == 0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let w_f = width as f32;
+    let h_f = height as f32;
+
+    // LCG ヘルパー
+    let lcg_next = |state: u64| -> (u64, f32) {
+        let next = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let fval = (next >> 32) as f32 / u32::MAX as f32;
+        (next, fval)
+    };
+
+    let mut state = seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(1);
+
+    // linear sRGB に変換して作業
+    let (mut linear, alpha) = rgba_to_linear_planes(&rgba);
+
+    const BLOB_RADIUS: i32 = 2;
+
+    for _ in 0..count {
+        let (s1, fx) = lcg_next(state);
+        let (s2, fy) = lcg_next(s1);
+        // 輝度 0.5..1.0（白っぽい光点）
+        let (s3, fb) = lcg_next(s2);
+        state = s3;
+
+        let cx = (fx * w_f) as i32;
+        let cy = (fy * h_f) as i32;
+        let brightness = 0.5 + fb * 0.5;
+
+        for dy in -BLOB_RADIUS..=BLOB_RADIUS {
+            for dx in -BLOB_RADIUS..=BLOB_RADIUS {
+                let px = cx + dx;
+                let py = cy + dy;
+                if px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
+                    continue;
+                }
+                let idx = py as usize * width as usize + px as usize;
+                let p = &mut linear[idx];
+                p[0] = (p[0] + brightness).min(1.0);
+                p[1] = (p[1] + brightness).min(1.0);
+                p[2] = (p[2] + brightness).min(1.0);
+            }
+        }
+    }
+
+    let out = linear_planes_to_rgba(&linear, &alpha, width, height);
+    Ok(DynamicImage::ImageRgba8(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5263,6 +5337,34 @@ mod tests {
         let center = out.get_pixel(32, 32);
         let brightness = center[0] as u32 + center[1] as u32 + center[2] as u32;
         assert!(brightness < 600, "teichopsia strength=1 must darken center (got {brightness})");
+    }
+
+    // -------------------------------------------------------
+    // flickering_stars tests
+    // -------------------------------------------------------
+
+    #[test]
+    fn flickering_stars_strength_zero_identity() {
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 100, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = flickering_stars(DynamicImage::ImageRgba8(img), 0.0, 42).unwrap().to_rgba8().into_raw();
+        assert_eq!(orig, out, "flickering_stars strength=0 must be identity");
+    }
+
+    #[test]
+    fn flickering_stars_strength_one_increases_max_brightness() {
+        let mut img = RgbaImage::new(64, 64);
+        for px in img.pixels_mut() {
+            // 暗めの画像で始める（最大輝度が additive で上がることを確認）
+            *px = Rgba([50, 50, 50, 255]);
+        }
+        let orig_max: u8 = img.pixels().map(|p| p[0].max(p[1]).max(p[2])).max().unwrap_or(0);
+        let out = flickering_stars(DynamicImage::ImageRgba8(img), 1.0, 42).unwrap().to_rgba8();
+        let out_max: u8 = out.pixels().map(|p| p[0].max(p[1]).max(p[2])).max().unwrap_or(0);
+        assert!(out_max > orig_max, "flickering_stars strength=1 must increase max brightness (orig={orig_max}, out={out_max})");
     }
 }
 

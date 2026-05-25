@@ -975,3 +975,9 @@ fn shader_teichopsia_glsl_is_not_empty() {
     use sensus_core::shaders::teichopsia_glsl;
     assert!(!teichopsia_glsl().is_empty());
 }
+
+#[test]
+fn shader_flickering_stars_glsl_is_not_empty() {
+    use sensus_core::shaders::flickering_stars_glsl;
+    assert!(!flickering_stars_glsl().is_empty());
+}
