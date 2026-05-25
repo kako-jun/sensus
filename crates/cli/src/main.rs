@@ -152,19 +152,19 @@ struct Cli {
     focus: f32,
 
     /// Diplopia horizontal offset in min(W,H) ratio (-1.0..=1.0). Default: 0.02
-    #[arg(long, default_value = "0.02")]
+    #[arg(long, default_value = "0.02", value_parser = parse_signed_ratio)]
     offset_x: f32,
 
     /// Diplopia vertical offset in min(W,H) ratio (-1.0..=1.0). Default: 0.01
-    #[arg(long, default_value = "0.01")]
+    #[arg(long, default_value = "0.01", value_parser = parse_signed_ratio)]
     offset_y: f32,
 
     /// Diplopia ghost image strength (0.0..=1.0). Default: 0.7
-    #[arg(long, default_value = "0.7")]
+    #[arg(long, default_value = "0.7", value_parser = parse_ratio)]
     ghost_strength: f32,
 
     /// Nystagmus amplitude in min(W,H) ratio. Default: 0.03
-    #[arg(long, default_value = "0.03")]
+    #[arg(long, default_value = "0.03", value_parser = parse_ratio)]
     amplitude: f32,
 
     /// Nystagmus direction in degrees (0=horizontal, 90=vertical). Default: 0.0
@@ -176,11 +176,11 @@ struct Cli {
     num_rays: u32,
 
     /// Starbursts ray length in min(W,H) ratio. Default: 0.1
-    #[arg(long, default_value = "0.1")]
+    #[arg(long, default_value = "0.1", value_parser = parse_ratio)]
     ray_length: f32,
 
     /// Starbursts brightness threshold (0.0..=1.0). Default: 0.8
-    #[arg(long, default_value = "0.8")]
+    #[arg(long, default_value = "0.8", value_parser = parse_ratio)]
     threshold: f32,
 }
 
@@ -192,6 +192,28 @@ fn parse_strength(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=1.0).contains(&v) {
         return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse a ratio argument in `0.0..=1.0` (ghost-strength, amplitude, ray-length, threshold 等).
+fn parse_ratio(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=1.0).contains(&v) {
+        return Err(format!("value must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse a signed offset ratio in `-1.0..=1.0` (offset-x, offset-y).
+fn parse_signed_ratio(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(-1.0..=1.0).contains(&v) {
+        return Err(format!("value must be in -1.0..=1.0, got {v}"));
     }
     Ok(v)
 }

@@ -227,7 +227,7 @@ pub fn astigmatism_uniforms(strength: f32, image_min_dim: u32, axis_deg: f32) ->
 
 /// 複視フィルタの uniform。
 #[derive(Debug, Clone)]
-pub struct DiploiaUniforms {
+pub struct DiplopiaUniforms {
     pub strength: f32,
     /// dx（テクセル単位 = dx_px / width）
     pub offset_x_texel: f32,
@@ -259,8 +259,8 @@ pub fn diplopia_uniforms(
     ghost_strength: f32,
     width: u32,
     height: u32,
-) -> DiploiaUniforms {
-    DiploiaUniforms {
+) -> DiplopiaUniforms {
+    DiplopiaUniforms {
         strength,
         offset_x_texel: offset_x_px / width as f32,
         offset_y_texel: offset_y_px / height as f32,
