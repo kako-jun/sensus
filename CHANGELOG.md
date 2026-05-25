@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pokorny et al. (1987) *Applied Optics* 26(8) および van Norren & Vos (1974) *Vision Research* 14(11)。
   `cataract.frag` も同じ格子補間ノイズ + 出典コメントに更新（`uSeed` / `uResolution` uniform 追加）。
 
+- **vision: nyctalopia に Purkinje shift を追加** (#51):
+  暗所では桿体が支配的になり分光感度が青寄り（507 nm）にシフトする Purkinje 現象を実装。
+  scotopic luminance 計算（`0.0610 R + 0.3751 G + 0.6038 B`、Vos 1978）を導入し、
+  strength に応じて photopic / scotopic blend、青チャネル微増（`×(1 + s×0.1)`）、
+  赤チャネル微減（`×(1 − s×0.2)`）を適用。`nyctalopia.frag` も同様に更新。
+  テスト追加: strength=1 で青チャネル合計が赤チャネル合計を上回ること（Purkinje shift 確認）。
+
 ### Added
 
 - **shader: tetrachromacy/vertigo/bppv_rotation/vestibular_neuritis/floaters の GLSL シェーダ追加** (#48):

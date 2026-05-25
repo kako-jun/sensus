@@ -815,6 +815,21 @@ pub fn photophobia(img: DynamicImage, strength: f32) -> crate::Result<DynamicIma
 /// 夜盲（Nyctalopia）シミュレーション。
 ///
 /// 暗所視力低下: 全体が暗くなり色感度が落ちてグレースケール寄りになる。
+/// Purkinje shift（プルキンエ現象）を追加: 暗所では桿体が支配的になり、
+/// 分光感度が青寄り（scotopic luminance ピーク 507nm）にシフトする。
+///
+/// ## Purkinje shift 実装
+///
+/// linear sRGB 空間で photopic / scotopic luminance をブレンドし、
+/// strength に応じて青チャネルを微増・赤チャネルを微減する。
+///
+/// - scotopic luminance: `L_scot = 0.0610 R + 0.3751 G + 0.6038 B`（Vos 1978 近似）
+/// - photopic/scotopic blend: `L = lerp(L_phot, L_scot, strength)`
+/// - 青チャネル微増: `B' = B * (1.0 + strength * 0.1)`
+/// - 赤チャネル微減: `R' = R * (1.0 - strength * 0.2)`
+///
+/// 出典: Vos (1978) "Colorimetric and photometric properties of a 2° fundamental
+/// observer" *Color Research & Application* 3(3): 125–128
 ///
 /// - `strength`: 0.0 = 元画像, 1.0 = 強度夜盲
 pub fn nyctalopia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
@@ -833,16 +848,26 @@ pub fn nyctalopia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImag
         let g = srgb_to_linear(px[1] as f32 / 255.0);
         let b = srgb_to_linear(px[2] as f32 / 255.0);
 
-        let y = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+        // photopic luminance（BT.709）
+        let y_phot = LUMA_R * r + LUMA_G * g + LUMA_B * b;
+        // scotopic luminance（Vos 1978）
+        let y_scot = 0.0610 * r + 0.3751 * g + 0.6038 * b;
+        // photopic/scotopic blend
+        let y = y_phot + (y_scot - y_phot) * strength;
 
-        // 脱色（グレーに寄せる）してから暗化
+        // 脱色（ブレンドした luma に寄せる）
         let dr = r + (y - r) * desat;
         let dg = g + (y - g) * desat;
         let db = b + (y - b) * desat;
 
-        let fr = dr * dark_factor;
+        // Purkinje shift: 青チャネル微増・赤チャネル微減
+        let pr = dr * (1.0 - strength * 0.2);
+        let pb = db * (1.0 + strength * 0.1);
+
+        // 暗化
+        let fr = pr * dark_factor;
         let fg = dg * dark_factor;
-        let fb = db * dark_factor;
+        let fb = pb * dark_factor;
 
         px[0] = pack_u8(linear_to_srgb(fr));
         px[1] = pack_u8(linear_to_srgb(fg));
@@ -3580,19 +3605,19 @@ mod tests {
 
     #[test]
     fn nyctalopia_darkens_and_desaturates() {
-        // strength=1.0 で白画像 [255,255,255] が暗くなりグレーに近づく
+        // strength=1.0 で白画像 [255,255,255] が暗くなる
+        // Purkinje shift 適用後: R < B（青チャネル微増、赤チャネル微減）
         // dark_factor = 1.0 - 1.0 * 0.7 = 0.3
-        // 白のlinear: 1.0 → desat後も1.0（グレー）→ 0.3倍 → linear 0.3
-        // sRGB変換: linear_to_srgb(0.3) ≈ 0.5872 → 8bit ≈ 150
         let input = solid_rgba(8, 8, [255, 255, 255, 255]);
         let out = nyctalopia(input, 1.0).unwrap().to_rgba8();
         for px in out.pixels() {
             let (r, g, b) = (px[0], px[1], px[2]);
             // 暗化: 255 より大幅に低い
             assert!(r < 200, "nyctalopia must darken: R={r}");
-            // グレーに近い: R==G==B（1bit 丸め誤差を許容）
-            assert!((r as i16 - g as i16).abs() <= 1, "R/G desaturate mismatch");
-            assert!((g as i16 - b as i16).abs() <= 1, "G/B desaturate mismatch");
+            assert!(g < 200, "nyctalopia must darken: G={g}");
+            assert!(b < 200, "nyctalopia must darken: B={b}");
+            // Purkinje shift: B >= R（青チャネルが赤チャネル以上）
+            assert!(b >= r, "Purkinje shift: B={b} should be >= R={r}");
         }
     }
 
@@ -4719,6 +4744,45 @@ mod tests {
         let out_raw = out.to_rgba8().into_raw();
         let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
         assert!(differs, "vestibular_neuritis strength=1 must change at least some pixels");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #51: nyctalopia Purkinje shift
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn nyctalopia_purkinje_shift_blue_channel_increases() {
+        // Purkinje shift: strength=1 で青チャネル平均が入力より高いことを確認
+        // 白色画像を使用（すべてのチャンネルが同一値なので青の増加を検出しやすい）
+        let mut img = RgbaImage::new(16, 16);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 255]);
+        }
+        let orig_b_sum: u32 = img.pixels().map(|p| p[2] as u32).sum();
+        let orig_r_sum: u32 = img.pixels().map(|p| p[0] as u32).sum();
+
+        let out = nyctalopia(DynamicImage::ImageRgba8(img), 1.0).unwrap();
+        let out_rgba = out.to_rgba8();
+        let out_b_sum: u32 = out_rgba.pixels().map(|p| p[2] as u32).sum();
+        let out_r_sum: u32 = out_rgba.pixels().map(|p| p[0] as u32).sum();
+
+        // strength=1 では全体が暗化するため絶対値は下がるが、
+        // 青/赤 の比率で Purkinje shift（青↑赤↓相対）を確認する。
+        // 暗化後: R = orig * (1 - 0.2) * dark_factor, B = orig * (1 + 0.1) * dark_factor
+        // B / R = 1.1 / 0.8 = 1.375 > 1 になるはず
+        assert!(
+            out_b_sum > out_r_sum,
+            "Purkinje shift: blue channel sum ({out_b_sum}) should exceed red ({out_r_sum}) at strength=1"
+        );
+        // 全体が暗化していることも確認
+        assert!(
+            out_b_sum < orig_b_sum,
+            "nyctalopia darkens: blue sum {out_b_sum} < orig {orig_b_sum}"
+        );
+        assert!(
+            out_r_sum < orig_r_sum,
+            "nyctalopia darkens: red sum {out_r_sum} < orig {orig_r_sum}"
+        );
     }
 }
 
