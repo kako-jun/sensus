@@ -3,6 +3,7 @@
 //! # 関数
 //! - [`split_mpo`]: MPO バイト列を左目・右目 JPEG に分割する
 //! - [`stereo_to_depth`]: 左右画像から SAD ブロックマッチングで深度マップを生成する
+//! - [`read_xmp_depth`]: Android ポートレートモード JPEG から XMP 深度マップを抽出する
 
 use image::{DynamicImage, GrayImage};
 
@@ -102,6 +103,119 @@ pub fn stereo_to_depth(left: &DynamicImage, right: &DynamicImage) -> Result<Dyna
     }
 
     Ok(DynamicImage::ImageLuma8(depth))
+}
+
+/// Android ポートレートモード JPEG から XMP 深度マップを抽出する。
+///
+/// Google Depth API の `GDepth:Data` フィールド（base64 エンコード PNG/JPEG）を
+/// JPEG バイト列から取り出し、グレースケール `DynamicImage` として返す。
+///
+/// # Errors
+/// - `Error::NoDepthMap`: XMP メタデータに `GDepth:Data` が見つからない
+/// - `Error::Image`: base64 デコード後の画像データが読み込めない
+pub fn read_xmp_depth(data: &[u8]) -> Result<DynamicImage> {
+    let mut i = 2usize; // SOI (FF D8) をスキップ
+    while i + 4 <= data.len() {
+        if data[i] != 0xFF {
+            break;
+        }
+        let marker = data[i + 1];
+        let seg_len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+        if i + 2 + seg_len > data.len() {
+            break;
+        }
+        let seg = &data[i + 2..i + 2 + seg_len];
+        if marker == 0xE1 {
+            // APP1 セグメント
+            if let Ok(s) = std::str::from_utf8(seg) {
+                if s.contains("GDepth:Data") {
+                    if let Some(b64) = extract_gdepth_data(s) {
+                        let decoded = base64_decode(b64.as_bytes())?;
+                        return image::load_from_memory(&decoded)
+                            .map_err(crate::Error::Image);
+                    }
+                }
+            }
+        }
+        i += 2 + seg_len;
+    }
+    Err(crate::Error::NoDepthMap)
+}
+
+/// XMP 文字列から `GDepth:Data` の値を抽出する。
+///
+/// 属性形式 `GDepth:Data="BASE64DATA"` と
+/// 要素形式 `<GDepth:Data>BASE64DATA</GDepth:Data>` の両方に対応する。
+fn extract_gdepth_data(xmp: &str) -> Option<&str> {
+    // 属性形式: GDepth:Data="..."
+    if let Some(pos) = xmp.find("GDepth:Data=\"") {
+        let start = pos + "GDepth:Data=\"".len();
+        let rest = &xmp[start..];
+        if let Some(end) = rest.find('"') {
+            return Some(&rest[..end]);
+        }
+    }
+    // 要素形式: <GDepth:Data>...</GDepth:Data>
+    if let Some(pos) = xmp.find("<GDepth:Data>") {
+        let start = pos + "<GDepth:Data>".len();
+        let rest = &xmp[start..];
+        if let Some(end) = rest.find("</GDepth:Data>") {
+            return Some(&rest[..end]);
+        }
+    }
+    None
+}
+
+/// 標準 base64 デコード（外部クレート不使用）。
+///
+/// 空白文字（改行、スペース等）はスキップ。`=` はパディングとして無視する。
+/// 不正な文字が含まれる場合は `Err(Error::NoDepthMap)` を返す。
+fn base64_decode(input: &[u8]) -> Result<Vec<u8>> {
+    const TABLE: [i8; 256] = {
+        let mut t = [-1i8; 256];
+        let mut i = 0u8;
+        // A-Z = 0-25
+        while i < 26 {
+            t[(b'A' + i) as usize] = i as i8;
+            i += 1;
+        }
+        // a-z = 26-51
+        i = 0;
+        while i < 26 {
+            t[(b'a' + i) as usize] = (26 + i) as i8;
+            i += 1;
+        }
+        // 0-9 = 52-61
+        i = 0;
+        while i < 10 {
+            t[(b'0' + i) as usize] = (52 + i) as i8;
+            i += 1;
+        }
+        t[b'+' as usize] = 62;
+        t[b'/' as usize] = 63;
+        t
+    };
+
+    let mut out = Vec::new();
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+
+    for &b in input {
+        if b == b'=' || b == b'\n' || b == b'\r' || b == b' ' {
+            continue;
+        }
+        let v = TABLE[b as usize];
+        if v < 0 {
+            return Err(crate::Error::NoDepthMap);
+        }
+        buf = (buf << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

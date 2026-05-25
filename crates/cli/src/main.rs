@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sensus_core::{pipeline::{FilterStep, Pipeline}, stereo::{split_mpo, stereo_to_depth}, vision::{depth_aware_blur, DepthBlurKind}, Error as CoreError, Filter as CoreFilter};
+use sensus_core::{pipeline::{FilterStep, Pipeline}, stereo::{split_mpo, stereo_to_depth, read_xmp_depth}, vision::{depth_aware_blur, DepthBlurKind}, Error as CoreError, Filter as CoreFilter};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -152,6 +152,12 @@ struct Cli {
     #[arg(long)]
     mpo: Option<PathBuf>,
 
+    /// Android portrait-mode JPEG path. Extracts XMP depth map and applies depth blur.
+    /// Requires a depth blur filter (--filter myopia-depth / hyperopia-depth / depth-of-field).
+    /// --input is not required when --portrait is used.
+    #[arg(long)]
+    portrait: Option<PathBuf>,
+
     /// Focus depth in 0.0..=1.0 (bright=near, dark=far). Only used with depth blur filters.
     #[arg(long, default_value = "0.5", value_parser = parse_focus)]
     focus: f32,
@@ -293,6 +299,16 @@ enum RunError {
 
     #[error("{0}")]
     MpoError(String),
+
+    #[error("sensus: failed to read portrait file {path:?}: {source}")]
+    PortraitRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{0}")]
+    PortraitError(String),
 }
 
 fn main() -> ExitCode {
@@ -305,6 +321,14 @@ fn main() -> ExitCode {
         }
         Err(RunError::MpoError(msg)) => {
             eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
+        Err(RunError::PortraitError(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
+        Err(err @ RunError::PortraitRead { .. }) => {
+            eprintln!("{err}");
             ExitCode::FAILURE
         }
         Err(RunError::NotImplemented(msg)) => {
@@ -357,10 +381,62 @@ fn run(cli: Cli) -> Result<(), RunError> {
         });
     }
 
-    // --mpo なし → --input が必須
+    // --portrait: Android XMP Depth
+    if let Some(portrait_path) = cli.portrait {
+        if cli.mpo.is_some() {
+            return Err(RunError::PortraitError(
+                "sensus: --portrait and --mpo cannot be used together".to_string(),
+            ));
+        }
+        if cli.filter.len() > 1 {
+            return Err(RunError::PortraitError(
+                "sensus: --portrait cannot be combined with multiple filters".to_string(),
+            ));
+        }
+        if !cli.filter.iter().any(|f| f.is_depth_filter()) {
+            return Err(RunError::PortraitError(
+                "sensus: --portrait requires a depth blur filter (myopia-depth, hyperopia-depth, depth-of-field)".to_string(),
+            ));
+        }
+        if cli.depth.is_some() {
+            return Err(RunError::PortraitError(
+                "sensus: --portrait and --depth cannot be used together".to_string(),
+            ));
+        }
+
+        let portrait_bytes =
+            std::fs::read(&portrait_path).map_err(|source| RunError::PortraitRead {
+                path: portrait_path.clone(),
+                source,
+            })?;
+        let depth_map = read_xmp_depth(&portrait_bytes)
+            .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
+
+        let source_img = if let Some(ref inp) = cli.input {
+            image::open(inp).map_err(|source| RunError::InputOpen {
+                path: inp.clone(),
+                source,
+            })?
+        } else {
+            image::load_from_memory(&portrait_bytes).map_err(|source| RunError::InputOpen {
+                path: portrait_path.clone(),
+                source,
+            })?
+        };
+
+        let kind = cli.filter[0].depth_kind().unwrap();
+        let out = depth_aware_blur(source_img, &depth_map, cli.focus, cli.strength * 0.023, kind)
+            .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
+        return out.save(&cli.output).map_err(|source| RunError::OutputSave {
+            path: cli.output.clone(),
+            source,
+        });
+    }
+
+    // --mpo なし・--portrait なし → --input が必須
     let input_path = cli.input.ok_or_else(|| {
         RunError::MpoError(
-            "sensus: --input is required when --mpo is not specified".to_string(),
+            "sensus: --input is required when --mpo and --portrait are not specified".to_string(),
         )
     })?;
 

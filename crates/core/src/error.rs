@@ -38,4 +38,8 @@ pub enum Error {
         right_w: u32,
         right_h: u32,
     },
+
+    /// XMP メタデータに GDepth:Data が見つからない（Android XMP Depth 未対応 JPEG）
+    #[error("no depth map found in XMP metadata (GDepth:Data is absent)")]
+    NoDepthMap,
 }
