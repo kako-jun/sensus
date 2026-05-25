@@ -132,8 +132,13 @@ pub fn teichopsia_glsl() -> &'static str {
 }
 
 /// teichopsia の uniform を返す。
-pub fn teichopsia_uniforms(strength: f32) -> SimpleStrengthUniforms {
-    SimpleStrengthUniforms { strength }
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用（S-3: 楕円化防止）。
+pub fn teichopsia_uniforms(strength: f32, width: u32, height: u32) -> TeichopsiaUniforms {
+    TeichopsiaUniforms {
+        strength,
+        aspect: width as f32 / height as f32,
+    }
 }
 
 /// flickering_stars.frag の GLSL ES 3.00 ソースを返す。
@@ -142,8 +147,13 @@ pub fn flickering_stars_glsl() -> &'static str {
 }
 
 /// flickering_stars の uniform を返す。
-pub fn flickering_stars_uniforms(strength: f32) -> SimpleStrengthUniforms {
-    SimpleStrengthUniforms { strength }
+///
+/// `seed`: CPU 実装の u64 seed の下位 32bit を u32 として渡す（M-3）。
+pub fn flickering_stars_uniforms(strength: f32, seed: u64) -> FlickeringStarsUniforms {
+    FlickeringStarsUniforms {
+        strength,
+        seed: seed as u32,
+    }
 }
 
 /// photophobia.frag の GLSL ES 3.00 ソースを返す。
@@ -166,6 +176,24 @@ pub fn cataract_glsl() -> &'static str {
 pub struct SimpleStrengthUniforms {
     /// strength (0.0..=1.0)
     pub strength: f32,
+}
+
+/// teichopsia フィルタの uniform。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TeichopsiaUniforms {
+    /// strength (0.0..=1.0)
+    pub strength: f32,
+    /// アスペクト比（width / height）。楕円化防止のための aspect 補正（S-3）。
+    pub aspect: f32,
+}
+
+/// flickering_stars フィルタの uniform。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FlickeringStarsUniforms {
+    /// strength (0.0..=1.0)
+    pub strength: f32,
+    /// ランダムシード（CPU u64 の下位 32bit、M-3）
+    pub seed: u32,
 }
 
 /// photophobia の uniform を返す。

@@ -1,15 +1,26 @@
 #version 300 es
 precision mediump float;
-uniform sampler2D u_image;
-uniform float u_strength;
-uniform float u_seed;
-uniform vec2 u_resolution;
-in vec2 v_texcoord;
-out vec4 out_color;
+uniform sampler2D uTexture;
+uniform float uStrength;
+uniform uint uSeed;
+uniform vec2 uResolution;
+in vec2 vTexCoord;
+out vec4 fragColor;
 
-// simple hash: float -> float in [0,1]
-float hash(float n) {
-    return fract(sin(n) * 43758.5453123);
+// uint ベースのハッシュ（精度劣化なし）
+// Wang hash
+uint hash_uint(uint n) {
+    n = (n ^ 61u) ^ (n >> 16u);
+    n *= 9u;
+    n = n ^ (n >> 4u);
+    n *= 0x27d4eb2du;
+    n = n ^ (n >> 15u);
+    return n;
+}
+
+// [0, 1) の float に変換
+float hash_to_float(uint h) {
+    return float(h & 0x00ffffffu) / float(0x01000000u);
 }
 
 // sRGB -> linear
@@ -22,27 +33,29 @@ float linear_to_srgb(float c) {
 }
 
 void main() {
-    vec4 c = texture(u_image, v_texcoord);
+    vec4 c = texture(uTexture, vTexCoord);
     vec3 lin = vec3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
 
-    float count = u_strength * 200.0;
+    float count = uStrength * 200.0;
     float blob_radius = 2.0;
     float brightness_add = 0.0;
 
-    vec2 px = v_texcoord * u_resolution;
+    vec2 px = vTexCoord * uResolution;
 
-    for (float i = 0.0; i < 200.0; i++) {
-        if (i >= count) break;
-        float h = hash(i + u_seed * 1000.0);
-        float h2 = hash(i + u_seed * 1000.0 + 7654.321);
-        float h3 = hash(i + u_seed * 1000.0 + 9876.543);
-        vec2 star = vec2(h * u_resolution.x, h2 * u_resolution.y);
-        float dist = length(px - star);
+    for (int i = 0; i < 200; i++) {
+        if (float(i) >= count) break;
+        uint ui = uint(i);
+        uint h1 = hash_uint(ui + uSeed * 1000u);
+        uint h2 = hash_uint(ui + uSeed * 1000u + 7654u);
+        uint h3 = hash_uint(ui + uSeed * 1000u + 9876u);
+        float fx = hash_to_float(h1) * uResolution.x;
+        float fy = hash_to_float(h2) * uResolution.y;
+        float dist = length(px - vec2(fx, fy));
         if (dist <= blob_radius) {
-            brightness_add += 0.5 + h3 * 0.5;
+            brightness_add += 0.5 + hash_to_float(h3) * 0.5;
         }
     }
 
     vec3 result = clamp(lin + vec3(brightness_add), 0.0, 1.0);
-    out_color = vec4(linear_to_srgb(result.r), linear_to_srgb(result.g), linear_to_srgb(result.b), c.a);
+    fragColor = vec4(linear_to_srgb(result.r), linear_to_srgb(result.g), linear_to_srgb(result.b), c.a);
 }

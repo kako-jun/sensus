@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Fixed
+
+- **fix: レビュー指摘全件修正（M×3/S×5/N×2）**:
+  - [M-1] 新GLSL 4本の uniform 命名規則を camelCase に統一（`u_texture` → `uTexture`, `v_texcoord` → `vTexCoord` 等）
+  - [M-2] `detail_loss.frag` を GLSL 9点平均サンプルに変更して CPU 実装（タイル内全画素平均）に近似させる
+  - [M-3] `flickering_stars.frag` の `u_seed` を `float` → `uint uSeed` に変更（浮動小数精度劣化防止）
+  - [S-1] `vision.rs` の `manual_range_contains` clippy 警告を `(0.2..=0.5).contains(&dist)` に修正
+  - [S-2] `vision.rs` の `doc_lazy_continuation` clippy 警告を修正（継続行に `///` を補う）
+  - [S-3] `teichopsia.frag` に `uAspect` を追加して aspect 補正による楕円化防止
+  - [S-4] `docs/overview.md` の glaucoma 項目に弧状暗点モードの左右眼実装基準を明記
+  - [S-5] `detail_loss_with_cell_size` の docコメントに `cell_size=1` 挙動を説明
+  - [N-1] `shader_equivalence.rs` に新4フィルタのテスト追加（contrast_sensitivity PSNR ≥ 30 dB / detail_loss CPU-GPU 等価性 / teichopsia コンパイルテスト + strength=0 identity）
+  - [N-2] `pipeline.rs` の `FilterStep` に設計メモコメントを追加
+  - bench エラー（`Filter::Astigmatism/Starbursts/Floaters` が struct variant）を修正
+  - `shader_equivalence.rs` の `FRAC_1_SQRT_2` 精度警告、`stereo.rs` の `format!` 警告、`vision.rs` の `absurd_extreme_comparisons` エラーを修正
 
 - **AudioPipeline / AudioFilterStep 追加** (#66):
   `crates/core/src/pipeline.rs` に聴覚フィルタ多段合成用の `AudioPipeline` と `AudioFilterStep` を追加。

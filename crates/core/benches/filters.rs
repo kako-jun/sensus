@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use image::{DynamicImage, RgbImage};
-use sensus_core::{apply, Filter};
+use sensus_core::{apply, vision, Filter};
 
 fn make_image(w: u32, h: u32) -> DynamicImage {
     // グラデーション画像を生成
@@ -32,17 +32,17 @@ fn bench_filters(c: &mut Criterion) {
 
     // directional blur
     c.bench_function("astigmatism_512", |b| {
-        b.iter(|| apply(Filter::Astigmatism, img_512.clone(), 1.0).unwrap())
+        b.iter(|| vision::astigmatism(img_512.clone(), 1.0, 90.0).unwrap())
     });
 
     // ray-marching
     c.bench_function("starbursts_512", |b| {
-        b.iter(|| apply(Filter::Starbursts, img_512.clone(), 1.0).unwrap())
+        b.iter(|| vision::starbursts(img_512.clone(), 1.0, 6, 0.1, 0.8, 0.0).unwrap())
     });
 
     // floaters
     c.bench_function("floaters_512", |b| {
-        b.iter(|| apply(Filter::Floaters, img_512.clone(), 1.0).unwrap())
+        b.iter(|| vision::floaters(img_512.clone(), 1.0, 0.5, 0, 0.5, 0.5).unwrap())
     });
 
     // eye_strain / dry_eye

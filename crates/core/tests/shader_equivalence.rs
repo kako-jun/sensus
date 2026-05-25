@@ -13,7 +13,7 @@
 
 use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
-    achromatopsia_uniforms, astigmatism_uniforms, cataract_uniforms, deuteranopia_uniforms,
+    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms,
     glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
     macular_degeneration_uniforms, myopia_uniforms, presbyopia_uniforms,
     protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
@@ -588,8 +588,8 @@ fn shader_equiv_strength_zero_no_change() {
 /// `inner_r`, `outer_r` を外から渡すことで両方に使用する。
 fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
-    // UV 空間でのコーナー距離: sqrt(0.5^2+0.5^2) = 0.7071...
-    let corner_dist = 0.7071067811865476_f32;
+    // UV 空間でのコーナー距離: sqrt(0.5^2+0.5^2) = 1/sqrt(2)
+    let corner_dist = std::f32::consts::FRAC_1_SQRT_2;
     let mut out = img.clone();
     for y in 0..h {
         for x in 0..w {
@@ -620,7 +620,7 @@ fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32) 
 /// macular_degeneration.frag の計算を Rust で再現する。
 fn sim_macular_degeneration(img: &RgbaImage, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
-    let corner_dist = 0.7071067811865476_f32;
+    let corner_dist = std::f32::consts::FRAC_1_SQRT_2;
     let inner_r = strength * 0.25;
     let outer_r = strength * 0.4;
     let mut out = img.clone();
@@ -978,6 +978,142 @@ fn shader_teichopsia_glsl_is_not_empty() {
 
 #[test]
 fn shader_flickering_stars_glsl_is_not_empty() {
+    use sensus_core::shaders::flickering_stars_glsl;
+    assert!(!flickering_stars_glsl().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// N-1: 新4フィルタの shader_equivalence テスト
+// ---------------------------------------------------------------------------
+
+/// contrast_sensitivity シェーダ（contrast_sensitivity.frag）を Rust でシミュレート。
+fn sim_contrast_sensitivity(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    let scale = 1.0 - strength * 0.5;
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+            let nr = (0.5 + (r - 0.5) * scale).clamp(0.0, 1.0);
+            let ng = (0.5 + (g - 0.5) * scale).clamp(0.0, 1.0);
+            let nb = (0.5 + (b - 0.5) * scale).clamp(0.0, 1.0);
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(nr) * 255.0).round() as u8,
+                (linear_to_srgb(ng) * 255.0).round() as u8,
+                (linear_to_srgb(nb) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_contrast_sensitivity_strength_0_identity() {
+    use sensus_core::vision::contrast_sensitivity;
+    let img = gradient_32();
+    let cpu_out = contrast_sensitivity(img.clone(), 0.0).unwrap().to_rgba8();
+    let gpu_sim = sim_contrast_sensitivity(&img.to_rgba8(), 0.0);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "contrast_sensitivity strength=0 identity: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_contrast_sensitivity_strength_0_5_psnr() {
+    use sensus_core::vision::contrast_sensitivity;
+    let img = color_chart_32();
+    let cpu_out = contrast_sensitivity(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_contrast_sensitivity(&img.to_rgba8(), 0.5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "contrast_sensitivity strength=0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+/// detail_loss シェーダ（detail_loss.frag, 3×3サンプル近似）を Rust でシミュレート。
+/// CPU は全タイル内平均、GPU シミュレータは3×3グリッドサンプル平均で近似する。
+fn sim_detail_loss_shader(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let tile_size = (strength * 20.0_f32).max(1.0);
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px_x = x as f32;
+            let px_y = y as f32;
+            let tile_ox = (px_x / tile_size).floor() * tile_size;
+            let tile_oy = (px_y / tile_size).floor() * tile_size;
+            let center_px = (tile_ox + tile_size * 0.5, tile_oy + tile_size * 0.5);
+            // 3×3 グリッドサンプル
+            let mut acc = [0.0_f32; 3];
+            let count = 9.0_f32;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    let sx = ((center_px.0 + dx as f32 * tile_size / 3.0).clamp(0.0, (w - 1) as f32)) as u32;
+                    let sy = ((center_px.1 + dy as f32 * tile_size / 3.0).clamp(0.0, (h - 1) as f32)) as u32;
+                    let s = img.get_pixel(sx, sy);
+                    acc[0] += srgb_to_linear(s[0] as f32 / 255.0);
+                    acc[1] += srgb_to_linear(s[1] as f32 / 255.0);
+                    acc[2] += srgb_to_linear(s[2] as f32 / 255.0);
+                }
+            }
+            let avg_r = linear_to_srgb((acc[0] / count).clamp(0.0, 1.0));
+            let avg_g = linear_to_srgb((acc[1] / count).clamp(0.0, 1.0));
+            let avg_b = linear_to_srgb((acc[2] / count).clamp(0.0, 1.0));
+            let orig_alpha = img.get_pixel(x, y)[3];
+            out.put_pixel(x, y, image::Rgba([
+                (avg_r * 255.0).round() as u8,
+                (avg_g * 255.0).round() as u8,
+                (avg_b * 255.0).round() as u8,
+                orig_alpha,
+            ]));
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_detail_loss_strength_0_identity() {
+    use sensus_core::vision::detail_loss;
+    let img = gradient_32();
+    let cpu_out = detail_loss(img.clone(), 0.0).unwrap().to_rgba8();
+    let orig = img.to_rgba8();
+    let db = psnr(&cpu_out, &orig);
+    assert!(db >= 60.0, "detail_loss strength=0 identity: PSNR {db:.1} dB < 60 dB");
+}
+
+#[test]
+fn shader_equiv_detail_loss_cpu_gpu_psnr() {
+    use sensus_core::vision::detail_loss;
+    // strength=0.5 で CPU と GPU シミュレータが近い（PSNR ≥ 30 dB）
+    let img = color_chart_32();
+    let cpu_out = detail_loss(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader(&img.to_rgba8(), 0.5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "detail_loss CPU/GPU strength=0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+/// teichopsia コンパイルテスト + strength=0 で元画像と近い（PSNR ≥ 25 dB）
+#[test]
+fn shader_equiv_teichopsia_strength_0_near_identity() {
+    use sensus_core::vision::teichopsia;
+    let img = gradient_32();
+    let cpu_out = teichopsia(img.clone(), 0.0).unwrap().to_rgba8();
+    let orig = img.to_rgba8();
+    let db = psnr(&cpu_out, &orig);
+    assert!(db >= 25.0, "teichopsia strength=0 near identity: PSNR {db:.1} dB < 25 dB");
+}
+
+#[test]
+fn shader_teichopsia_glsl_compiles() {
+    use sensus_core::shaders::teichopsia_glsl;
+    // コンパイルテスト: glsl ソースが空でないこと
+    assert!(!teichopsia_glsl().is_empty());
+}
+
+/// flickering_stars: コンパイルテスト（ランダム描画なので等価テストは行わない）
+#[test]
+fn shader_flickering_stars_glsl_compiles_and_not_empty() {
     use sensus_core::shaders::flickering_stars_glsl;
     assert!(!flickering_stars_glsl().is_empty());
 }

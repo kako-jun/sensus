@@ -350,6 +350,8 @@ The pixel multiplier is `1.0 - strength × fade`.
 | `ArcuateInferior` | Inferior Bjerrum scotoma (lower arcuate defect) |
 | `Biarcuate` | Both superior and inferior arcuate defects (advanced glaucoma) |
 
+> **Note (S-4)**: 弧状暗点モード（ArcuateSuperior / ArcuateInferior / Biarcuate）は右眼視点を基準として実装されています。左眼の場合は視神経乳頭のオフセット方向が逆になります。
+
 ### macular_degeneration
 
 Central scotoma (blind spot). The same radial scheme is inverted — the
