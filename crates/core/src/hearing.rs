@@ -520,6 +520,93 @@ pub fn diplacusis(buf: AudioBuffer, strength: f32) -> AudioBuffer {
     }
 }
 
+/// APD（聴覚情報処理障害）シミュレーション。
+///
+/// 時間分解能の低下 + 雑音付加を近似する:
+/// 1. LCG（seed=42 固定）によるホワイトノイズ混入
+/// 2. 隣接 3 サンプルの加重平均（FIR スミア）
+/// 3. 無音区間の gap 埋め（< 5 ms の無音を隣接値で補間）
+///
+/// `strength = 0.0` は元音声と同一。
+pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuffer {
+    let s = strength.clamp(0.0, 1.0);
+    if s == 0.0 {
+        return buf;
+    }
+
+    let ch = buf.channels as usize;
+    if ch == 0 || buf.samples.is_empty() {
+        return buf;
+    }
+
+    let n = buf.samples.len();
+
+    // Step 1: ホワイトノイズ混入（LCG, seed=42）
+    const LCG_A: u64 = 1664525;
+    const LCG_C: u64 = 1013904223;
+    let mut state: u64 = 42;
+    let noise_amp = s * 0.05; // 最大 5% のノイズ
+    let mut noisy: Vec<f32> = buf.samples.iter().map(|&x| {
+        state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
+        // -1.0..=1.0 の符号付きノイズ
+        let noise = (state >> 32) as f32 / (u32::MAX as f32 / 2.0) - 1.0;
+        (x + noise * noise_amp).clamp(-1.0, 1.0)
+    }).collect();
+
+    // Step 2: FIR スミア（隣接 3 サンプルの加重平均: 0.25, 0.5, 0.25）
+    // strength に応じて元とブレンド
+    let w_center = 1.0 - s * 0.5; // strength=1.0 で center=0.5
+    let w_side = s * 0.25;         // strength=1.0 で side=0.25 (合計 = 0.5 + 0.5*2 = 1.0 が成立)
+    let mut smeared = noisy.clone();
+    for i in 0..n {
+        let prev = if i >= ch { noisy[i - ch] } else { noisy[i] };
+        let next = if i + ch < n { noisy[i + ch] } else { noisy[i] };
+        smeared[i] = (prev * w_side + noisy[i] * w_center + next * w_side).clamp(-1.0, 1.0);
+    }
+    noisy = smeared;
+
+    // Step 3: gap 埋め（< 5 ms の無音区間を前後の値で補間）
+    // sample_rate=0 は 44100 Hz として扱う
+    let sr = if buf.sample_rate == 0 { 44100 } else { buf.sample_rate };
+    let gap_frames = ((sr as f32 * 0.005) as usize).max(1); // 5 ms
+    let silence_threshold = 0.01_f32;
+
+    let frames = n / ch;
+    let mut result = noisy.clone();
+    let mut gap_start: Option<usize> = None;
+
+    for f in 0..frames {
+        // フレームが無音かどうか（全チャンネル）
+        let is_silent = (0..ch).all(|c| noisy[f * ch + c].abs() < silence_threshold);
+        if is_silent {
+            if gap_start.is_none() {
+                gap_start = Some(f);
+            }
+        } else if let Some(gs) = gap_start {
+                let gap_len = f - gs;
+                if gap_len < gap_frames {
+                    // gap を前後の値で線形補間して埋める
+                    let before_f = if gs > 0 { gs - 1 } else { gs };
+                    for gf in gs..f {
+                        let t = (gf - gs + 1) as f32 / (gap_len + 1) as f32;
+                        for c in 0..ch {
+                            let before_val = result[before_f * ch + c];
+                            let after_val = noisy[f * ch + c];
+                            result[gf * ch + c] = (before_val + (after_val - before_val) * t).clamp(-1.0, 1.0);
+                        }
+                    }
+                }
+                gap_start = None;
+        }
+    }
+
+    AudioBuffer {
+        samples: result,
+        sample_rate: buf.sample_rate,
+        channels: buf.channels,
+    }
+}
+
 // ---------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------
@@ -764,5 +851,22 @@ mod tests {
         let out = diplacusis(buf, 1.0);
         assert_eq!(out.channels, 2);
         assert_eq!(out.samples.len(), 2000);
+    }
+
+    #[test]
+    fn apd_strength_zero_is_identity() {
+        let buf = sine_wave(440.0, 1000, 44100);
+        let orig = buf.samples.clone();
+        let out = auditory_processing_disorder(buf, 0.0);
+        assert_eq!(out.samples, orig, "APD strength=0 should be byte-exact identity");
+    }
+
+    #[test]
+    fn apd_adds_noise() {
+        // 無音バッファに strength=1 で APD を適用すると RMS > 0 になる
+        let buf = silence(44100, 44100, 1);
+        let out = auditory_processing_disorder(buf, 1.0);
+        let rms: f32 = (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
+        assert!(rms > 0.0, "APD should add noise to silence, rms={rms}");
     }
 }

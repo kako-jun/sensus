@@ -59,6 +59,9 @@ pub enum Filter {
     Diplopia,
     Nystagmus,
     Starbursts,
+    // vision (Phase 4: eye fatigue / #36)
+    EyeStrain,
+    DryEye,
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -97,6 +100,8 @@ pub fn apply(
         Filter::Diplopia => vision::diplopia(img, strength, 0.02, 0.01, 0.7),
         Filter::Nystagmus => vision::nystagmus(img, strength, 0.03, 0.0),
         Filter::Starbursts => vision::starbursts(img, strength, 6, 0.1, 0.8),
+        Filter::EyeStrain => vision::eye_strain(img, strength),
+        Filter::DryEye => vision::dry_eye(img, strength),
     }
 }
 
@@ -125,6 +130,8 @@ pub enum HearingFilter {
     PitchShift { semitones: f32 },
     /// ダイプラクシス: 左右耳で異なる音程を知覚
     Diplacusis,
+    /// APD（聴覚情報処理障害）: 時間分解能低下 + 雑音付加
+    AuditoryProcessingDisorder,
 }
 
 /// 聴覚フィルタを音声バッファに適用する。
@@ -152,6 +159,9 @@ pub fn apply_hearing(
         HearingFilter::Dysmelodia => hearing::dysmelodia(buf, strength),
         HearingFilter::PitchShift { semitones } => hearing::pitch_shift_semitones(buf, semitones),
         HearingFilter::Diplacusis => hearing::diplacusis(buf, strength),
+        HearingFilter::AuditoryProcessingDisorder => {
+            hearing::auditory_processing_disorder(buf, strength)
+        }
     };
     Ok(out)
 }
