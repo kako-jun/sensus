@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-25
+
+### Added
+
+- **vision: eye_strain / dry_eye フィルタ** (#36): 眼精疲労（コントラスト圧縮 + 微小 disk blur + vignette）とドライアイ（LCG ノイズマスクによる空間的不均一ぼかし）を追加。GLSL シェーダ `eye_strain.frag` / `dry_eye.frag` 付き。
+
+- **hearing: APD（聴覚情報処理障害）** (#37): LCG ノイズ混入 + FIR スミア + 短い無音 gap 埋めの 3 段処理で時間分解能低下を模倣。`HearingFilter::AuditoryProcessingDisorder` として追加。
+
+- **vision: floaters 形状改善** (#38): 円形ブロブ 30% + LCG ランダムウォーク糸くず形状 70% の混合。seed パラメータを実際に使用するよう修正。描画後に box blur でエッジをソフト化。
+
+- **vision: tetrachromacy アルゴリズム刷新** (#39): gamut 拡張ヒューリスティックから Machado 2009 LMS 変換ベースのメタメリズム強調に刷新。`|M - L| < 0.05` のメタメリックペア候補領域で Cb/Cr を誇張。
+
+- **vision: cataract 黄変・青感度低下** (#40): 白濁 haze overlay に加えて黄変マトリクス（B チャネル 0.85 倍 + RG クロストーク）とコントラスト圧縮を追加。実際の白内障に近い色温度シフトを再現。
+
+- **bench: criterion ベースのフィルタベンチマーク** (#41): `crates/core/benches/filters.rs` を新設。9 フィルタ × 512×512 を `cargo bench` で計測可能に。
+
+- **CLI: `--pipe` による動画フレーム連続処理** (#42): stdin から JPEG フレームを連続読み込み（FFD8/FFD9 境界で切り出し）、フィルタ適用後に stdout に書き出す。ffmpeg との pipe 連携で動画処理が可能に。
+
 ## [0.2.0] - 2026-05-25
 
 ### Added
@@ -155,5 +173,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLAUDE.md` (Japanese, AI-facing internal notes). (#1)
 - MIT license. (#1)
 
+[0.3.0]: https://github.com/kako-jun/sensus/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kako-jun/sensus/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kako-jun/sensus/releases/tag/v0.1.0
