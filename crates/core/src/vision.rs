@@ -2044,6 +2044,7 @@ pub fn nystagmus(
 /// - `num_rays`: 光芒の本数（4/6/8 推奨）
 /// - `ray_length_ratio`: 光芒の長さ（min(W,H) 比）
 /// - `threshold`: 光芒が発生する輝度閾値（0.0..=1.0）
+///
 /// HSL (hue 0..360, s=1, l=0.5) → linear sRGB の変換（分散レイ色に使用）。
 ///
 /// 純粋な彩度 1 の虹色を返す内部ヘルパー。
@@ -2554,6 +2555,8 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 ///
 /// `cell_size`: タイルサイズ (px)。1 以下の場合は identity を返す。
 /// `strength` は無視され、`cell_size` がそのままタイルサイズとして使用される。
+///
+/// `cell_size` が 1 の場合は各ピクセルが単独のセルになるため identity と等価です（早期リターン）。
 pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: u32) -> Result<DynamicImage> {
     let rgba = img.to_rgba8();
     let tile_size = cell_size.max(1);
@@ -2651,7 +2654,7 @@ pub fn teichopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
                 px[0] = pack_u8(linear_to_srgb(rl * dark));
                 px[1] = pack_u8(linear_to_srgb(gl * dark));
                 px[2] = pack_u8(linear_to_srgb(bl * dark));
-            } else if dist >= 0.2 && dist <= 0.5 {
+            } else if (0.2..=0.5).contains(&dist) {
                 // ジグザグリング
                 let angle = uy.atan2(ux);
                 let saw = (angle / PI * 8.0).fract(); // saw wave 0..1
@@ -4889,7 +4892,7 @@ mod tests {
         // linear sRGB 空間で 0.5 blendすると sRGB変換後は約 188 になる（ガンマ補正の影響）
         // 単純な加算合成なら 255 になっていたが、alpha blend では中間値に抑えられる
         assert!(
-            val >= 183 && val <= 193,
+            (183..=193).contains(&val),
             "half ghost_strength alpha blend should produce ≈188 (sRGB of linear 0.5), got {val}"
         );
         // また、orig(0) と ghost(255) の単純平均 127 より大きいはず（linear→sRGB変換で増加）
@@ -4925,13 +4928,8 @@ mod tests {
         }
         let result = diplopia(DynamicImage::ImageRgba8(img), 0.7, 0.2, 0.1, 0.8);
         assert!(result.is_ok(), "diplopia should not panic on gradient image");
-        // alpha blend の数学的性質から全チャンネルが [0,1] に収まることを確認
-        let out_rgba = result.unwrap().to_rgba8();
-        let max_val = out_rgba.pixels()
-            .flat_map(|px| [px[0], px[1], px[2]])
-            .max()
-            .unwrap_or(0);
-        assert!(max_val <= 255, "max pixel value should not exceed 255, got {max_val}");
+        // alpha blend の数学的性質から出力画像が正しく生成されること（u8 の上限は型保証）
+        let _ = result.unwrap().to_rgba8();
     }
 
     #[test]

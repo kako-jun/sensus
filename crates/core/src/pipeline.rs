@@ -9,6 +9,8 @@ use image::DynamicImage;
 use crate::{vision, Filter, Result};
 
 /// 1つのフィルタ適用単位。
+// 設計メモ: FilterStep は Filter enum にパラメータが埋め込まれた後も薄いラッパーとして維持する。
+// パラメータの追加は Filter enum 側のみに行い、FilterStep は strength を付加するだけにとどめる。
 pub struct FilterStep {
     pub filter: Filter,
     pub strength: f32,

@@ -1,9 +1,9 @@
 #version 300 es
 precision mediump float;
-uniform sampler2D u_image;
-uniform float u_strength;
-in vec2 v_texcoord;
-out vec4 out_color;
+uniform sampler2D uTexture;
+uniform float uStrength;
+in vec2 vTexCoord;
+out vec4 fragColor;
 
 // sRGB -> linear
 float srgb_to_linear(float c) {
@@ -15,10 +15,10 @@ float linear_to_srgb(float c) {
 }
 
 void main() {
-    vec4 c = texture(u_image, v_texcoord);
+    vec4 c = texture(uTexture, vTexCoord);
     vec3 lin = vec3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
     // output = 0.5 + (input - 0.5) * (1.0 - strength * 0.5)
-    float scale = 1.0 - u_strength * 0.5;
+    float scale = 1.0 - uStrength * 0.5;
     vec3 result = clamp(vec3(0.5) + (lin - vec3(0.5)) * scale, 0.0, 1.0);
-    out_color = vec4(linear_to_srgb(result.r), linear_to_srgb(result.g), linear_to_srgb(result.b), c.a);
+    fragColor = vec4(linear_to_srgb(result.r), linear_to_srgb(result.g), linear_to_srgb(result.b), c.a);
 }

@@ -303,7 +303,7 @@ mod tests {
         let result = split_mpo(&[]);
         assert!(
             matches!(result, Err(Error::InvalidMpo)),
-            "empty bytes should return InvalidMpo, got: {:?}", result
+            "empty bytes should return InvalidMpo, got: {result:?}"
         );
     }
 
@@ -316,7 +316,7 @@ mod tests {
         let result = split_mpo(&single_jpeg);
         assert!(
             matches!(result, Err(Error::InvalidMpo)),
-            "single JPEG (no second SOI) should return InvalidMpo, got: {:?}", result
+            "single JPEG (no second SOI) should return InvalidMpo, got: {result:?}"
         );
     }
 
@@ -327,7 +327,7 @@ mod tests {
         let result = split_mpo(&data);
         assert!(
             matches!(result, Err(Error::InvalidMpo)),
-            "no FFD9-FFD8 pattern should return InvalidMpo, got: {:?}", result
+            "no FFD9-FFD8 pattern should return InvalidMpo, got: {result:?}"
         );
     }
 
@@ -379,7 +379,7 @@ mod tests {
         let result = split_mpo(&data);
         assert!(
             matches!(result, Err(Error::InvalidMpo)),
-            "FFD9 without following FFD8 should return InvalidMpo, got: {:?}", result
+            "FFD9 without following FFD8 should return InvalidMpo, got: {result:?}"
         );
     }
 
@@ -468,7 +468,7 @@ mod tests {
         let result = stereo_to_depth(&left, &right);
         assert!(
             matches!(result, Err(Error::SizeMismatch { .. })),
-            "size mismatch should return SizeMismatch error, got: {:?}", result
+            "size mismatch should return SizeMismatch error, got: {result:?}"
         );
     }
 
@@ -624,7 +624,7 @@ mod tests {
         let result = read_xmp_depth(&jpeg);
         assert!(
             matches!(result, Err(crate::Error::NoDepthMap)),
-            "XMP without GDepth:Data should return NoDepthMap, got: {:?}", result
+            "XMP without GDepth:Data should return NoDepthMap, got: {result:?}"
         );
     }
 
@@ -635,7 +635,7 @@ mod tests {
         let result = read_xmp_depth(&data);
         assert!(
             matches!(result, Err(crate::Error::NoDepthMap)),
-            "no APP1 segment should return NoDepthMap, got: {:?}", result
+            "no APP1 segment should return NoDepthMap, got: {result:?}"
         );
     }
 
@@ -652,7 +652,7 @@ mod tests {
         let result = read_xmp_depth(&[]);
         assert!(
             matches!(result, Err(crate::Error::NoDepthMap)),
-            "empty bytes should return NoDepthMap, got: {:?}", result
+            "empty bytes should return NoDepthMap, got: {result:?}"
         );
     }
 
@@ -719,7 +719,7 @@ mod tests {
         let result = base64_decode(b"SGVs@G8=");
         assert!(
             matches!(result, Err(crate::Error::Base64DecodeError)),
-            "invalid char '@' should return Base64DecodeError, got: {:?}", result
+            "invalid char '@' should return Base64DecodeError, got: {result:?}"
         );
     }
 
@@ -731,7 +731,7 @@ mod tests {
         // panicせず NoDepthMap エラーを返すこと
         assert!(
             matches!(result, Err(crate::Error::NoDepthMap)),
-            "zero seg_len should return NoDepthMap without panic, got: {:?}", result
+            "zero seg_len should return NoDepthMap without panic, got: {result:?}"
         );
     }
 }
