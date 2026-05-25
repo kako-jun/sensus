@@ -1179,12 +1179,41 @@ pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
 // Phase 3a: 視野異常 (Issue #5) — glaucoma / macular_degeneration / hemianopia / tunnel_vision
 // ---------------------------------------------------------------
 
+/// 緑内障シミュレーションのモード。
+///
+/// `Vignette` は既存の均等 vignetting 実装（後方互換）。
+/// `ArcuateSuperior` / `ArcuateInferior` / `Biarcuate` は視神経乳頭を中心とした
+/// 弧状暗点を生成する。
+///
+/// ## 医学的背景
+///
+/// 緑内障の視野欠損は視神経乳頭（ON head）の損傷パターンに対応する弧状暗点
+/// （arcuate scotoma）として現れることが多い。均等な周辺暗化（Vignette）は
+/// 近似であり、実臨床ではBjerrumの弧状暗点が典型的。
+///
+/// - `Vignette`: 旧実装の中心保存 + 周辺均等暗化（近似）
+/// - `ArcuateSuperior`: 上方弧状暗点（Bjerrum 上方）
+/// - `ArcuateInferior`: 下方弧状暗点（Bjerrum 下方）
+/// - `Biarcuate`: 両方の弧状暗点（進行した緑内障）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlaucomaMode {
+    /// 既存実装（後方互換）: 中心保存 + 周辺 smoothstep vignetting
+    Vignette,
+    /// 上方弧状暗点（Bjerrum 上方弧状暗点）
+    ArcuateSuperior,
+    /// 下方弧状暗点（Bjerrum 下方弧状暗点）
+    ArcuateInferior,
+    /// 両弧状暗点（上下両方、進行例）
+    Biarcuate,
+}
+
 /// 緑内障（glaucoma）シミュレーション。
 ///
 /// 緑内障は眼圧上昇による視神経萎縮が原因で、周辺視野から徐々に欠けていく。
-/// 臨床的には視野の一部に暗点が生じ、進行すると管状視野（トンネルビジョン）になる。
+/// `mode` により均等 vignetting と弧状暗点を切り替えられる。
 ///
-/// ## アルゴリズム
+/// ## モード: Vignette（デフォルト、後方互換）
+///
 /// 中心からの距離に基づく vignetted mask を使用:
 /// - 中心付近 (normalized 距離 < `inner_r`): 保存
 /// - 周辺 (距離 > `outer_r`): 暗化 × `strength`
@@ -1192,10 +1221,21 @@ pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
 ///
 /// `inner_r` = `1.0 - strength * 0.7`, `outer_r` = `inner_r + 0.2`
 ///
+/// ## モード: ArcuateSuperior / ArcuateInferior / Biarcuate
+///
+/// 視神経乳頭（ON head）を画像中心から水平方向 15% オフセットした位置に設定し、
+/// そこから放射する Bjerrum 弧状暗点を極座標マスクで生成する。
+/// 弧状領域内を strength に応じて暗化する。
+///
+/// > **注記**: `Vignette` モードの均等暗化は緑内障の視野欠損の近似に過ぎない。
+/// > 実臨床の典型的な欠損は `ArcuateSuperior` / `ArcuateInferior` のような
+/// > 弧状暗点（Bjerrum scotoma）として現れる。
+///
 /// # 引数
 /// - `img`: 入力画像
 /// - `strength`: 強度 (0.0..=1.0)
-pub fn glaucoma(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+/// - `mode`: 暗点の種類（[`GlaucomaMode`] を参照）
+pub fn glaucoma(img: DynamicImage, strength: f32, mode: GlaucomaMode) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let rgba = img.to_rgba8();
     if strength == 0.0 {
@@ -1208,45 +1248,111 @@ pub fn glaucoma(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage>
     let h_f = height as f32;
     let cx = w_f * 0.5;
     let cy = h_f * 0.5;
-    // 正規化半径の最大値（コーナーまでの距離）
-    let max_r = (cx * cx + cy * cy).sqrt();
 
-    // 保存される中心領域の境界
-    let inner_r = 1.0 - strength * 0.7;
-    let outer_r = (inner_r + 0.2).min(1.0);
+    match mode {
+        GlaucomaMode::Vignette => {
+            // 既存実装（後方互換）
+            let max_r = (cx * cx + cy * cy).sqrt();
+            let inner_r = 1.0 - strength * 0.7;
+            let outer_r = (inner_r + 0.2).min(1.0);
 
-    let mut out_rgba = rgba.clone();
-    for y in 0..height {
-        for x in 0..width {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let r = (dx * dx + dy * dy).sqrt() / max_r;
+            let mut out_rgba = rgba.clone();
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 - cx;
+                    let dy = y as f32 - cy;
+                    let r = (dx * dx + dy * dy).sqrt() / max_r;
 
-            // 周辺ほど暗くなる係数
-            let fade = if r <= inner_r {
-                0.0
-            } else if r >= outer_r {
-                1.0
-            } else {
-                let t = (r - inner_r) / (outer_r - inner_r);
-                t * t * (3.0 - 2.0 * t) // smoothstep
-            };
+                    let fade = if r <= inner_r {
+                        0.0
+                    } else if r >= outer_r {
+                        1.0
+                    } else {
+                        let t = (r - inner_r) / (outer_r - inner_r);
+                        t * t * (3.0 - 2.0 * t)
+                    };
 
-            // 暗化: 元画像 × (1 - strength × fade)
-            let mul = 1.0 - strength * fade;
+                    let mul = 1.0 - strength * fade;
 
-            let px = out_rgba.get_pixel_mut(x, y);
-            // linear 空間で処理
-            let rl = srgb_to_linear(px[0] as f32 / 255.0);
-            let gl = srgb_to_linear(px[1] as f32 / 255.0);
-            let bl = srgb_to_linear(px[2] as f32 / 255.0);
-            px[0] = pack_u8(linear_to_srgb(rl * mul));
-            px[1] = pack_u8(linear_to_srgb(gl * mul));
-            px[2] = pack_u8(linear_to_srgb(bl * mul));
+                    let px = out_rgba.get_pixel_mut(x, y);
+                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                    px[0] = pack_u8(linear_to_srgb(rl * mul));
+                    px[1] = pack_u8(linear_to_srgb(gl * mul));
+                    px[2] = pack_u8(linear_to_srgb(bl * mul));
+                }
+            }
+            Ok(DynamicImage::ImageRgba8(out_rgba))
+        }
+        mode => {
+            // 弧状暗点モード（ArcuateSuperior / ArcuateInferior / Biarcuate）
+            //
+            // 視神経乳頭（ON head）の位置: 画像中心から水平方向 15% オフセット（耳側）
+            let on_x = cx + w_f * 0.15;
+            let on_y = cy;
+
+            // 弧状暗点のパラメータ（極座標）
+            // r_min..=r_max: ON head からの距離（min(W,H) 比）
+            let min_dim = w_f.min(h_f);
+            let r_min = min_dim * 0.20; // 内側境界
+            let r_max = min_dim * 0.55 * strength.sqrt(); // 外側境界（strength に応じて拡大）
+
+            // 弧状の角度範囲（ON head からの極角 θ）
+            // 上方弧状: θ ∈ [90°, 270°]（y > on_y の半面、画像座標では y 下向き）
+            // 下方弧状: θ ∈ [-90°, 90°]（y < on_y の半面）
+
+            let apply_superior = matches!(mode, GlaucomaMode::ArcuateSuperior | GlaucomaMode::Biarcuate);
+            let apply_inferior = matches!(mode, GlaucomaMode::ArcuateInferior | GlaucomaMode::Biarcuate);
+
+            let mut out_rgba = rgba.clone();
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 - on_x;
+                    let dy = y as f32 - on_y; // 画像座標: y 下向きが正
+
+                    let r = (dx * dx + dy * dy).sqrt();
+
+                    // ON head からの距離が弧状帯に入っているか
+                    if r < r_min || r > r_max {
+                        continue;
+                    }
+
+                    // 弧状帯の中での正規化距離（smoothstep 用）
+                    let t_r = (r - r_min) / (r_max - r_min);
+                    let fade_r = t_r * t_r * (3.0 - 2.0 * t_r); // smoothstep
+                    // 帯の中央（t_r=0.5）が最も暗く、両端に向かって明るくなる
+                    let fade_radial = 1.0 - (fade_r * 2.0 - 1.0).abs();
+
+                    // 角度条件: dy > 0 が画像下方（inferior）、dy < 0 が上方（superior）
+                    let in_superior = dy < 0.0; // 画像上半分（y が on_y より上）
+                    let in_inferior = dy > 0.0; // 画像下半分
+
+                    let in_arc = (apply_superior && in_superior) || (apply_inferior && in_inferior);
+                    if !in_arc {
+                        continue;
+                    }
+
+                    // ON head に近い角度（x 軸付近）では暗点が弱くなる（弧状の端）
+                    // |θ| が 0 や π に近いほど暗点は弱い → sin(θ) の絶対値でフェード
+                    let theta = dy.atan2(dx); // -π..=π
+                    let arc_fade = theta.sin().abs().sqrt().clamp(0.0, 1.0);
+
+                    let fade = strength * fade_radial * arc_fade;
+
+                    let mul = 1.0 - fade;
+                    let px = out_rgba.get_pixel_mut(x, y);
+                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                    px[0] = pack_u8(linear_to_srgb(rl * mul));
+                    px[1] = pack_u8(linear_to_srgb(gl * mul));
+                    px[2] = pack_u8(linear_to_srgb(bl * mul));
+                }
+            }
+            Ok(DynamicImage::ImageRgba8(out_rgba))
         }
     }
-
-    Ok(DynamicImage::ImageRgba8(out_rgba))
 }
 
 /// 黄斑変性（macular degeneration）シミュレーション。
@@ -2989,7 +3095,7 @@ mod tests {
     fn glaucoma_strength_zero_is_identity() {
         let input = solid_rgba(32, 32, [200, 50, 30, 255]);
         let original = raw_rgba_vec(&input);
-        assert_eq!(raw_rgba_vec(&glaucoma(input, 0.0).unwrap()), original);
+        assert_eq!(raw_rgba_vec(&glaucoma(input, 0.0, GlaucomaMode::Vignette).unwrap()), original);
     }
 
     #[test]
@@ -3031,7 +3137,7 @@ mod tests {
         let input = solid_rgba(32, 32, [100, 150, 200, 255]);
         let original = raw_rgba_vec(&input);
         assert_eq!(
-            raw_rgba_vec(&glaucoma(input, f32::NAN).unwrap()),
+            raw_rgba_vec(&glaucoma(input, f32::NAN, GlaucomaMode::Vignette).unwrap()),
             original
         );
     }
@@ -3073,8 +3179,8 @@ mod tests {
     #[test]
     fn glaucoma_strength_above_one_clamped() {
         let input = solid_rgba(64, 64, [200, 100, 50, 255]);
-        let out2 = raw_rgba_vec(&glaucoma(input.clone(), 2.0).unwrap());
-        let out1 = raw_rgba_vec(&glaucoma(input, 1.0).unwrap());
+        let out2 = raw_rgba_vec(&glaucoma(input.clone(), 2.0, GlaucomaMode::Vignette).unwrap());
+        let out1 = raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap());
         assert_eq!(out2, out1);
     }
 
@@ -3091,7 +3197,7 @@ mod tests {
                 assert_eq!(px[3], 200, "alpha must be preserved");
             }
         };
-        check_alpha(glaucoma(input.clone(), 0.8).unwrap());
+        check_alpha(glaucoma(input.clone(), 0.8, GlaucomaMode::Vignette).unwrap());
         check_alpha(macular_degeneration(input.clone(), 0.8).unwrap());
         check_alpha(hemianopia(input.clone(), 0.8, 0.0).unwrap());
         check_alpha(tunnel_vision(input, 0.8).unwrap());
@@ -3105,7 +3211,7 @@ mod tests {
     fn visual_field_filters_preserve_dimensions() {
         let input = solid_rgba(47, 31, [100, 100, 100, 255]);
         let (w, h) = (47, 31);
-        let out = glaucoma(input.clone(), 0.5).unwrap();
+        let out = glaucoma(input.clone(), 0.5, GlaucomaMode::Vignette).unwrap();
         assert_eq!((out.width(), out.height()), (w, h));
         let out = macular_degeneration(input.clone(), 0.5).unwrap();
         assert_eq!((out.width(), out.height()), (w, h));
@@ -3124,7 +3230,7 @@ mod tests {
         // 白画像で中心（r < inner_r=0.3）は変化なし
         let size = 64_u32;
         let input = solid_rgba(size, size, [200, 100, 50, 255]);
-        let out = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
         let cx = size / 2;
         let cy = size / 2;
         let center = out.get_pixel(cx, cy);
@@ -3141,7 +3247,7 @@ mod tests {
         // コーナー (r=1.0 > outer_r=0.5) → mul=0.0 → 黒
         let size = 64_u32;
         let input = solid_rgba(size, size, [200, 100, 50, 255]);
-        let out = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
         let corner = out.get_pixel(0, 0);
         assert_eq!([corner[0], corner[1], corner[2]], [0, 0, 0]);
     }
@@ -3155,8 +3261,8 @@ mod tests {
         // コーナー付近では strength=0.5 の方が strength=1.0 より明るい
         let size = 64_u32;
         let input = solid_rgba(size, size, [200, 200, 200, 255]);
-        let out05 = glaucoma(input.clone(), 0.5).unwrap().to_rgba8();
-        let out10 = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let out05 = glaucoma(input.clone(), 0.5, GlaucomaMode::Vignette).unwrap().to_rgba8();
+        let out10 = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
         // コーナー (0,0) での輝度比較
         let r05 = out05.get_pixel(0, 0)[0] as i32;
         let r10 = out10.get_pixel(0, 0)[0] as i32;
@@ -3349,7 +3455,7 @@ mod tests {
         // 中心から 30% 離れた点での輝度比較（glaucoma は保存, tunnel は暗化済み）
         let size = 100_u32;
         let input = solid_rgba(size, size, [200, 200, 200, 255]);
-        let g_out = glaucoma(input.clone(), 1.0).unwrap().to_rgba8();
+        let g_out = glaucoma(input.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
         let t_out = tunnel_vision(input, 1.0).unwrap().to_rgba8();
         // (50, 65) は中心から dy=15, normalized ≈ 0.15 → glaucoma ではinner_r=0.3 内で保存
         let cx = 50_u32;
@@ -3389,7 +3495,7 @@ mod tests {
     #[test]
     fn glaucoma_1x1_does_not_panic() {
         let input = pixel(128, 128, 128, 255);
-        let _ = glaucoma(input, 1.0).unwrap();
+        let _ = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap();
     }
 
     #[test]
@@ -3418,7 +3524,7 @@ mod tests {
     fn glaucoma_white_image_center_stays_white_corner_goes_black() {
         let size = 64_u32;
         let input = solid_rgba(size, size, [255, 255, 255, 255]);
-        let out = glaucoma(input, 1.0).unwrap().to_rgba8();
+        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
         let cx = size / 2;
         let cy = size / 2;
         let center = out.get_pixel(cx, cy);
@@ -3440,7 +3546,7 @@ mod tests {
         let size = 32_u32;
         let input = solid_rgba(size, size, [0, 0, 0, 255]);
         let original = raw_rgba_vec(&input);
-        assert_eq!(raw_rgba_vec(&glaucoma(input, 1.0).unwrap()), original);
+        assert_eq!(raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap()), original);
     }
 
     #[test]
@@ -4783,6 +4889,87 @@ mod tests {
             out_r_sum < orig_r_sum,
             "nyctalopia darkens: red sum {out_r_sum} < orig {orig_r_sum}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #52: glaucoma 弧状暗点オプション
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn glaucoma_vignette_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [180, 120, 60, 255]);
+        let out = glaucoma(input.clone(), 0.0, GlaucomaMode::Vignette).unwrap();
+        assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
+    }
+
+    #[test]
+    fn glaucoma_arcuate_superior_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [180, 120, 60, 255]);
+        let out = glaucoma(input.clone(), 0.0, GlaucomaMode::ArcuateSuperior).unwrap();
+        assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
+    }
+
+    #[test]
+    fn glaucoma_arcuate_inferior_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [180, 120, 60, 255]);
+        let out = glaucoma(input.clone(), 0.0, GlaucomaMode::ArcuateInferior).unwrap();
+        assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
+    }
+
+    #[test]
+    fn glaucoma_biarcuate_strength_zero_is_identity() {
+        let input = solid_rgba(32, 32, [180, 120, 60, 255]);
+        let out = glaucoma(input.clone(), 0.0, GlaucomaMode::Biarcuate).unwrap();
+        assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
+    }
+
+    #[test]
+    fn glaucoma_vignette_strength_one_darkens() {
+        // 十分大きな画像で周辺部が暗化することを確認
+        let mut img = RgbaImage::new(64, 64);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
+        }
+        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Vignette).unwrap();
+        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        assert!(out_sum < orig_sum, "glaucoma Vignette strength=1 must darken: {out_sum} < {orig_sum}");
+    }
+
+    #[test]
+    fn glaucoma_arcuate_superior_strength_one_darkens() {
+        let mut img = RgbaImage::new(64, 64);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 255]);
+        }
+        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::ArcuateSuperior).unwrap();
+        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        assert!(out_sum < orig_sum, "glaucoma ArcuateSuperior strength=1 must darken");
+    }
+
+    #[test]
+    fn glaucoma_arcuate_inferior_strength_one_darkens() {
+        let mut img = RgbaImage::new(64, 64);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 255]);
+        }
+        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::ArcuateInferior).unwrap();
+        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        assert!(out_sum < orig_sum, "glaucoma ArcuateInferior strength=1 must darken");
+    }
+
+    #[test]
+    fn glaucoma_biarcuate_strength_one_darkens() {
+        let mut img = RgbaImage::new(64, 64);
+        for px in img.pixels_mut() {
+            *px = Rgba([200, 200, 200, 255]);
+        }
+        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Biarcuate).unwrap();
+        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        assert!(out_sum < orig_sum, "glaucoma Biarcuate strength=1 must darken");
     }
 }
 

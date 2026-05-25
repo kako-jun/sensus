@@ -20,7 +20,7 @@ use sensus_core::shaders::{
     vestibular_neuritis_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, deuteranopia, eye_strain, glaucoma, hemianopia,
+    achromatopsia, astigmatism, deuteranopia, eye_strain, glaucoma, GlaucomaMode, hemianopia,
     hyperopia, macular_degeneration, myopia, presbyopia, protanopia, tetrachromacy,
     tritanopia, tunnel_vision, vestibular_neuritis,
 };
@@ -565,7 +565,7 @@ fn shader_equiv_strength_zero_no_change() {
         ("deuteranopia", deuteranopia(img.clone(), 0.0)),
         ("tritanopia", tritanopia(img.clone(), 0.0)),
         ("achromatopsia", achromatopsia(img.clone(), 0.0)),
-        ("glaucoma", glaucoma(img.clone(), 0.0)),
+        ("glaucoma", glaucoma(img.clone(), 0.0, GlaucomaMode::Vignette)),
         ("tunnel_vision", tunnel_vision(img.clone(), 0.0)),
         ("macular_degeneration", macular_degeneration(img.clone(), 0.0)),
         ("hemianopia", hemianopia(img.clone(), 0.0, 0.5)),
@@ -708,7 +708,7 @@ fn shader_equiv_glaucoma_strength_1_0_psnr() {
     let u = glaucoma_uniforms(1.0, 32, 32);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 1.0).unwrap().to_rgba8();
+    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=1.0: PSNR {db:.1} dB < 30 dB");
@@ -720,7 +720,7 @@ fn shader_equiv_glaucoma_strength_0_5_psnr() {
     let u = glaucoma_uniforms(0.5, 32, 32);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 0.5).unwrap().to_rgba8();
+    let cpu_out = glaucoma(img.clone(), 0.5, GlaucomaMode::Vignette).unwrap().to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=0.5: PSNR {db:.1} dB < 30 dB");

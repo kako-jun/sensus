@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **vision: glaucoma に弧状暗点モードを追加** (#52):
+  `GlaucomaMode` enum を導入し、臨床的により正確な Bjerrum 弧状暗点パターンを実装。
+  ON head を中央から水平 15% オフセットした位置に設定し、極座標リング + `sin(θ)` フェードで
+  弧状マスクを生成。モード一覧:
+  - `Vignette` — 従来の均等周辺暗化（後方互換）
+  - `ArcuateSuperior` — 上方弧状暗点（上半球 Bjerrum scotoma）
+  - `ArcuateInferior` — 下方弧状暗点（下半球 Bjerrum scotoma）
+  - `Biarcuate` — 上下両方（進行期緑内障）
+  `lib.rs` のデフォルト呼び出しは `Vignette` を維持し後方互換性を保つ。
+  テスト追加: 各モードで strength=0 → 元画像一致、strength=1 → 暗化確認（7 ケース）。
+  `docs/overview.md` にモード説明と「均等暗化は近似」注記を追記。
+
 - **shader: tetrachromacy/vertigo/bppv_rotation/vestibular_neuritis/floaters の GLSL シェーダ追加** (#48):
   - `tetrachromacy.frag` — LMS 変換 + Cb/Cr 誇張（uStrength）
   - `vestibular_neuritis.frag` — 水平シフト + 1D blur（uStrength, uRadiusPx, uShiftTexel）
