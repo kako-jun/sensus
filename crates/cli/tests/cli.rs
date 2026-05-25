@@ -82,33 +82,6 @@ fn cli_strength_zero_is_identity() {
 }
 
 #[test]
-fn cli_unimplemented_filter_returns_exit_2() {
-    let dir = TempDir::new().unwrap();
-    let input = dir.path().join("in.png");
-    let output = dir.path().join("out.png");
-    write_pixel_png(&input, [100, 100, 100, 255]);
-
-    let status = cargo_run()
-        .args([
-            "-i",
-            input.to_str().unwrap(),
-            "-o",
-            output.to_str().unwrap(),
-            "--filter",
-            // tetrachromacy は Phase 1+ 未実装。Phase 2 (myopia 等) は実装済み。
-            "tetrachromacy",
-        ])
-        .status()
-        .unwrap();
-
-    assert_eq!(
-        status.code(),
-        Some(2),
-        "expected exit code 2 for unimplemented filter"
-    );
-}
-
-#[test]
 fn cli_strength_above_one_is_rejected_at_cli_layer() {
     let dir = TempDir::new().unwrap();
     let input = dir.path().join("in.png");

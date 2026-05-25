@@ -34,6 +34,10 @@ enum Filter {
     Floaters,
     Photophobia,
     NightBlindness,
+    // Phase 4: 平衡・めまい視覚 (Issue #9)
+    Vertigo,
+    BppvRotation,
+    VestibularNeuritis,
 }
 
 impl Filter {
@@ -57,6 +61,9 @@ impl Filter {
             Filter::Floaters => CoreFilter::Floaters,
             Filter::Photophobia => CoreFilter::Photophobia,
             Filter::NightBlindness => CoreFilter::NightBlindness,
+            Filter::Vertigo => CoreFilter::Vertigo,
+            Filter::BppvRotation => CoreFilter::BppvRotation,
+            Filter::VestibularNeuritis => CoreFilter::VestibularNeuritis,
         }
     }
 }
