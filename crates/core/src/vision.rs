@@ -1687,7 +1687,8 @@ pub fn tunnel_vision(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
 /// 複視（Diplopia）シミュレーション。
 ///
 /// 元画像を `(offset_x, offset_y)` ピクセルだけ平行移動した「幽霊像」を
-/// `ghost_strength * strength` の強度でアルファブレンドして合成する。
+/// `ghost_strength * strength` の alpha で alpha blend して合成する。
+/// `out = orig * (1 - alpha) + ghost * alpha` により輝度が保存される。
 ///
 /// # 引数
 /// - `strength`: エフェクト全体強度（0.0..=1.0）
@@ -1714,7 +1715,7 @@ pub fn diplopia(
     let dx = (offset_x * min_dim).round() as i32;
     let dy = (offset_y * min_dim).round() as i32;
     // ghost の寄与 = ghost_strength × strength（線形、二重スケーリングしない）
-    let ghost_alpha = ghost_strength.clamp(0.0, 1.0) * s;
+    let ghost_alpha = (ghost_strength.clamp(0.0, 1.0) * s).clamp(0.0, 1.0);
 
     let mut out = RgbaImage::new(width, height);
     for y in 0..height as i32 {
@@ -1738,10 +1739,10 @@ pub fn diplopia(
                 srgb_to_linear(ghost_px[2] as f32 / 255.0),
             ];
             let blended = [
-                // out = orig + ghost * ghost_alpha（加算合成、clamp で白飛び防止）
-                (o[0] + g[0] * ghost_alpha).clamp(0.0, 1.0),
-                (o[1] + g[1] * ghost_alpha).clamp(0.0, 1.0),
-                (o[2] + g[2] * ghost_alpha).clamp(0.0, 1.0),
+                // out = orig * (1 - alpha) + ghost * alpha（alpha blend、輝度保存）
+                o[0] * (1.0 - ghost_alpha) + g[0] * ghost_alpha,
+                o[1] * (1.0 - ghost_alpha) + g[1] * ghost_alpha,
+                o[2] * (1.0 - ghost_alpha) + g[2] * ghost_alpha,
             ];
 
             out.put_pixel(
@@ -3939,7 +3940,7 @@ mod tests {
         let out_px_val = out.to_rgba8().get_pixel(check_x, check_y)[0];
         assert!(
             out_px_val > orig_px,
-            "diplopia should brighten via ghost: orig={orig_px}, out={out_px_val}"
+            "diplopia should show ghost (alpha blend): orig={orig_px}, out={out_px_val}"
         );
     }
 
