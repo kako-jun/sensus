@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sensus_core::{pipeline::{FilterStep, Pipeline}, Error as CoreError, Filter as CoreFilter};
+use sensus_core::{pipeline::{FilterStep, Pipeline}, vision::{depth_aware_blur, DepthBlurKind}, Error as CoreError, Filter as CoreFilter};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -38,9 +38,26 @@ enum Filter {
     Vertigo,
     BppvRotation,
     VestibularNeuritis,
+    // Phase N: 深度マップ対応距離依存ぼけ (Issue #19)
+    MyopiaDepth,
+    HyperopiaDepth,
+    DepthOfField,
 }
 
 impl Filter {
+    fn is_depth_filter(self) -> bool {
+        matches!(self, Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField)
+    }
+
+    fn depth_kind(self) -> Option<DepthBlurKind> {
+        match self {
+            Filter::MyopiaDepth => Some(DepthBlurKind::Myopia),
+            Filter::HyperopiaDepth => Some(DepthBlurKind::Hyperopia),
+            Filter::DepthOfField => Some(DepthBlurKind::DepthOfField),
+            _ => None,
+        }
+    }
+
     /// Map the CLI-facing enum (clap derive) to the core enum.
     fn to_core(self) -> CoreFilter {
         match self {
@@ -64,6 +81,10 @@ impl Filter {
             Filter::Vertigo => CoreFilter::Vertigo,
             Filter::BppvRotation => CoreFilter::BppvRotation,
             Filter::VestibularNeuritis => CoreFilter::VestibularNeuritis,
+            Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField => {
+                // depth フィルタは pipeline を通さないため、ここには来ない
+                unreachable!("depth filters must be handled separately")
+            }
         }
     }
 }
@@ -114,6 +135,14 @@ struct Cli {
     /// Only used with --filter hemianopia.
     #[arg(long, default_value = "0.0")]
     side: f32,
+
+    /// Depth map image path (PNG / JPEG / etc.). Only used with depth blur filters.
+    #[arg(long)]
+    depth: Option<PathBuf>,
+
+    /// Focus depth in 0.0..=1.0 (bright=near, dark=far). Only used with depth blur filters.
+    #[arg(long, default_value = "0.5", value_parser = parse_focus)]
+    focus: f32,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -124,6 +153,17 @@ fn parse_strength(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=1.0).contains(&v) {
         return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse the `--focus` argument and reject values outside `0.0..=1.0` or NaN.
+fn parse_focus(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=1.0).contains(&v) {
+        return Err(format!("focus must be in 0.0..=1.0, got {v}"));
     }
     Ok(v)
 }
@@ -194,6 +234,32 @@ fn run(cli: Cli) -> Result<(), RunError> {
     })?;
 
     let (width, height) = (img.width(), img.height());
+
+    // depth フィルタが含まれる場合は単独処理（Pipeline を通さない）
+    // TODO(#19): Pipeline 統合時にここを削除し Pipeline 経由で処理する
+    if cli.filter.iter().any(|f| f.is_depth_filter()) {
+        if cli.filter.len() > 1 {
+            return Err(RunError::Pipeline(
+                "sensus: depth blur filters cannot be combined with other filters".to_string(),
+            ));
+        }
+        let kind = cli.filter[0].depth_kind().unwrap();
+        let depth_path = cli.depth.as_ref().ok_or_else(|| {
+            RunError::Pipeline(
+                "sensus: --depth <PATH> is required for depth blur filters".to_string(),
+            )
+        })?;
+        let depth_img = image::open(depth_path).map_err(|source| RunError::InputOpen {
+            path: depth_path.clone(),
+            source,
+        })?;
+        let out = depth_aware_blur(img, &depth_img, cli.focus, cli.strength * 0.023, kind)
+            .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
+        return out.save(&cli.output).map_err(|source| RunError::OutputSave {
+            path: cli.output.clone(),
+            source,
+        });
+    }
 
     // Build pipeline from --filter list (must not be empty; clap enforces num_args=1..)
     let mut pipeline = Pipeline::new();
