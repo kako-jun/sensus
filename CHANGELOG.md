@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **docs: 医学的緊急注記を diplopia/vestibular_neuritis/cataract/nyctalopia に追加** (#64):
+  - `diplopia`: 🚨 即救急 — 突然の複視は動眼神経麻痺・脳幹梗塞の可能性
+  - `vestibular_neuritis`: 🚨 即救急 — 突然の激しいめまいは脳卒中との鑑別が必要
+  - `cataract`: ⚠️ 即受診 — 急激な視力低下・視野変化は眼科受診推奨
+  - `nyctalopia`: ⚠️ 早期受診 — 夜盲の急激な悪化はビタミンA欠乏・網膜色素変性の可能性
+
 - **vision: Metamorphopsia（歪視）フィルタを追加** (#55):
   LCG ベースの 2D グリッドノイズ変位マップで各ピクセルをリマップする `metamorphopsia()` 関数を実装。
   `strength=0` は byte-exact identity、`strength=1` で最大 8px の変位。双線形補間 + edge clamp。
