@@ -2550,9 +2550,60 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     Ok(DynamicImage::ImageRgba8(out))
 }
 
-// ---------------------------------------------------------------
-// Issue #58: Teichopsia フィルタ（偏頭痛の前兆：要塞スペクトル）
-// ---------------------------------------------------------------
+/// ディテールロス（ピクセル化）シミュレーション（cell_size 直接指定版）。
+///
+/// `cell_size`: タイルサイズ (px)。1 以下の場合は identity を返す。
+/// `strength` は無視され、`cell_size` がそのままタイルサイズとして使用される。
+pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: u32) -> Result<DynamicImage> {
+    let rgba = img.to_rgba8();
+    let tile_size = cell_size.max(1);
+    if tile_size <= 1 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+    let width = rgba.width();
+    let height = rgba.height();
+    let mut out = rgba.clone();
+
+    let tile_cols = width.div_ceil(tile_size);
+    let tile_rows = height.div_ceil(tile_size);
+
+    for ty in 0..tile_rows {
+        for tx in 0..tile_cols {
+            let x0 = tx * tile_size;
+            let y0 = ty * tile_size;
+            let x1 = (x0 + tile_size).min(width);
+            let y1 = (y0 + tile_size).min(height);
+            let count = ((x1 - x0) * (y1 - y0)) as u64;
+            if count == 0 {
+                continue;
+            }
+
+            let mut sum = [0.0_f64; 3];
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let p = rgba.get_pixel(px, py);
+                    sum[0] += srgb_to_linear(p[0] as f32 / 255.0) as f64;
+                    sum[1] += srgb_to_linear(p[1] as f32 / 255.0) as f64;
+                    sum[2] += srgb_to_linear(p[2] as f32 / 255.0) as f64;
+                }
+            }
+            let avg_r = pack_u8(linear_to_srgb((sum[0] / count as f64) as f32));
+            let avg_g = pack_u8(linear_to_srgb((sum[1] / count as f64) as f32));
+            let avg_b = pack_u8(linear_to_srgb((sum[2] / count as f64) as f32));
+
+            for py in y0..y1 {
+                for px in x0..x1 {
+                    let p = out.get_pixel_mut(px, py);
+                    p[0] = avg_r;
+                    p[1] = avg_g;
+                    p[2] = avg_b;
+                }
+            }
+        }
+    }
+
+    Ok(DynamicImage::ImageRgba8(out))
+}
 
 /// 閃輝暗点（Teichopsia / Fortification Spectra）シミュレーション。
 ///

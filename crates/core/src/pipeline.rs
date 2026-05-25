@@ -76,19 +76,23 @@ impl FilterStep {
 
     fn apply(&self, img: DynamicImage) -> Result<DynamicImage> {
         match self.filter {
-            Filter::Astigmatism => vision::astigmatism(img, self.strength, self.axis),
+            Filter::Astigmatism { axis_deg } => vision::astigmatism(img, self.strength, axis_deg),
             Filter::Cataract => vision::cataract(img, self.strength, self.seed),
-            Filter::Floaters => {
-                vision::floaters(img, self.strength, self.density, self.seed, self.gaze_x, self.gaze_y)
+            Filter::Floaters { seed, density, .. } => {
+                vision::floaters(img, self.strength, density, seed, self.gaze_x, self.gaze_y)
             }
             Filter::Photophobia => vision::photophobia(img, self.strength),
             Filter::NightBlindness => vision::nyctalopia(img, self.strength),
-            Filter::Hemianopia => vision::hemianopia(img, self.strength, self.side),
+            Filter::Hemianopia { side } => vision::hemianopia(img, self.strength, side),
+            Filter::Glaucoma { mode } => vision::glaucoma(img, self.strength, mode),
             Filter::Diplopia => vision::diplopia(img, self.strength, self.offset_x, self.offset_y, self.ghost_strength),
             Filter::Nystagmus => vision::nystagmus(img, self.strength, self.amplitude, self.direction_deg),
-            Filter::Starbursts => vision::starbursts(img, self.strength, self.num_rays, self.ray_length_ratio, self.threshold, self.dispersion),
+            Filter::Starbursts { num_rays, ray_length_ratio, threshold, dispersion } => {
+                vision::starbursts(img, self.strength, num_rays, ray_length_ratio, threshold, dispersion)
+            }
             Filter::Metamorphopsia => vision::metamorphopsia(img, self.strength, self.meta_freq, self.meta_seed),
-            Filter::FlickeringStars => vision::flickering_stars(img, self.strength, self.seed),
+            Filter::FlickeringStars { seed } => vision::flickering_stars(img, self.strength, seed),
+            Filter::DetailLoss { cell_size } => vision::detail_loss_with_cell_size(img, self.strength, cell_size),
             f => crate::apply(f, img, self.strength),
         }
     }
@@ -164,15 +168,14 @@ mod tests {
         let pipeline = Pipeline::new()
             .push(FilterStep::new(Filter::Myopia, 0.5))
             .push(FilterStep::new(Filter::Protanopia, 1.0))
-            .push(FilterStep::new(Filter::Glaucoma, 0.8));
+            .push(FilterStep::new(Filter::Glaucoma { mode: crate::vision::GlaucomaMode::Vignette }, 0.8));
         assert!(pipeline.apply(img).is_ok());
     }
 
     #[test]
     fn filter_step_with_custom_params() {
         let img = make_image();
-        let mut step = FilterStep::new(Filter::Astigmatism, 0.7);
-        step.axis = 45.0;
+        let step = FilterStep::new(Filter::Astigmatism { axis_deg: 45.0 }, 0.7);
         let pipeline = Pipeline::new().push(step);
         assert!(pipeline.apply(img).is_ok());
     }
@@ -180,9 +183,7 @@ mod tests {
     #[test]
     fn floaters_step_with_params() {
         let img = make_image();
-        let mut step = FilterStep::new(Filter::Floaters, 0.6);
-        step.seed = 42;
-        step.density = 0.3;
+        let mut step = FilterStep::new(Filter::Floaters { seed: 42, density: 0.3, size: 1.0 }, 0.6);
         step.gaze_x = 0.4;
         step.gaze_y = 0.6;
         let pipeline = Pipeline::new().push(step);
@@ -234,14 +235,14 @@ mod tests {
 
         let ab = Pipeline::new()
             .push(FilterStep::new(Filter::Protanopia, 1.0))
-            .push(FilterStep::new(Filter::Glaucoma, 1.0))
+            .push(FilterStep::new(Filter::Glaucoma { mode: crate::vision::GlaucomaMode::Vignette }, 1.0))
             .apply(img)
             .unwrap()
             .to_rgb8()
             .into_raw();
 
         let ba = Pipeline::new()
-            .push(FilterStep::new(Filter::Glaucoma, 1.0))
+            .push(FilterStep::new(Filter::Glaucoma { mode: crate::vision::GlaucomaMode::Vignette }, 1.0))
             .push(FilterStep::new(Filter::Protanopia, 1.0))
             .apply(img2)
             .unwrap()

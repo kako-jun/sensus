@@ -15,6 +15,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dispersion=1.0` では各 ray の角度を色相に対応した HSL 虹色（S=1, L=0.5）で着色し additive blend する。
   `pipeline.rs` の `FilterStep` に `dispersion` フィールドを追加（デフォルト: 0.0）。
   `shaders.rs` の `StarburstsUniforms` に `dispersion` フィールドを追加し `starbursts_uniforms()` の引数を更新。
+  `starbursts.frag` に `uDispersion` uniform 追加し UV 角度ベースの虹色近似を実装。
+  テスト: `dispersion=0.0` → 既存テスト通過、`dispersion=1.0` → 非グレー（虹色）ピクセル生成確認。
+
+### Breaking Changes
+
+- **BREAKING: v0.4.0: Filter enum にパラメータ埋め込み（案 A）** (#65):
+  以下のバリアントがパラメータを直接 enum に埋め込む形式に変更された（HearingFilter と同じパターン）。
+  `#[derive(PartialEq, Eq)]` は `f32` フィールドを持つバリアントのため `PartialEq` のみに変更。
+  - `Astigmatism` → `Astigmatism { axis_deg: f32 }`（シャープ方向の経線角。旧 `apply()` の 90° デフォルト相当）
+  - `Glaucoma` → `Glaucoma { mode: GlaucomaMode }`（暗点モード指定。旧デフォルト: Vignette）
+  - `Hemianopia` → `Hemianopia { side: f32 }`（0.0=左欠損, 1.0=右欠損。旧デフォルト: 0.0）
+  - `Floaters` → `Floaters { seed: u64, density: f32, size: f32 }`（seed/密度/サイズ。旧デフォルト: 0/0.5/1.0）
+  - `Starbursts` → `Starbursts { num_rays: u32, ray_length_ratio: f32, threshold: f32, dispersion: f32 }`
+  - `DetailLoss` → `DetailLoss { cell_size: u32 }`（タイルサイズ直接指定）
+  - `FlickeringStars` → `FlickeringStars { seed: u64 }`（ランダムシード）
+  `apply()` は各バリアントのパラメータを使って対応関数を呼ぶよう更新。
+  CLI (`main.rs`) の `to_core()` は旧来のデフォルト値でパラメータ付きバリアントに変換。
+  `vision::detail_loss_with_cell_size()` を新規追加（`cell_size` 直接指定版）。
+  `pipeline.rs` の `FilterStep::apply()` を更新し、パラメータ付きバリアントから直接値を取得するよう変更。
+
+
+- **vision: starbursts に波長分散（虹色光芒）オプション追加** (#67):
+  `starbursts()` シグネチャに `dispersion: f32` パラメータを追加。
+  `dispersion=0.0`（デフォルト）は既存の白い光芒と後方互換。
+  `dispersion=1.0` では各 ray の角度を色相に対応した HSL 虹色（S=1, L=0.5）で着色し additive blend する。
+  `pipeline.rs` の `FilterStep` に `dispersion` フィールドを追加（デフォルト: 0.0）。
+  `shaders.rs` の `StarburstsUniforms` に `dispersion` フィールドを追加し `starbursts_uniforms()` の引数を更新。
   `starbursts.frag` に `uDispersion` uniform を追加し UV 角度ベースの虹色近似を実装。
   テスト: `dispersion=0.0` → 既存テスト通過、`dispersion=1.0` → 非グレー（虹色）ピクセル生成確認。
 

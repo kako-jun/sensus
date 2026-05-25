@@ -75,14 +75,14 @@ impl Filter {
             Filter::Tetrachromacy => CoreFilter::Tetrachromacy,
             Filter::Myopia => CoreFilter::Myopia,
             Filter::Hyperopia => CoreFilter::Hyperopia,
-            Filter::Astigmatism => CoreFilter::Astigmatism,
+            Filter::Astigmatism => CoreFilter::Astigmatism { axis_deg: 90.0 },
             Filter::Presbyopia => CoreFilter::Presbyopia,
-            Filter::Glaucoma => CoreFilter::Glaucoma,
+            Filter::Glaucoma => CoreFilter::Glaucoma { mode: sensus_core::vision::GlaucomaMode::Vignette },
             Filter::MacularDegeneration => CoreFilter::MacularDegeneration,
-            Filter::Hemianopia => CoreFilter::Hemianopia,
+            Filter::Hemianopia => CoreFilter::Hemianopia { side: 0.0 },
             Filter::TunnelVision => CoreFilter::TunnelVision,
             Filter::Cataract => CoreFilter::Cataract,
-            Filter::Floaters => CoreFilter::Floaters,
+            Filter::Floaters => CoreFilter::Floaters { seed: 0, density: 0.5, size: 1.0 },
             Filter::Photophobia => CoreFilter::Photophobia,
             Filter::NightBlindness => CoreFilter::NightBlindness,
             Filter::Vertigo => CoreFilter::Vertigo,
@@ -90,7 +90,7 @@ impl Filter {
             Filter::VestibularNeuritis => CoreFilter::VestibularNeuritis,
             Filter::Diplopia => CoreFilter::Diplopia,
             Filter::Nystagmus => CoreFilter::Nystagmus,
-            Filter::Starbursts => CoreFilter::Starbursts,
+            Filter::Starbursts => CoreFilter::Starbursts { num_rays: 6, ray_length_ratio: 0.1, threshold: 0.8, dispersion: 0.0 },
             Filter::EyeStrain => CoreFilter::EyeStrain,
             Filter::DryEye => CoreFilter::DryEye,
             Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField => {
@@ -525,13 +525,13 @@ fn run(cli: Cli) -> Result<(), RunError> {
     }
     if cli.filter.len() == 1 {
         let core_filter = cli.filter[0].to_core();
-        if !matches!(core_filter, CoreFilter::Astigmatism) && cli.axis != 90.0 {
+        if !matches!(core_filter, CoreFilter::Astigmatism { .. }) && cli.axis != 90.0 {
             eprintln!(
                 "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
             );
         }
-        let uses_seed = matches!(core_filter, CoreFilter::Cataract | CoreFilter::Floaters);
-        let uses_floater_params = matches!(core_filter, CoreFilter::Floaters);
+        let uses_seed = matches!(core_filter, CoreFilter::Cataract | CoreFilter::Floaters { .. });
+        let uses_floater_params = matches!(core_filter, CoreFilter::Floaters { .. });
         if !uses_seed && cli.seed != 0 {
             eprintln!(
                 "sensus: warning: --seed is only used with --filter cataract or floaters (ignored for {core_filter:?})"
@@ -542,7 +542,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
                 "sensus: warning: --density/--gaze-x/--gaze-y are only used with --filter floaters (ignored for {core_filter:?})"
             );
         }
-        let uses_side = matches!(core_filter, CoreFilter::Hemianopia);
+        let uses_side = matches!(core_filter, CoreFilter::Hemianopia { .. });
         if !uses_side && cli.side != 0.0 {
             eprintln!(
                 "sensus: warning: --side is only used with --filter hemianopia (ignored for {core_filter:?})"
