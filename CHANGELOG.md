@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `vestibular_neuritis_strength_one_differs_from_input` の 3 テストを追加。
   グラデーション画像に strength=1 を適用し、少なくとも 1 ピクセルが変化することを確認する。
 
+- **test: hearing フィルタの strength=1 効果確認テストを追加** (#61):
+  `paracusis_strength_one_differs_from_input`、`dysmelodia_strength_one_differs_from_input`、
+  `amusia_strength_one_differs_from_input` の 3 テストを追加。
+  サイン波入力に strength=1 を適用し、出力 RMS が入力 RMS と有意に異なることを確認する。
+
 - **vision: Metamorphopsia（歪視）フィルタを追加** (#55):
   LCG ベースの 2D グリッドノイズ変位マップで各ピクセルをリマップする `metamorphopsia()` 関数を実装。
   `strength=0` は byte-exact identity、`strength=1` で最大 8px の変位。双線形補間 + edge clamp。

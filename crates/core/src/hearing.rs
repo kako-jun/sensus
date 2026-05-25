@@ -869,4 +869,45 @@ mod tests {
         let rms: f32 = (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
         assert!(rms > 0.0, "APD should add noise to silence, rms={rms}");
     }
+
+    // ---------------------------------------------------------------
+    // Issue #61: paracusis / dysmelodia / amusia の strength=1 効果確認
+    // ---------------------------------------------------------------
+
+    fn rms(samples: &[f32]) -> f32 {
+        (samples.iter().map(|&x| x * x).sum::<f32>() / samples.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn paracusis_strength_one_differs_from_input() {
+        // 440 Hz サイン波に paracusis strength=1 を適用すると歪みが加わる
+        let buf = sine_wave(440.0, 44100, 44100);
+        let orig_rms = rms(&buf.samples);
+        let out = paracusis(buf, 1.0);
+        let out_rms = rms(&out.samples);
+        // tanh クリッピングで RMS が変化することを確認（完全一致しないこと）
+        let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
+        assert!(rel_diff > 0.001, "paracusis strength=1 must alter signal RMS (rel_diff={rel_diff})");
+    }
+
+    #[test]
+    fn dysmelodia_strength_one_differs_from_input() {
+        let buf = sine_wave(440.0, 44100, 44100);
+        let orig_rms = rms(&buf.samples);
+        let out = dysmelodia(buf, 1.0);
+        let out_rms = rms(&out.samples);
+        let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
+        assert!(rel_diff > 0.001, "dysmelodia strength=1 must alter signal RMS (rel_diff={rel_diff})");
+    }
+
+    #[test]
+    fn amusia_strength_one_differs_from_input() {
+        // 4000 Hz サイン波は 200 Hz カットオフで大きく減衰する
+        let buf = sine_wave(4000.0, 44100, 44100);
+        let orig_rms = rms(&buf.samples);
+        let out = amusia(buf, 1.0);
+        let out_rms = rms(&out.samples);
+        let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
+        assert!(rel_diff > 0.1, "amusia strength=1 must significantly attenuate 4 kHz signal (rel_diff={rel_diff})");
+    }
 }
