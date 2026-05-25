@@ -22,12 +22,12 @@ void main() {
     vec2 ghostUV = clamp(vTexCoord - vec2(uOffsetX, uOffsetY), 0.0, 1.0);
     vec4 ghost = texture(uTexture, ghostUV);
 
-    float alpha = uGhostStrength * uStrength;
+    float alpha = clamp(uGhostStrength * uStrength, 0.0, 1.0);
 
     vec3 o = vec3(srgbToLinear(orig.r), srgbToLinear(orig.g), srgbToLinear(orig.b));
     vec3 g = vec3(srgbToLinear(ghost.r), srgbToLinear(ghost.g), srgbToLinear(ghost.b));
-    // out = orig + ghost * alpha（加算合成、double-scaling しない）
-    vec3 blended = clamp(o + g * alpha, 0.0, 1.0);
+    // out = orig * (1 - alpha) + ghost * alpha（alpha blend、輝度保存）
+    vec3 blended = o * (1.0 - alpha) + g * alpha;
 
     fragColor = vec4(
         linearToSrgb(clamp(blended.r, 0.0, 1.0)),

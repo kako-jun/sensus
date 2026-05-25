@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **BREAKING: vision: diplopia を加算合成から alpha blend に修正** (#53):
+  `out = orig + ghost * alpha`（加算）を `out = orig * (1 - alpha) + ghost * alpha`（alpha blend）に変更。
+  加算合成では輝度が加算されて白飛びが生じていたが、alpha blend により合計輝度が保存される。
+  `strength=1` かつ `ghost_strength=1` の場合、従来は加算で白飛びしていたが、
+  修正後は幽霊像がそのまま重なった状態（ghost が完全に前面）になる。
+  GLSL シェーダ `diplopia.frag` も同様に修正。
+
 ## [0.3.0] - 2026-05-25
 
 ### Added

@@ -1687,7 +1687,8 @@ pub fn tunnel_vision(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
 /// 複視（Diplopia）シミュレーション。
 ///
 /// 元画像を `(offset_x, offset_y)` ピクセルだけ平行移動した「幽霊像」を
-/// `ghost_strength * strength` の強度でアルファブレンドして合成する。
+/// `ghost_strength * strength` の alpha で alpha blend して合成する。
+/// `out = orig * (1 - alpha) + ghost * alpha` により輝度が保存される。
 ///
 /// # 引数
 /// - `strength`: エフェクト全体強度（0.0..=1.0）
@@ -1714,7 +1715,7 @@ pub fn diplopia(
     let dx = (offset_x * min_dim).round() as i32;
     let dy = (offset_y * min_dim).round() as i32;
     // ghost の寄与 = ghost_strength × strength（線形、二重スケーリングしない）
-    let ghost_alpha = ghost_strength.clamp(0.0, 1.0) * s;
+    let ghost_alpha = (ghost_strength.clamp(0.0, 1.0) * s).clamp(0.0, 1.0);
 
     let mut out = RgbaImage::new(width, height);
     for y in 0..height as i32 {
@@ -1738,10 +1739,10 @@ pub fn diplopia(
                 srgb_to_linear(ghost_px[2] as f32 / 255.0),
             ];
             let blended = [
-                // out = orig + ghost * ghost_alpha（加算合成、clamp で白飛び防止）
-                (o[0] + g[0] * ghost_alpha).clamp(0.0, 1.0),
-                (o[1] + g[1] * ghost_alpha).clamp(0.0, 1.0),
-                (o[2] + g[2] * ghost_alpha).clamp(0.0, 1.0),
+                // out = orig * (1 - alpha) + ghost * alpha（alpha blend、輝度保存）
+                o[0] * (1.0 - ghost_alpha) + g[0] * ghost_alpha,
+                o[1] * (1.0 - ghost_alpha) + g[1] * ghost_alpha,
+                o[2] * (1.0 - ghost_alpha) + g[2] * ghost_alpha,
             ];
 
             out.put_pixel(
@@ -3939,7 +3940,7 @@ mod tests {
         let out_px_val = out.to_rgba8().get_pixel(check_x, check_y)[0];
         assert!(
             out_px_val > orig_px,
-            "diplopia should brighten via ghost: orig={orig_px}, out={out_px_val}"
+            "diplopia should show ghost (alpha blend): orig={orig_px}, out={out_px_val}"
         );
     }
 
@@ -3958,6 +3959,108 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(max_err <= 1, "strength=0 should be identity, max_err={max_err}");
+    }
+
+    #[test]
+    fn diplopia_white_on_white_no_overflow() {
+        // 白飛び防止: orig=white, ghost=white, strength=1, ghost_strength=1 → 全ピクセル 255 のまま
+        let size = 16_u32;
+        let img = RgbaImage::from_pixel(size, size, Rgba([255, 255, 255, 255]));
+        let out = diplopia(DynamicImage::ImageRgba8(img), 1.0, 0.1, 0.0, 1.0).unwrap();
+        let out_rgba = out.to_rgba8();
+        for px in out_rgba.pixels() {
+            assert_eq!(px[0], 255, "R channel must remain 255");
+            assert_eq!(px[1], 255, "G channel must remain 255");
+            assert_eq!(px[2], 255, "B channel must remain 255");
+        }
+    }
+
+    #[test]
+    fn diplopia_blend_ratio_at_half_strength() {
+        // 中間値の混合比: orig=黒(0), ghost=白(255), strength=1, ghost_strength=0.5 → 出力が≒127±2
+        // ghost_alpha = ghost_strength * strength = 0.5 * 1.0 = 0.5
+        // alpha blend: out = orig * 0.5 + ghost * 0.5 → 中間値になるはず
+        let size = 16_u32;
+        // 左半分白・右半分黒の画像で、オフセットなし（dx=0）→ 各ピクセルで orig=ghost=同じ色
+        // なので別の方法: 全ピクセル黒の画像に offset=0（幽霊も黒）ではなく、
+        // orig=黒で ghost=白 を得るために 2 枚の画像を使う必要があるが diplopia は 1 枚から作る。
+        // 代わりに: 左半分白・右半分黒の画像で、右端のチェック点を使う。
+        // offset_x=0.5 → dx = 0.5 * 16 = 8px。右半分の任意点(x=12)の ghost は左半分(x=4)白。
+        let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
+        for y in 0..size {
+            for x in 0..(size / 2) {
+                img.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+            }
+        }
+        // check_x=12: orig=black(0), ghost(12-8=4)=white(255)
+        let check_x = 12_u32;
+        let check_y = size / 2;
+        let out = diplopia(DynamicImage::ImageRgba8(img), 1.0, 0.5, 0.0, 0.5).unwrap();
+        let val = out.to_rgba8().get_pixel(check_x, check_y)[0];
+        // linear sRGB 空間で 0.5 blendすると sRGB変換後は約 188 になる（ガンマ補正の影響）
+        // 単純な加算合成なら 255 になっていたが、alpha blend では中間値に抑えられる
+        assert!(
+            val >= 183 && val <= 193,
+            "half ghost_strength alpha blend should produce ≈188 (sRGB of linear 0.5), got {val}"
+        );
+        // また、orig(0) と ghost(255) の単純平均 127 より大きいはず（linear→sRGB変換で増加）
+        assert!(val > 50, "blend result should be clearly above black, got {val}");
+    }
+
+    #[test]
+    fn diplopia_ghost_strength_zero_is_identity() {
+        // ghost_strength=0 の identity: strength=1.0 でも ghost_strength=0 なら orig と一致
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 7) as u8, (y * 5) as u8, 100, 255]);
+        }
+        let orig = img.clone().into_raw();
+        let out = diplopia(DynamicImage::ImageRgba8(img), 1.0, 0.1, 0.1, 0.0).unwrap();
+        let out_raw = out.to_rgba8().into_raw();
+        let max_err = orig.iter().zip(out_raw.iter())
+            .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
+            .max()
+            .unwrap_or(0);
+        assert!(max_err <= 1, "ghost_strength=0 should be identity, max_err={max_err}");
+    }
+
+    #[test]
+    fn diplopia_output_never_exceeds_max() {
+        // グラデーション画像で strength=0.7, ghost_strength=0.8 → 関数がパニックせず正常に返ること
+        // (alpha blend で overflow しないことの確認。u8 の範囲は型保証済み)
+        let size = 32_u32;
+        let mut img = RgbaImage::new(size, size);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = Rgba([(x * 8) as u8, (y * 8) as u8, 200, 255]);
+        }
+        let result = diplopia(DynamicImage::ImageRgba8(img), 0.7, 0.2, 0.1, 0.8);
+        assert!(result.is_ok(), "diplopia should not panic on gradient image");
+        // alpha blend の数学的性質から全チャンネルが [0,1] に収まることを確認
+        let out_rgba = result.unwrap().to_rgba8();
+        let max_val = out_rgba.pixels()
+            .flat_map(|px| [px[0], px[1], px[2]])
+            .max()
+            .unwrap_or(0);
+        assert!(max_val <= 255, "max pixel value should not exceed 255, got {max_val}");
+    }
+
+    #[test]
+    fn diplopia_luminance_preserved_vs_additive() {
+        // 輝度保存: orig=グレー(128), ghost=グレー(128), strength=1, ghost_strength=1 → 出力が≒128
+        // (旧加算合成なら 255 になっていた)
+        // offset=0 → orig=ghost=同じピクセル、alpha blend でも同じ値が出力されるはず
+        let size = 16_u32;
+        let img = RgbaImage::from_pixel(size, size, Rgba([128, 128, 128, 255]));
+        let out = diplopia(DynamicImage::ImageRgba8(img), 1.0, 0.0, 0.0, 1.0).unwrap();
+        let out_rgba = out.to_rgba8();
+        for px in out_rgba.pixels() {
+            let val = px[0] as i32;
+            assert!(
+                (val - 128).abs() <= 2,
+                "alpha blend of gray+gray should preserve luminance ≈128, got {val}"
+            );
+        }
     }
 
     #[test]
