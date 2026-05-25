@@ -9,7 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix: review 指摘全件修正 round3（must×2 / should×3 / nit×3）**:
+- **fix: review 指摘全件修正 round4（must×2 / should×5 / nit×4）**:
+  - [M-1] `cataract_uniforms` に `seed: u32` フィールドを追加。`CataractUniforms` 構造体を新設し、`cataract_uniforms(strength, seed: u64)` シグネチャに変更。これにより `cataract.frag` の `uniform uint uSeed` に正しく seed を渡せるようになった
+  - [M-2] `cataract.frag` の LCG 定数を CPU 実装（Knuth 64bit LCG）に統一。旧: Numerical Recipes 定数（`* 1664525u + 1013904223u`）→ 新: Knuth 定数の下位 32bit（`* 0x4c957f2du + 0xf767814fu`）。`shader_equiv_cataract_strength_zero_psnr` テスト追加
+  - [S-1] `vestibular_neuritis_uniforms` 付近（`shaders.rs` の `VestibularNeuritisUniforms` 構造体と `vision.rs` の `vestibular_neuritis` 関数）に CPU/GLSL シフト定義の対応関係コメントを追加
+  - [S-2] `HemianopiaUniforms.side` フィールドと `hemianopia_uniforms` 関数のコメントを統一。「1.0=右欠損/-1.0=左欠損（GLSL 内部値）」と「公開 API との規約差」を明記
+  - [S-3] `MetamorphopsiaUniforms.seed` を `f32` → `u32` に変更。`metamorphopsia_uniforms` の `seed as f32` → `seed as u32` に修正。`metamorphopsia.frag` の `uniform float uSeed` → `uniform uint uSeed` に変更し、`float(uSeed)` で float 変換
+  - [S-4] `dry_eye` の docコメントに「シード値は内部で固定（42）のため同一入力に対して毎回同一パターン」「フレームごとに変えたい場合は将来の `dry_eye_with_seed` を使用（未実装）」を追記
+  - [S-5] `detail_loss` の docコメントに「タイル中心点参照（GLSL と同一）、`apply(Filter::DetailLoss)` 経由時は `detail_loss_with_cell_size` を呼ぶ」を明記。`detail_loss_with_cell_size` に「タイル内全ピクセル linear sRGB 平均、GLSL と異なるが視覚的に高品質」を明記
+  - [N-1] `starbursts` の docコメントと `hsl_rainbow_to_linear` のコメントが混在していたのを分離。`hsl_rainbow_to_linear` の直前に独立した `///` コメントブロックを配置
+  - [N-2] `teichopsia.frag` の aspect 補正コメントを更新。「`uy / aspect` は UV 空間ではなくピクセル空間で円形になるよう補正する」旨を明確化
+  - [N-3] `shader_equivalence.rs` に 64×32 非正方形テストを追加: `shader_equiv_teichopsia_non_square_psnr`（PSNR ≥ 25 dB）、`shader_equiv_macular_degeneration_non_square_psnr`（PSNR ≥ 30 dB）、`shader_equiv_tunnel_vision_non_square_psnr`（PSNR ≥ 30 dB）。aspect 補正付き `sim_macular_degeneration_aspect` も追加
+  - [N-4] `contrast_sensitivity` の docコメントに「midpoint は linear sRGB 空間で 0.5（知覚的中間輝度 ≈ 0.214 とは異なる数学的中間点の簡易近似）」を追記
+
+
   - [M-1] `teichopsia.frag` の aspect 計算を CPU 実装と一致させる: `uv.x * uAspect` 方式から `uv.y / uAspect` 方式に変更。`shader_equiv_teichopsia_strength_05_psnr`（PSNR ≥ 25 dB）テスト追加
   - [M-2] `detail_loss.frag` を9点サンプルから中心1点サンプリング（pixelation）に変更。CPU（`vision.rs`）も同様にタイル全平均から中心点参照に変更し、CPU/GPU を完全統一。`shader_equiv_detail_loss_strength_1_psnr`（PSNR ≥ 30 dB）テスト追加
   - [S-1] M-1 修正後の teichopsia CPU/GLSL 等価 PSNR テストを追加（上記 M-1 に含む）

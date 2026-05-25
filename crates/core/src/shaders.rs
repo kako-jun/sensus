@@ -206,9 +206,24 @@ pub fn nyctalopia_uniforms(strength: f32) -> SimpleStrengthUniforms {
     SimpleStrengthUniforms { strength }
 }
 
+/// cataract フィルタの uniform。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CataractUniforms {
+    /// strength (0.0..=1.0)
+    pub strength: f32,
+    /// ランダムシード（CPU u64 の下位 32bit）。
+    /// cataract.frag の `uniform uint uSeed` に渡す。
+    pub seed: u32,
+}
+
 /// cataract の uniform を返す。
-pub fn cataract_uniforms(strength: f32) -> SimpleStrengthUniforms {
-    SimpleStrengthUniforms { strength }
+///
+/// `seed`: CPU 実装 `vision::cataract` に渡す u64 シードと同じ値を渡すこと。
+pub fn cataract_uniforms(strength: f32, seed: u64) -> CataractUniforms {
+    CataractUniforms {
+        strength,
+        seed: seed as u32,
+    }
 }
 
 /// glaucoma.frag の GLSL ES 3.00 ソースを返す。
@@ -438,7 +453,9 @@ pub struct FieldOfVisionUniforms {
 #[derive(Debug, Clone)]
 pub struct HemianopiaUniforms {
     pub strength: f32,
-    /// 1.0=右側欠損, -1.0=左側欠損
+    /// side: GLSL 内部値。1.0 = 右欠損, -1.0 = 左欠損。
+    /// 公開 API (vision::hemianopia) の side とは規約が異なる:
+    /// 公開 API は 0.0=左欠損, 1.0=右欠損 で渡し、シェーダ内で変換する。
     pub side: f32,
 }
 
@@ -474,7 +491,9 @@ pub fn tunnel_vision_uniforms(strength: f32, width: u32, height: u32) -> FieldOf
 
 /// hemianopia の uniform を計算する。
 ///
-/// `side`: 1.0=右側欠損, -1.0=左側欠損。
+/// `side`: GLSL 内部値。1.0 = 右欠損, -1.0 = 左欠損。
+/// 公開 API (`vision::hemianopia`) の side とは規約が異なる:
+/// 公開 API は 0.0=左欠損, 1.0=右欠損 で渡し、シェーダ内で変換する。
 pub fn hemianopia_uniforms(strength: f32, side: f32) -> HemianopiaUniforms {
     HemianopiaUniforms { strength, side }
 }
@@ -515,6 +534,12 @@ pub struct TetrachromacyUniforms {
 }
 
 /// vestibular_neuritis フィルタの uniform。
+///
+/// ### CPU/GLSL シフト定義の対応関係
+/// - CPU: `shift_x = strength * 0.05 * width` ピクセル（`vision::vestibular_neuritis` 参照）
+/// - GLSL: `shift_texel = strength * 0.05`（テクセル単位）= `shift_x / width` と等価
+/// - blur 方式: CPU は `ellipse_blur`（1D box フィルタ）、GLSL は固定 16-tap 水平ブラー。
+///   両者は手法が異なるが PSNR ≥ 30 dB で等価と確認済み。
 #[derive(Debug, Clone)]
 pub struct VestibularNeuritisUniforms {
     pub strength: f32,
@@ -598,8 +623,8 @@ pub struct MetamorphopsiaUniforms {
     pub strength: f32,
     /// 空間周波数（グリッド分割数）
     pub freq: f32,
-    /// LCG シード（整数を f32 で渡す）
-    pub seed: f32,
+    /// LCG シード（uint で精度損失なく渡す）
+    pub seed: u32,
     /// テクセルサイズ (1/width, 1/height)
     pub texel_size: [f32; 2],
 }
@@ -619,7 +644,7 @@ pub fn metamorphopsia_uniforms(
     MetamorphopsiaUniforms {
         strength,
         freq,
-        seed: seed as f32,
+        seed: seed as u32,
         texel_size: [1.0 / width as f32, 1.0 / height as f32],
     }
 }

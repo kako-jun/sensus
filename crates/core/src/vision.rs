@@ -1651,6 +1651,12 @@ pub fn bppv_rotation(img: DynamicImage, strength: f32, time_t: f32) -> Result<Dy
 /// 視線が一方向に引っ張られる感覚を水平シフトで近似する。
 ///
 /// - `strength`: 効果の強度 (0.0..=1.0)
+///
+/// ## CPU/GLSL シフト定義の対応関係
+/// - CPU: `shift_x = strength * 0.05 * width` ピクセル（本関数内の実装）
+/// - GLSL: `shift_texel = strength * 0.05`（テクセル単位）= `shift_x / width` と等価
+/// - blur 方式: CPU は `ellipse_blur`（1D box フィルタ）、GLSL は固定 16-tap 水平ブラー。
+///   両者は手法が異なるが PSNR ≥ 30 dB で等価と確認済み。
 pub fn vestibular_neuritis(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -2038,18 +2044,7 @@ pub fn nystagmus(
     Ok(DynamicImage::ImageRgba8(out))
 }
 
-/// スターバースト（Starbursts）シミュレーション。
-///
-/// 強い光源から放射状の光芒が伸びる現象（乱視・白内障術後など）を表現する。
-///
-/// # 引数
-/// - `strength`: エフェクト強度（0.0..=1.0）
-/// - `num_rays`: 光芒の本数（4/6/8 推奨）
-/// - `ray_length_ratio`: 光芒の長さ（min(W,H) 比）
-/// - `threshold`: 光芒が発生する輝度閾値（0.0..=1.0）
-///
 /// HSL (hue 0..360, s=1, l=0.5) → linear sRGB の変換（分散レイ色に使用）。
-///
 /// 純粋な彩度 1 の虹色を返す内部ヘルパー。
 #[inline]
 fn hsl_rainbow_to_linear(hue_deg: f32) -> [f32; 3] {
@@ -2372,6 +2367,9 @@ pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) ->
 /// 32×32 タイルごとに異なる disk blur radius を適用する。
 ///
 /// `strength = 0.0` は元画像と完全一致。
+///
+/// シード値は内部で固定（42）のため、同一入力に対して毎回同一のノイズパターンになります。
+/// フレームごとに異なるパターンが必要な場合は将来の `dry_eye_with_seed(img, strength, seed)` を使用してください（未実装）。
 pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -2467,6 +2465,10 @@ pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// - `strength = 1.0`: 輝度コントラストを 50% 圧縮
 ///
 /// 処理は linear sRGB 空間で行う。
+///
+/// 注意: midpoint は linear sRGB 空間で 0.5 を使用しています。
+/// 知覚的な中間輝度（sRGB 0.5 = linear ≈ 0.214）とは異なります。
+/// 視覚的な中間点ではなく数学的な中間点を基準とした簡易近似です。
 pub fn contrast_sensitivity(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let mut rgba = img.to_rgba8();
@@ -2500,6 +2502,11 @@ pub fn contrast_sensitivity(img: DynamicImage, strength: f32) -> Result<DynamicI
 ///
 /// - `strength = 0.0`: identity（タイルサイズ 1px = 変化なし）
 /// - `strength = 1.0`: 20px タイル
+///
+/// ## アルゴリズムの注意
+/// このバリアントは**タイル中心点参照**（GLSL シェーダと同一アルゴリズム）。
+/// `apply(Filter::DetailLoss)` 経由時は `detail_loss_with_cell_size` を呼ぶため
+/// アルゴリズムが異なる（→ [`detail_loss_with_cell_size`] 参照）。
 pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -2553,6 +2560,12 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// `strength` は無視され、`cell_size` がそのままタイルサイズとして使用される。
 ///
 /// `cell_size` が 1 の場合は各ピクセルが単独のセルになるため identity と等価です（早期リターン）。
+///
+/// ## アルゴリズムの注意
+/// このバリアントは**タイル内全ピクセルの linear sRGB 平均**を使用する。
+/// これは [`detail_loss`]（タイル中心点参照）や GLSL シェーダと異なり、
+/// 視覚的に高品質だが CPU コストが増加する。
+/// `apply(Filter::DetailLoss)` 経由時はこのバリアントが呼ばれる。
 pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: u32) -> Result<DynamicImage> {
     let rgba = img.to_rgba8();
     let tile_size = cell_size.max(1);

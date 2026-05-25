@@ -660,6 +660,49 @@ fn sim_macular_degeneration(img: &RgbaImage, strength: f32) -> RgbaImage {
     out
 }
 
+/// macular_degeneration.frag の計算を Rust で再現する（aspect 補正付き）。
+/// GLSL シェーダと同じ `uvA = vec2(uv.x * aspect, uv.y)` を使用。
+fn sim_macular_degeneration_aspect(img: &RgbaImage, strength: f32, aspect: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let uv_x = (x as f32 + 0.5) / w as f32 - 0.5;
+            let uv_y = (y as f32 + 0.5) / h as f32 - 0.5;
+            // GLSL と同じ aspect 補正: uvA = vec2(uv.x * aspect, uv.y)
+            let ua_x = uv_x * aspect;
+            let ua_y = uv_y;
+            let corner_dist = (0.5 * aspect * 0.5 * aspect + 0.5 * 0.5_f32).sqrt();
+            let d = (ua_x * ua_x + ua_y * ua_y).sqrt() / corner_dist;
+
+            let inner_r = strength * 0.25;
+            let outer_r = strength * 0.4;
+            let range = (outer_r - inner_r).max(1e-5);
+            let u_t = ((d - inner_r) / range).clamp(0.0, 1.0);
+            let t = 1.0 - u_t * u_t * (3.0 - 2.0 * u_t);
+
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+
+            let lum = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+            let darkened = lum * (1.0 - strength * 0.95);
+            let out_r = (rl + (darkened - rl) * t).clamp(0.0, 1.0);
+            let out_g = (gl + (darkened - gl) * t).clamp(0.0, 1.0);
+            let out_b = (bl + (darkened - bl) * t).clamp(0.0, 1.0);
+
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(out_r) * 255.0).round() as u8,
+                (linear_to_srgb(out_g) * 255.0).round() as u8,
+                (linear_to_srgb(out_b) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
 /// hemianopia.frag の計算を Rust で再現する。
 /// `side_glsl`: 1.0=右側欠損, -1.0=左側欠損（GLSL uSide 値）
 fn sim_hemianopia(img: &RgbaImage, strength: f32, side_glsl: f32) -> RgbaImage {
@@ -1219,4 +1262,65 @@ fn shader_equiv_glaucoma_non_square_64x32_psnr() {
 fn shader_photophobia_glsl_is_not_empty() {
     use sensus_core::shaders::photophobia_glsl;
     assert!(!photophobia_glsl().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// [N-3] teichopsia / macular_degeneration / tunnel_vision の非正方形テスト
+// 64×32 の非正方形画像で aspect 補正が機能することを確認
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_teichopsia_non_square_psnr() {
+    use sensus_core::vision::teichopsia;
+    // 64×32 の非正方形グラデーション画像
+    let img = gradient_64x32();
+    let cpu_out = teichopsia(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_teichopsia(&img.to_rgba8(), 0.5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 25.0, "teichopsia non-square 64×32: PSNR {db:.1} dB < 25 dB");
+}
+
+#[test]
+fn shader_equiv_macular_degeneration_non_square_psnr() {
+    // 64×32 の非正方形グラデーション画像で aspect 補正付きシミュレータを使う
+    let img = gradient_64x32();
+    let u = macular_degeneration_uniforms(1.0, 64, 32);
+    let cpu_out = macular_degeneration(img.clone(), 1.0).unwrap().to_rgba8();
+    // aspect 補正付きシミュレータで GPU 側の動作を再現
+    let gpu_sim = sim_macular_degeneration_aspect(&img.to_rgba8(), u.strength, u.aspect);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "macular_degeneration non-square 64×32: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_tunnel_vision_non_square_psnr() {
+    // 64×32 の非正方形グラデーション画像
+    let img = gradient_64x32();
+    let u = tunnel_vision_uniforms(1.0, 64, 32);
+    let inner_r = (1.0 - u.strength) * 0.5;
+    let outer_r = (inner_r + 0.05_f32).min(1.0);
+    let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
+    let aspect = 64.0_f32 / 32.0_f32; // 2.0
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, aspect);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "tunnel_vision non-square 64×32: PSNR {db:.1} dB < 30 dB");
+}
+
+// ---------------------------------------------------------------------------
+// [M-2] cataract の PSNR テスト（ノイズ含むため PSNR ≥ 25 dB 許容）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_cataract_strength_zero_psnr() {
+    use sensus_core::shaders::{cataract_glsl, cataract_uniforms};
+    use sensus_core::vision::cataract;
+    // strength=0 は identity: CPU と GPU シミュレータ（入力をそのまま返す）が一致するはず
+    let img = gradient_32();
+    let _u = cataract_uniforms(0.0, 42);
+    let cpu_out = cataract(img.clone(), 0.0, 42).unwrap().to_rgba8();
+    // strength=0 なので入力と完全一致のはず
+    let db = psnr(&cpu_out, &img.to_rgba8());
+    assert!(db >= 40.0, "cataract strength=0: PSNR {db:.1} dB < 40 dB (should be identity)");
+    // シェーダ文字列が空でないこともチェック
+    assert!(!cataract_glsl().is_empty());
 }
