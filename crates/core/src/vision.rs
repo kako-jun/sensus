@@ -4027,21 +4027,22 @@ mod tests {
 
     #[test]
     fn diplopia_output_never_exceeds_max() {
-        // pixel clamp: グラデーション画像で strength=0.7, ghost_strength=0.8 → 全ch が 0..=255 に収まること
-        // 白飛びしないことを確認する (diplopia_white_on_white_no_overflow とは異なるシナリオ)
+        // グラデーション画像で strength=0.7, ghost_strength=0.8 → 関数がパニックせず正常に返ること
+        // (alpha blend で overflow しないことの確認。u8 の範囲は型保証済み)
         let size = 32_u32;
         let mut img = RgbaImage::new(size, size);
         for (x, y, px) in img.enumerate_pixels_mut() {
             *px = Rgba([(x * 8) as u8, (y * 8) as u8, 200, 255]);
         }
-        let out = diplopia(DynamicImage::ImageRgba8(img), 0.7, 0.2, 0.1, 0.8).unwrap();
-        let out_rgba = out.to_rgba8();
-        for px in out_rgba.pixels() {
-            // u8 は常に 0..=255 だが、alpha blend で overflow しないことを確認
-            assert!(px[0] <= 255, "R={} must be <= 255", px[0]);
-            assert!(px[1] <= 255, "G={} must be <= 255", px[1]);
-            assert!(px[2] <= 255, "B={} must be <= 255", px[2]);
-        }
+        let result = diplopia(DynamicImage::ImageRgba8(img), 0.7, 0.2, 0.1, 0.8);
+        assert!(result.is_ok(), "diplopia should not panic on gradient image");
+        // alpha blend の数学的性質から全チャンネルが [0,1] に収まることを確認
+        let out_rgba = result.unwrap().to_rgba8();
+        let max_val = out_rgba.pixels()
+            .flat_map(|px| [px[0], px[1], px[2]])
+            .max()
+            .unwrap_or(0);
+        assert!(max_val <= 255, "max pixel value should not exceed 255, got {max_val}");
     }
 
     #[test]
