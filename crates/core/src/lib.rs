@@ -54,6 +54,10 @@ pub enum Filter {
     Vertigo,
     BppvRotation,
     VestibularNeuritis,
+    // vision (Phase 4 / #29: diplopia / nystagmus / starbursts)
+    Diplopia,
+    Nystagmus,
+    Starbursts,
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -89,6 +93,9 @@ pub fn apply(
         Filter::Vertigo => vision::vertigo(img, strength, 0.0),
         Filter::BppvRotation => vision::bppv_rotation(img, strength, 0.0),
         Filter::VestibularNeuritis => vision::vestibular_neuritis(img, strength),
+        Filter::Diplopia => vision::diplopia(img, strength, 0.02, 0.01, 0.7),
+        Filter::Nystagmus => vision::nystagmus(img, strength, 0.03, 0.0),
+        Filter::Starbursts => vision::starbursts(img, strength, 6, 0.1, 0.8),
     }
 }
 

@@ -81,6 +81,21 @@ pub fn astigmatism_glsl() -> &'static str {
     include_str!("shaders/astigmatism.frag")
 }
 
+/// diplopia.frag の GLSL ES 3.00 ソースを返す。
+pub fn diplopia_glsl() -> &'static str {
+    include_str!("shaders/diplopia.frag")
+}
+
+/// nystagmus.frag の GLSL ES 3.00 ソースを返す。
+pub fn nystagmus_glsl() -> &'static str {
+    include_str!("shaders/nystagmus.frag")
+}
+
+/// starbursts.frag の GLSL ES 3.00 ソースを返す。
+pub fn starbursts_glsl() -> &'static str {
+    include_str!("shaders/starbursts.frag")
+}
+
 // ---------------------------------------------------------------------------
 // uniform 構造体
 // ---------------------------------------------------------------------------
@@ -208,6 +223,69 @@ pub fn astigmatism_uniforms(strength: f32, image_min_dim: u32, axis_deg: f32) ->
         radius_px,
         axis_deg: blur_axis_deg,
     }
+}
+
+/// 複視フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct DiplopiaUniforms {
+    pub strength: f32,
+    /// dx（テクセル単位 = dx_px / width）
+    pub offset_x_texel: f32,
+    /// dy（テクセル単位 = dy_px / height）
+    pub offset_y_texel: f32,
+    pub ghost_strength: f32,
+}
+
+/// 眼振フィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct NystagmusUniforms {
+    pub strength: f32,
+    pub radius_px: f32,
+    pub direction_deg: f32,
+}
+
+/// スターバーストフィルタの uniform。
+#[derive(Debug, Clone)]
+pub struct StarburstsUniforms {
+    pub strength: f32,
+    pub threshold: f32,
+}
+
+/// diplopia の uniform を計算する。
+pub fn diplopia_uniforms(
+    strength: f32,
+    offset_x_px: f32,
+    offset_y_px: f32,
+    ghost_strength: f32,
+    width: u32,
+    height: u32,
+) -> DiplopiaUniforms {
+    DiplopiaUniforms {
+        strength,
+        offset_x_texel: offset_x_px / width as f32,
+        offset_y_texel: offset_y_px / height as f32,
+        ghost_strength,
+    }
+}
+
+/// nystagmus の uniform を計算する。
+pub fn nystagmus_uniforms(
+    strength: f32,
+    amplitude: f32,
+    direction_deg: f32,
+    image_min_dim: u32,
+) -> NystagmusUniforms {
+    let radius_px = amplitude.clamp(0.0, 1.0) * strength.clamp(0.0, 1.0) * image_min_dim as f32;
+    NystagmusUniforms {
+        strength,
+        radius_px,
+        direction_deg,
+    }
+}
+
+/// starbursts の uniform を計算する。
+pub fn starbursts_uniforms(strength: f32, threshold: f32) -> StarburstsUniforms {
+    StarburstsUniforms { strength, threshold }
 }
 
 // ---------------------------------------------------------------------------

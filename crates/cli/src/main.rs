@@ -38,6 +38,10 @@ enum Filter {
     Vertigo,
     BppvRotation,
     VestibularNeuritis,
+    // Phase 4: 眼振・複視・スターバースト (Issue #29)
+    Diplopia,
+    Nystagmus,
+    Starbursts,
     // Phase N: 深度マップ対応距離依存ぼけ (Issue #19)
     MyopiaDepth,
     HyperopiaDepth,
@@ -81,6 +85,9 @@ impl Filter {
             Filter::Vertigo => CoreFilter::Vertigo,
             Filter::BppvRotation => CoreFilter::BppvRotation,
             Filter::VestibularNeuritis => CoreFilter::VestibularNeuritis,
+            Filter::Diplopia => CoreFilter::Diplopia,
+            Filter::Nystagmus => CoreFilter::Nystagmus,
+            Filter::Starbursts => CoreFilter::Starbursts,
             Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField => {
                 // depth フィルタは pipeline を通さないため、ここには来ない
                 unreachable!("depth filters must be handled separately")
@@ -143,6 +150,38 @@ struct Cli {
     /// Focus depth in 0.0..=1.0 (bright=near, dark=far). Only used with depth blur filters.
     #[arg(long, default_value = "0.5", value_parser = parse_focus)]
     focus: f32,
+
+    /// Diplopia horizontal offset in min(W,H) ratio (-1.0..=1.0). Default: 0.02
+    #[arg(long, default_value = "0.02", value_parser = parse_signed_ratio)]
+    offset_x: f32,
+
+    /// Diplopia vertical offset in min(W,H) ratio (-1.0..=1.0). Default: 0.01
+    #[arg(long, default_value = "0.01", value_parser = parse_signed_ratio)]
+    offset_y: f32,
+
+    /// Diplopia ghost image strength (0.0..=1.0). Default: 0.7
+    #[arg(long, default_value = "0.7", value_parser = parse_ratio)]
+    ghost_strength: f32,
+
+    /// Nystagmus amplitude in min(W,H) ratio. Default: 0.03
+    #[arg(long, default_value = "0.03", value_parser = parse_ratio)]
+    amplitude: f32,
+
+    /// Nystagmus direction in degrees (0=horizontal, 90=vertical). Default: 0.0
+    #[arg(long, default_value = "0.0")]
+    direction_deg: f32,
+
+    /// Starbursts number of rays. Default: 6
+    #[arg(long, default_value = "6")]
+    num_rays: u32,
+
+    /// Starbursts ray length in min(W,H) ratio. Default: 0.1
+    #[arg(long, default_value = "0.1", value_parser = parse_ratio)]
+    ray_length: f32,
+
+    /// Starbursts brightness threshold (0.0..=1.0). Default: 0.8
+    #[arg(long, default_value = "0.8", value_parser = parse_ratio)]
+    threshold: f32,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -153,6 +192,28 @@ fn parse_strength(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=1.0).contains(&v) {
         return Err(format!("strength must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse a ratio argument in `0.0..=1.0` (ghost-strength, amplitude, ray-length, threshold 等).
+fn parse_ratio(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(0.0..=1.0).contains(&v) {
+        return Err(format!("value must be in 0.0..=1.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse a signed offset ratio in `-1.0..=1.0` (offset-x, offset-y).
+fn parse_signed_ratio(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if v.is_nan() || !(-1.0..=1.0).contains(&v) {
+        return Err(format!("value must be in -1.0..=1.0, got {v}"));
     }
     Ok(v)
 }
@@ -272,6 +333,14 @@ fn run(cli: Cli) -> Result<(), RunError> {
         step.gaze_x = cli.gaze_x;
         step.gaze_y = cli.gaze_y;
         step.side = cli.side;
+        step.offset_x = cli.offset_x;
+        step.offset_y = cli.offset_y;
+        step.ghost_strength = cli.ghost_strength;
+        step.amplitude = cli.amplitude;
+        step.direction_deg = cli.direction_deg;
+        step.num_rays = cli.num_rays;
+        step.ray_length_ratio = cli.ray_length;
+        step.threshold = cli.threshold;
         pipeline = pipeline.push(step);
     }
 
