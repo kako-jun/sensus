@@ -9,21 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix: レビュー指摘全件修正（M×3/S×5/N×2）**:
-  - [M-1] 新GLSL 4本の uniform 命名規則を camelCase に統一（`u_texture` → `uTexture`, `v_texcoord` → `vTexCoord` 等）
-  - [M-2] `detail_loss.frag` を GLSL 9点平均サンプルに変更して CPU 実装（タイル内全画素平均）に近似させる
-  - [M-3] `flickering_stars.frag` の `u_seed` を `float` → `uint uSeed` に変更（浮動小数精度劣化防止）
-  - [S-1] `vision.rs` の `manual_range_contains` clippy 警告を `(0.2..=0.5).contains(&dist)` に修正
-  - [S-2] `vision.rs` の `doc_lazy_continuation` clippy 警告を修正（継続行に `///` を補う）
-  - [S-3] `teichopsia.frag` に `uAspect` を追加して aspect 補正による楕円化防止
-  - [S-4] `docs/overview.md` の glaucoma 項目に弧状暗点モードの左右眼実装基準を明記
-  - [S-5] `detail_loss_with_cell_size` の docコメントに `cell_size=1` 挙動を説明
-  - [N-1] `shader_equivalence.rs` に新4フィルタのテスト追加（contrast_sensitivity PSNR ≥ 30 dB / detail_loss CPU-GPU 等価性 / teichopsia コンパイルテスト + strength=0 identity）
-  - [N-2] `pipeline.rs` の `FilterStep` に設計メモコメントを追加
-  - bench エラー（`Filter::Astigmatism/Starbursts/Floaters` が struct variant）を修正
-  - `shader_equivalence.rs` の `FRAC_1_SQRT_2` 精度警告、`stereo.rs` の `format!` 警告、`vision.rs` の `absurd_extreme_comparisons` エラーを修正
+- **fix: review 指摘全件修正 round2（S×4/N×3）**:
+  - [S-1] `sim_vignette_fov` に `aspect: f32` 引数を追加してシェーダ（`uAspect`）と一致させる。非正方形（64×32）テスト `shader_equiv_glaucoma_non_square_64x32_psnr` を追加（PSNR ≥ 30 dB）
+  - [S-2] `floaters.frag` の `uniform float uSeed` → `uniform uint uSeed` に変更（24bit 精度劣化防止）。`FloatersUniforms.seed: f32 → u32`、`floaters_uniforms` を `seed as u32` に修正
+  - [S-3] `nyctalopia.frag` の命名を確認 — `uTexture`, `uStrength`, `vTexCoord`, `fragColor`, `srgbToLinear`, `linearToSrgb` が他シェーダと一致しており修正不要
+  - [S-4] `cataract.frag` の `uniform float uSeed` → `uniform uint uSeed` に変更（同 S-2 と同じ精度劣化防止）
+  - [N-1] `bppv_rotation.frag` の `clamp` 処理にコメント「範囲外の UV は端ピクセルにクランプする（CPU 実装と同じ動作）」を追記
+  - [N-2] `shader_equivalence.rs` に `shader_photophobia_glsl_is_not_empty` テストを追加
+  - [N-3] `starbursts.frag` の `sector < 1.0` 分岐付近にコメント「H=360° は H=0°（赤）と同値になる（HSL の周期性）」を追記
 
-- **AudioPipeline / AudioFilterStep 追加** (#66):
+- **fix: レビュー指摘全件修正（M×3/S×5/N×2）**:
   `crates/core/src/pipeline.rs` に聴覚フィルタ多段合成用の `AudioPipeline` と `AudioFilterStep` を追加。
   `Pipeline`（視覚）と同じ builder パターンで `push(filter, strength).apply(&buf)` が使えるようになった。
   `lib.rs` に `pub use pipeline::{AudioPipeline, AudioFilterStep};` を追加し外部公開。

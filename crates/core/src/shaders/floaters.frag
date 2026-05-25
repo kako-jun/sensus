@@ -11,7 +11,7 @@ precision mediump float;
 
 uniform sampler2D uTexture;
 uniform float uStrength;
-uniform float uSeed;   // u64 シードを f32 に変換した値
+uniform uint uSeed;    // u64 シードの下位 32bit を uint として渡す（float 経由の精度損失を回避）
 
 in vec2 vTexCoord;
 out vec4 fragColor;
@@ -27,8 +27,9 @@ void main() {
     vec4 orig = texture(uTexture, vTexCoord);
 
     // ブロック単位でハッシュを計算（8x8 相当の粗さ）
-    vec2 blockUV = floor(vTexCoord * 16.0 + uSeed * 0.01) / 16.0;
-    float noise = hash21(blockUV + uSeed * 0.001);
+    float seedF = float(uSeed);
+    vec2 blockUV = floor(vTexCoord * 16.0 + seedF * 0.01) / 16.0;
+    float noise = hash21(blockUV + seedF * 0.001);
 
     // noise が閾値を下回る領域を floater として暗化
     float floaterMask = 1.0;

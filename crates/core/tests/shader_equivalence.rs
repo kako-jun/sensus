@@ -586,17 +586,21 @@ fn shader_equiv_strength_zero_no_change() {
 
 /// glaucoma.frag / tunnel_vision.frag の計算を Rust で再現する。
 /// `inner_r`, `outer_r` を外から渡すことで両方に使用する。
-fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32) -> RgbaImage {
+/// `aspect` = width / height（シェーダの uAspect と同じ）。
+fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32, aspect: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
-    // UV 空間でのコーナー距離: sqrt(0.5^2+0.5^2) = 1/sqrt(2)
-    let corner_dist = std::f32::consts::FRAC_1_SQRT_2;
+    // シェーダと同じ aspect 補正済みコーナー距離: sqrt((0.5*aspect)^2 + 0.5^2)
+    let corner_dist = (0.5 * aspect * 0.5 * aspect + 0.5 * 0.5_f32).sqrt();
     let mut out = img.clone();
     for y in 0..h {
         for x in 0..w {
             // UV 座標 (pixel center)
             let uv_x = (x as f32 + 0.5) / w as f32 - 0.5;
             let uv_y = (y as f32 + 0.5) / h as f32 - 0.5;
-            let d = (uv_x * uv_x + uv_y * uv_y).sqrt() / corner_dist;
+            // aspect 補正してから距離計算（シェーダと同じ）
+            let dx = uv_x * aspect;
+            let dy = uv_y;
+            let d = dx.hypot(dy) / corner_dist;
 
             let t = ((d - inner_r) / (outer_r - inner_r)).clamp(0.0, 1.0);
             let fade = t * t * (3.0 - 2.0 * t);
@@ -709,7 +713,7 @@ fn shader_equiv_glaucoma_strength_1_0_psnr() {
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
-    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=1.0: PSNR {db:.1} dB < 30 dB");
 }
@@ -721,7 +725,7 @@ fn shader_equiv_glaucoma_strength_0_5_psnr() {
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 0.5, GlaucomaMode::Vignette).unwrap().to_rgba8();
-    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=0.5: PSNR {db:.1} dB < 30 dB");
 }
@@ -774,7 +778,7 @@ fn shader_equiv_tunnel_vision_strength_1_0_psnr() {
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
     let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
-    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "tunnel_vision strength=1.0: PSNR {db:.1} dB < 30 dB");
 }
@@ -786,7 +790,7 @@ fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
     let cpu_out = tunnel_vision(img.clone(), 0.5).unwrap().to_rgba8();
-    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r);
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "tunnel_vision strength=0.5: PSNR {db:.1} dB < 30 dB");
 }
@@ -1116,4 +1120,45 @@ fn shader_teichopsia_glsl_compiles() {
 fn shader_flickering_stars_glsl_compiles_and_not_empty() {
     use sensus_core::shaders::flickering_stars_glsl;
     assert!(!flickering_stars_glsl().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// [S-1] 非正方形（64×32）の vignette_fov テスト
+// aspect 補正が正しく機能すれば CPU と GPU シミュレータの PSNR ≥ 30 dB
+// ---------------------------------------------------------------------------
+
+/// 64×32 の非正方形グラデーション画像を生成する。
+fn gradient_64x32() -> DynamicImage {
+    let mut img = RgbaImage::new(64, 32);
+    for y in 0..32u32 {
+        for x in 0..64u32 {
+            let v = (x * 4) as u8;
+            img.put_pixel(x, y, image::Rgba([v, v / 2, 255 - v, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+#[test]
+fn shader_equiv_glaucoma_non_square_64x32_psnr() {
+    // 非正方形（width=64, height=32, aspect=2.0）で aspect 補正が機能することを確認
+    let img = gradient_64x32();
+    let u = glaucoma_uniforms(1.0, 64, 32);
+    let inner_r = 1.0 - u.strength * 0.7;
+    let outer_r = (inner_r + 0.2_f32).min(1.0);
+    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+    let aspect = 64.0_f32 / 32.0_f32; // 2.0
+    let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, aspect);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 30.0, "glaucoma non-square 64×32: PSNR {db:.1} dB < 30 dB");
+}
+
+// ---------------------------------------------------------------------------
+// [N-2] photophobia コンパイルテスト
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_photophobia_glsl_is_not_empty() {
+    use sensus_core::shaders::photophobia_glsl;
+    assert!(!photophobia_glsl().is_empty());
 }
