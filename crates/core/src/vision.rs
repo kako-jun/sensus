@@ -3978,6 +3978,190 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // DA-06: strength=0 → identity（blur なし）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_zero_strength_is_identity() {
+        // max_radius_ratio=0.0 のとき radius=0 → どの画素もボケない。
+        // 出力が入力と画素単位で一致することを確認。
+        let size = 32_u32;
+        let input = center_white_dot(size);
+        let depth = depth_map_solid(size, 0); // 深度任意
+
+        let out = depth_aware_blur(
+            input.clone(),
+            &depth,
+            1.0,
+            0.0, // max_radius_ratio=0 → radius=0
+            DepthBlurKind::Myopia,
+        )
+        .unwrap();
+
+        let in_bytes = input.to_rgba8().into_raw();
+        let out_bytes = out.to_rgba8().into_raw();
+        assert_eq!(
+            in_bytes, out_bytes,
+            "max_radius_ratio=0.0 must produce identical output (identity)"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // DA-07: d=1.0 → scaled=7.0, fract=0.0, 最終ビンが正しく処理される
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_d1_uses_last_bin() {
+        // d=1.0 のとき scaled=7.0, floor=7（N_BINS-1）→ 最終ビン専用パスで処理される。
+        // DepthOfField, focus=0.0 → d=1.0 は最大 delta=1.0 → 最大ボケ。
+        // 中央 white dot が拡散して中心輝度が下がるはず。
+        let size = 64_u32;
+        let input = center_white_dot(size);
+        let depth_max = depth_map_solid(size, 255); // d≈1.0 → scaled≈6.972
+
+        let out_blurred = depth_aware_blur(
+            input.clone(),
+            &depth_max,
+            0.0,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        // d=0.0（focus=0.0 と一致）はシャープ
+        let depth_zero = depth_map_solid(size, 0);
+        let out_sharp = depth_aware_blur(
+            input,
+            &depth_zero,
+            0.0,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        let cx = size / 2;
+        let cy = size / 2;
+        let blurred_center = out_blurred.to_rgba8().get_pixel(cx, cy)[0];
+        let sharp_center = out_sharp.to_rgba8().get_pixel(cx, cy)[0];
+        assert!(
+            blurred_center < sharp_center,
+            "d=1.0 (last bin) must be more blurred than d=0.0 (focus): \
+             blurred={blurred_center}, sharp={sharp_center}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // DA-08: 線形補間 — ビン境界中間の深度が両端の中間的なボケ量になる
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_lerp_intermediate_depth_is_between_endpoints() {
+        // DepthOfField, focus=0.0。ビン0とビン1の境界付近を使う。
+        // depth=0/255 と depth=36/255（ビン0とビン1の中間付近）と depth=18/255（その中間）を比較。
+        // ボケ量が単調増加（depth が大きい → delta が大きい → blur が強い）かを確認。
+        let size = 64_u32;
+        let input = center_white_dot(size);
+
+        // depth val=0  → d≈0.000 → delta=0.000 → radius≈0   → シャープ
+        let out_near = depth_aware_blur(
+            input.clone(),
+            &depth_map_solid(size, 0),
+            0.0,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        // depth val=18 → d≈0.071 → scaled≈0.496 → ビン0/1境界手前
+        let out_mid = depth_aware_blur(
+            input.clone(),
+            &depth_map_solid(size, 18),
+            0.0,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        // depth val=36 → d≈0.141 → scaled≈0.988 → ビン0/1境界ほぼ手前
+        let out_far = depth_aware_blur(
+            input,
+            &depth_map_solid(size, 36),
+            0.0,
+            0.1,
+            DepthBlurKind::DepthOfField,
+        )
+        .unwrap();
+
+        let cx = size / 2;
+        let cy = size / 2;
+        let c_near = out_near.to_rgba8().get_pixel(cx, cy)[0];
+        let c_mid = out_mid.to_rgba8().get_pixel(cx, cy)[0];
+        let c_far = out_far.to_rgba8().get_pixel(cx, cy)[0];
+
+        // blur が強いほど中心輝度が下がる（単調減少）
+        assert!(
+            c_near >= c_mid,
+            "depth=0 must be at least as sharp as depth=18: near={c_near}, mid={c_mid}"
+        );
+        assert!(
+            c_mid >= c_far,
+            "depth=18 must be at least as sharp as depth=36: mid={c_mid}, far={c_far}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // DA-09: 異なる深度が混在する画像でも画素ごとに正しいビンが適用される
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn depth_aware_blur_per_pixel_bin_assignment() {
+        // 左半分 depth=0（シャープ）, 右半分 depth=255（ボケ）の depth_map を作成。
+        // 中央に white dot（左端付近）。Myopia, focus=1.0。
+        // 左の dot 領域（depth=0, 遠方）はボケ、右半分のピクセルは depth=255（近方）→ シャープ。
+        use image::{GrayImage, Luma};
+
+        let size = 64_u32;
+
+        // 左半分白 dot の入力画像
+        let mut rgba_img = image::RgbaImage::from_pixel(size, size, image::Rgba([0, 0, 0, 255]));
+        rgba_img.put_pixel(size / 4, size / 2, image::Rgba([255, 255, 255, 255]));
+        let input = DynamicImage::ImageRgba8(rgba_img);
+
+        // 左半分 depth=0, 右半分 depth=255 の depth_map
+        let mut depth_img = GrayImage::new(size, size);
+        for y in 0..size {
+            for x in 0..size {
+                let val = if x < size / 2 { 0u8 } else { 255u8 };
+                depth_img.put_pixel(x, y, Luma([val]));
+            }
+        }
+        let depth = DynamicImage::ImageLuma8(depth_img);
+
+        let out = depth_aware_blur(
+            input,
+            &depth,
+            1.0, // focus=1.0
+            0.1,
+            DepthBlurKind::Myopia,
+        )
+        .unwrap();
+
+        // 左の dot（depth=0, 遠方）はボケるので (size/4, size/2) 中心輝度が下がる
+        let dot_center = out.to_rgba8().get_pixel(size / 4, size / 2)[0];
+        // 右エリア（depth=255, 近方）は元々黒なので変化しない（ボケない）
+        let right_px = out.to_rgba8().get_pixel(3 * size / 4, size / 2)[0];
+
+        assert!(
+            dot_center < 255,
+            "left dot (depth=0, far from focus=1.0) must be blurred: dot_center={dot_center}"
+        );
+        assert_eq!(
+            right_px, 0,
+            "right area (depth=255, near=focus) must stay black (no blur source): right={right_px}"
+        );
+    }
+
+    // ---------------------------------------------------------------
     // #29: diplopia / nystagmus / starbursts
     // ---------------------------------------------------------------
 
