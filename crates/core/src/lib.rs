@@ -62,6 +62,8 @@ pub enum Filter {
     // vision (Phase 4: eye fatigue / #36)
     EyeStrain,
     DryEye,
+    // vision (Phase N / #55: metamorphopsia)
+    Metamorphopsia,
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -102,6 +104,7 @@ pub fn apply(
         Filter::Starbursts => vision::starbursts(img, strength, 6, 0.1, 0.8),
         Filter::EyeStrain => vision::eye_strain(img, strength),
         Filter::DryEye => vision::dry_eye(img, strength),
+        Filter::Metamorphopsia => vision::metamorphopsia(img, strength, 4.0, 0),
     }
 }
 
