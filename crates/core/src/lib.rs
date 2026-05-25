@@ -49,6 +49,10 @@ pub enum Filter {
     Floaters,
     Photophobia,
     NightBlindness,
+    // vision (Phase 4 / #9: balance / vertigo)
+    Vertigo,
+    BppvRotation,
+    VestibularNeuritis,
 }
 
 /// Apply a [`Filter`] to an image at a given strength (`0.0..=1.0`).
@@ -81,5 +85,64 @@ pub fn apply(
         Filter::Hemianopia => vision::hemianopia(img, strength, 0.0),
         Filter::TunnelVision => vision::tunnel_vision(img, strength),
         Filter::Tetrachromacy => vision::tetrachromacy(img, strength),
+        Filter::Vertigo => vision::vertigo(img, strength, 0.0),
+        Filter::BppvRotation => vision::bppv_rotation(img, strength, 0.0),
+        Filter::VestibularNeuritis => vision::vestibular_neuritis(img, strength),
     }
+}
+
+/// 聴覚フィルタの種類。
+///
+/// `apply_hearing()` 経由で使用する。音声バッファに対して純粋関数として適用する。
+#[derive(Debug, Clone, PartialEq)]
+pub enum HearingFilter {
+    /// 難聴: 高音域カット
+    HearingLoss,
+    /// 突発性難聴: 特定周波数帯の急激な損失
+    SuddenHearingLoss { freq_hz: f32 },
+    /// 騒音性難聴: 4 kHz 付近の損失
+    NoiseInducedHearingLoss,
+    /// 耳鳴り: 指定周波数の正弦波を常時ミックス
+    Tinnitus { freq_hz: f32 },
+    /// 音響過敏: 音量を異常に増幅
+    Hyperacusis,
+    /// 変音: 音を歪んだ・金属的な質感に加工
+    Paracusis,
+    /// 音楽音痴: 音程の違いを識別しにくくする
+    Amusia,
+    /// ジスメロディア: 音楽を不快・歪んだ音に変換
+    Dysmelodia,
+    /// 音程シフト: 半音単位で全体音程をシフト
+    PitchShift { semitones: f32 },
+    /// ダイプラクシス: 左右耳で異なる音程を知覚
+    Diplacusis,
+}
+
+/// 聴覚フィルタを音声バッファに適用する。
+///
+/// `strength` は 0.0..=1.0（0.0 = 元音声、1.0 = 最大効果）。
+/// `PitchShift` と `Diplacusis` では `strength` の意味が変わる場合があるため、
+/// 各フィルタのドキュメントを参照のこと。
+pub fn apply_hearing(
+    filter: HearingFilter,
+    buf: hearing::AudioBuffer,
+    strength: f32,
+) -> Result<hearing::AudioBuffer> {
+    let out = match filter {
+        HearingFilter::HearingLoss => hearing::hearing_loss(buf, strength),
+        HearingFilter::SuddenHearingLoss { freq_hz } => {
+            hearing::sudden_hearing_loss(buf, strength, freq_hz)
+        }
+        HearingFilter::NoiseInducedHearingLoss => {
+            hearing::noise_induced_hearing_loss(buf, strength)
+        }
+        HearingFilter::Tinnitus { freq_hz } => hearing::tinnitus(buf, strength, freq_hz),
+        HearingFilter::Hyperacusis => hearing::hyperacusis(buf, strength),
+        HearingFilter::Paracusis => hearing::paracusis(buf, strength),
+        HearingFilter::Amusia => hearing::amusia(buf, strength),
+        HearingFilter::Dysmelodia => hearing::dysmelodia(buf, strength),
+        HearingFilter::PitchShift { semitones } => hearing::pitch_shift_semitones(buf, semitones),
+        HearingFilter::Diplacusis => hearing::diplacusis(buf, strength),
+    };
+    Ok(out)
 }
