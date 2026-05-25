@@ -3132,6 +3132,7 @@ mod tests {
     // Phase N (#19): depth-aware blur tests
     // =================================================================
 
+    #[allow(dead_code)]
     /// 32x32 の2段グラデーション深度マップを作るヘルパー。
     /// 左半分 = 暗い (0), 右半分 = 明るい (255)。
     fn depth_map_half(size: u32, left_val: u8, right_val: u8) -> DynamicImage {

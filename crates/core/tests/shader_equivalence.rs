@@ -1,0 +1,512 @@
+//! #17 CPU 実装⇄GLSL シェーダ等価性回帰テスト
+//!
+//! GPU を使わず、GLSL シェーダと同じ数学を Rust でシミュレートした
+//! ソフトウェアレンダラと CPU 実装の出力を比較する。
+//!
+//! ## 許容誤差
+//! GLSL は mediump float（最低 16 bit 仮数部）を使う。Rust は f32（24 bit 仮数部）。
+//! また disk blur の Fibonacci lattice は 16 tap の近似なので厳密一致は期待しない。
+//! 以下の閾値で判定する:
+//! - 色覚フィルタ（行列演算）: max per-channel 絶対誤差 ≤ 2/255
+//! - ぼかしフィルタ（disk blur）: PSNR ≥ 30 dB（見た目が同等なら OK）
+//! - 乱視フィルタ（directional blur）: PSNR ≥ 30 dB
+
+use image::{DynamicImage, RgbaImage};
+use sensus_core::shaders::{
+    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms, hyperopia_uniforms,
+    myopia_uniforms, presbyopia_uniforms, protanopia_uniforms, tritanopia_uniforms,
+};
+use sensus_core::vision::{
+    achromatopsia, astigmatism, deuteranopia, hyperopia, myopia, presbyopia, protanopia,
+    tritanopia,
+};
+
+// ---------------------------------------------------------------------------
+// ソフトウェアシミュレータ（GLSL 数学を Rust で再現）
+// ---------------------------------------------------------------------------
+
+/// sRGB → linear sRGB（GLSL `srgbToLinear` と同じ式）
+#[inline]
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// linear sRGB → sRGB（GLSL `linearToSrgb` と同じ式）
+#[inline]
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// 色覚フィルタシェーダ（protanopia.frag / deuteranopia.frag / tritanopia.frag）を
+/// ソフトウェアシミュレートする。
+fn sim_color_matrix(img: &RgbaImage, matrix: &[f32; 9], strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+            let sr = matrix[0] * r + matrix[1] * g + matrix[2] * b;
+            let sg = matrix[3] * r + matrix[4] * g + matrix[5] * b;
+            let sb = matrix[6] * r + matrix[7] * g + matrix[8] * b;
+
+            let nr = (r + (sr - r) * strength).clamp(0.0, 1.0);
+            let ng = (g + (sg - g) * strength).clamp(0.0, 1.0);
+            let nb = (b + (sb - b) * strength).clamp(0.0, 1.0);
+
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(nr) * 255.0).round() as u8,
+                    (linear_to_srgb(ng) * 255.0).round() as u8,
+                    (linear_to_srgb(nb) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// 全色盲フィルタシェーダ（achromatopsia.frag）をソフトウェアシミュレートする。
+fn sim_achromatopsia(
+    img: &RgbaImage,
+    r_w: f32,
+    g_w: f32,
+    b_w: f32,
+    strength: f32,
+) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+            let y_luma = r_w * r + g_w * g + b_w * b;
+
+            let nr = (r + (y_luma - r) * strength).clamp(0.0, 1.0);
+            let ng = (g + (y_luma - g) * strength).clamp(0.0, 1.0);
+            let nb = (b + (y_luma - b) * strength).clamp(0.0, 1.0);
+
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(nr) * 255.0).round() as u8,
+                    (linear_to_srgb(ng) * 255.0).round() as u8,
+                    (linear_to_srgb(nb) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// disk blur シェーダ（myopia.frag / hyperopia.frag / presbyopia.frag）を
+/// ソフトウェアシミュレートする。Fibonacci lattice 16 tap。
+fn sim_disk_blur(img: &RgbaImage, radius_px: f32) -> RgbaImage {
+    const N: usize = 16;
+    const PHI: f32 = 2.399_963_2; // 黄金角
+    let (w, h) = img.dimensions();
+    let texel_w = 1.0 / w as f32;
+    let texel_h = 1.0 / h as f32;
+
+    // texture(uTexture, uv) の clamp-to-edge サンプリング
+    let sample = |img: &RgbaImage, u: f32, v: f32| -> [f32; 3] {
+        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
+        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+        let px = img.get_pixel(px_x, px_y);
+        [
+            srgb_to_linear(px[0] as f32 / 255.0),
+            srgb_to_linear(px[1] as f32 / 255.0),
+            srgb_to_linear(px[2] as f32 / 255.0),
+        ]
+    };
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+
+            if radius_px < 0.5 {
+                // pass-through
+                continue;
+            }
+
+            let mut acc = [0f32; 3];
+            for i in 0..N {
+                let t = i as f32 / N as f32;
+                let r = t.sqrt() * radius_px;
+                let theta = i as f32 * PHI;
+                let offset_u = theta.cos() * r * texel_w;
+                let offset_v = theta.sin() * r * texel_h;
+                let s = sample(img, u + offset_u, v + offset_v);
+                acc[0] += s[0];
+                acc[1] += s[1];
+                acc[2] += s[2];
+            }
+            let blurred = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
+
+            let src = img.get_pixel(x, y);
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    src[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// 乱視シェーダ（astigmatism.frag）をソフトウェアシミュレートする。
+/// 16 tap の directional blur。`axis_deg` はぼかし方向（シェーダに渡す値）。
+fn sim_astigmatism(img: &RgbaImage, radius_px: f32, axis_deg: f32) -> RgbaImage {
+    const N: usize = 16;
+    let (w, h) = img.dimensions();
+    let texel_w = 1.0 / w as f32;
+    let texel_h = 1.0 / h as f32;
+
+    let sample = |img: &RgbaImage, u: f32, v: f32| -> [f32; 3] {
+        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
+        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+        let px = img.get_pixel(px_x, px_y);
+        [
+            srgb_to_linear(px[0] as f32 / 255.0),
+            srgb_to_linear(px[1] as f32 / 255.0),
+            srgb_to_linear(px[2] as f32 / 255.0),
+        ]
+    };
+
+    let mut out = img.clone();
+
+    if radius_px < 0.5 {
+        return out;
+    }
+
+    let rad = axis_deg * std::f32::consts::PI / 180.0;
+    let dir_x = rad.cos();
+    let dir_y = rad.sin();
+
+    for y in 0..h {
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+
+            let mut acc = [0f32; 3];
+            for i in 0..N {
+                // t in -1..+1
+                let t = (i as f32 / (N - 1) as f32) * 2.0 - 1.0;
+                let offset_u = dir_x * (t * radius_px) * texel_w;
+                let offset_v = dir_y * (t * radius_px) * texel_h;
+                let s = sample(img, u + offset_u, v + offset_v);
+                acc[0] += s[0];
+                acc[1] += s[1];
+                acc[2] += s[2];
+            }
+            let blurred = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
+
+            let src = img.get_pixel(x, y);
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    src[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// 比較ユーティリティ
+// ---------------------------------------------------------------------------
+
+/// 2画像の max per-channel absolute error（0..=255 スケール）を返す。
+fn max_channel_error(a: &RgbaImage, b: &RgbaImage) -> u8 {
+    assert_eq!(a.dimensions(), b.dimensions());
+    let mut max_err = 0u8;
+    for (pa, pb) in a.pixels().zip(b.pixels()) {
+        for c in 0..3 {
+            let diff = (pa[c] as i32 - pb[c] as i32).unsigned_abs() as u8;
+            max_err = max_err.max(diff);
+        }
+    }
+    max_err
+}
+
+/// 2画像の PSNR を計算する（dB）。同一画像は f32::INFINITY を返す。
+fn psnr(a: &RgbaImage, b: &RgbaImage) -> f32 {
+    assert_eq!(a.dimensions(), b.dimensions());
+    let (w, h) = a.dimensions();
+    let n = (w * h * 3) as f64; // RGB のみ
+    let mut mse = 0f64;
+    for (pa, pb) in a.pixels().zip(b.pixels()) {
+        for c in 0..3 {
+            let diff = pa[c] as f64 - pb[c] as f64;
+            mse += diff * diff;
+        }
+    }
+    mse /= n;
+    if mse == 0.0 {
+        return f32::INFINITY;
+    }
+    (10.0 * (255.0f64 * 255.0 / mse).log10()) as f32
+}
+
+// ---------------------------------------------------------------------------
+// フィクスチャ生成
+// ---------------------------------------------------------------------------
+
+/// 4色コーナーカラーチャート（32x32）。
+/// 左上=赤, 右上=緑, 左下=青, 右下=白。
+fn color_chart_32() -> DynamicImage {
+    let mut img = RgbaImage::new(32, 32);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let px = match (x < 16, y < 16) {
+                (true, true) => [220, 50, 50, 255],   // 赤
+                (false, true) => [50, 200, 50, 255],  // 緑
+                (true, false) => [50, 50, 220, 255],  // 青
+                (false, false) => [200, 200, 200, 255], // 灰
+            };
+            img.put_pixel(x, y, image::Rgba(px));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// linear グラデーション（32x32）。
+fn gradient_32() -> DynamicImage {
+    let mut img = RgbaImage::new(32, 32);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let v = (x * 8) as u8;
+            img.put_pixel(x, y, image::Rgba([v, v / 2, 255 - v, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+// ---------------------------------------------------------------------------
+// 色覚フィルタ等価性テスト
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_protanopia_strength_1_0() {
+    let img = color_chart_32();
+    let uni = protanopia_uniforms(1.0);
+    let cpu_out = protanopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let err = max_channel_error(&cpu_out, &gpu_sim);
+    assert!(
+        err <= 2,
+        "protanopia strength=1.0: max channel error {err}/255 > 2"
+    );
+}
+
+#[test]
+fn shader_equiv_protanopia_strength_0_5() {
+    let img = gradient_32();
+    let uni = protanopia_uniforms(0.5);
+    let cpu_out = protanopia(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let err = max_channel_error(&cpu_out, &gpu_sim);
+    assert!(
+        err <= 2,
+        "protanopia strength=0.5: max channel error {err}/255 > 2"
+    );
+}
+
+#[test]
+fn shader_equiv_deuteranopia_strength_1_0() {
+    let img = color_chart_32();
+    let uni = deuteranopia_uniforms(1.0);
+    let cpu_out = deuteranopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let err = max_channel_error(&cpu_out, &gpu_sim);
+    assert!(
+        err <= 2,
+        "deuteranopia strength=1.0: max channel error {err}/255 > 2"
+    );
+}
+
+#[test]
+fn shader_equiv_tritanopia_strength_1_0() {
+    let img = color_chart_32();
+    let uni = tritanopia_uniforms(1.0);
+    let cpu_out = tritanopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let err = max_channel_error(&cpu_out, &gpu_sim);
+    assert!(
+        err <= 2,
+        "tritanopia strength=1.0: max channel error {err}/255 > 2"
+    );
+}
+
+#[test]
+fn shader_equiv_achromatopsia_strength_1_0() {
+    let img = color_chart_32();
+    let uni = achromatopsia_uniforms(1.0);
+    let cpu_out = achromatopsia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_achromatopsia(&img.to_rgba8(), uni.r_weight, uni.g_weight, uni.b_weight, uni.strength);
+    let err = max_channel_error(&cpu_out, &gpu_sim);
+    assert!(
+        err <= 2,
+        "achromatopsia strength=1.0: max channel error {err}/255 > 2"
+    );
+}
+
+#[test]
+fn shader_equiv_achromatopsia_strength_0_0() {
+    // strength=0 → 元画像と同じ（誤差 0）
+    let img = color_chart_32();
+    let uni = achromatopsia_uniforms(0.0);
+    let cpu_out = achromatopsia(img.clone(), 0.0).unwrap().to_rgba8();
+    let gpu_sim = sim_achromatopsia(&img.to_rgba8(), uni.r_weight, uni.g_weight, uni.b_weight, uni.strength);
+    let err = max_channel_error(&cpu_out, &gpu_sim);
+    assert!(
+        err <= 2,
+        "achromatopsia strength=0.0: max channel error {err}/255 > 2"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ぼかしフィルタ等価性テスト（PSNR ≥ 30 dB）
+// CPU disk blur（brute-force）と GPU disk blur（Fibonacci 16 tap）は
+// 近似手法が異なるため厳密一致は期待しない。PSNR で等価性を判定する。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_myopia_strength_1_0_psnr() {
+    let img = gradient_32();
+    let uni = myopia_uniforms(1.0, 32);
+    let cpu_out = myopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_disk_blur(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "myopia strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_hyperopia_strength_1_0_psnr() {
+    let img = gradient_32();
+    let uni = hyperopia_uniforms(1.0, 32);
+    let cpu_out = hyperopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_disk_blur(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "hyperopia strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_presbyopia_strength_1_0_psnr() {
+    let img = gradient_32();
+    let uni = presbyopia_uniforms(1.0, 32);
+    let cpu_out = presbyopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_disk_blur(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "presbyopia strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 乱視フィルタ等価性テスト（PSNR ≥ 30 dB）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_astigmatism_axis_0_psnr() {
+    let img = gradient_32();
+    let uni = astigmatism_uniforms(1.0, 32, 0.0);
+    let cpu_out = astigmatism(img.clone(), 1.0, 0.0).unwrap().to_rgba8();
+    // シェーダへ渡す axis_deg は uni.axis_deg（ぼかし方向）
+    let gpu_sim = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "astigmatism axis=0°: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_astigmatism_axis_45_psnr() {
+    let img = gradient_32();
+    let uni = astigmatism_uniforms(1.0, 32, 45.0);
+    let cpu_out = astigmatism(img.clone(), 1.0, 45.0).unwrap().to_rgba8();
+    let gpu_sim = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "astigmatism axis=45°: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_astigmatism_axis_90_psnr() {
+    let img = gradient_32();
+    let uni = astigmatism_uniforms(1.0, 32, 90.0);
+    let cpu_out = astigmatism(img.clone(), 1.0, 90.0).unwrap().to_rgba8();
+    let gpu_sim = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "astigmatism axis=90°: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// strength=0.0 → 変化なし（全フィルタ共通の境界値テスト）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_strength_zero_no_change() {
+    // strength=0 のとき CPU 実装は元画像を返す。
+    // シミュレータも strength=0 → 恒等変換なので最大誤差は 0 であるべき。
+    let img = color_chart_32();
+
+    for (name, cpu_result) in [
+        ("protanopia", protanopia(img.clone(), 0.0)),
+        ("deuteranopia", deuteranopia(img.clone(), 0.0)),
+        ("tritanopia", tritanopia(img.clone(), 0.0)),
+        ("achromatopsia", achromatopsia(img.clone(), 0.0)),
+    ] {
+        let cpu_out = cpu_result.unwrap().to_rgba8();
+        let orig = img.to_rgba8();
+        let err = max_channel_error(&cpu_out, &orig);
+        assert!(
+            err <= 1,
+            "{name} strength=0.0: output differs from input by {err}/255 > 1"
+        );
+    }
+}
