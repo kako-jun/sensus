@@ -155,7 +155,7 @@ struct Cli {
     /// Android portrait-mode JPEG path. Extracts XMP depth map and applies depth blur.
     /// Requires a depth blur filter (--filter myopia-depth / hyperopia-depth / depth-of-field).
     /// --input is not required when --portrait is used.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "mpo")]
     portrait: Option<PathBuf>,
 
     /// Focus depth in 0.0..=1.0 (bright=near, dark=far). Only used with depth blur filters.
@@ -383,11 +383,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
     // --portrait: Android XMP Depth
     if let Some(portrait_path) = cli.portrait {
-        if cli.mpo.is_some() {
-            return Err(RunError::PortraitError(
-                "sensus: --portrait and --mpo cannot be used together".to_string(),
-            ));
-        }
         if cli.filter.len() > 1 {
             return Err(RunError::PortraitError(
                 "sensus: --portrait cannot be combined with multiple filters".to_string(),

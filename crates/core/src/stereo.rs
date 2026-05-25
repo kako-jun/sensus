@@ -121,13 +121,18 @@ pub fn read_xmp_depth(data: &[u8]) -> Result<DynamicImage> {
         }
         let marker = data[i + 1];
         let seg_len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
-        if i + 2 + seg_len > data.len() {
+        if seg_len < 2 {
             break;
         }
-        let seg = &data[i + 2..i + 2 + seg_len];
+        // セグメントデータ本体: i+4 から i+2+seg_len まで（長さフィールド i+2..i+4 をスキップ）
+        let seg_end = i + 2 + seg_len;
+        if seg_end > data.len() {
+            break;
+        }
+        let seg_data = &data[i + 4..seg_end];
         if marker == 0xE1 {
             // APP1 セグメント
-            if let Ok(s) = std::str::from_utf8(seg) {
+            if let Ok(s) = std::str::from_utf8(seg_data) {
                 if s.contains("GDepth:Data") {
                     if let Some(b64) = extract_gdepth_data(s) {
                         let decoded = base64_decode(b64.as_bytes())?;
@@ -137,7 +142,7 @@ pub fn read_xmp_depth(data: &[u8]) -> Result<DynamicImage> {
                 }
             }
         }
-        i += 2 + seg_len;
+        i = seg_end;
     }
     Err(crate::Error::NoDepthMap)
 }
@@ -169,7 +174,10 @@ fn extract_gdepth_data(xmp: &str) -> Option<&str> {
 /// 標準 base64 デコード（外部クレート不使用）。
 ///
 /// 空白文字（改行、スペース等）はスキップ。`=` はパディングとして無視する。
-/// 不正な文字が含まれる場合は `Err(Error::NoDepthMap)` を返す。
+/// 不正な文字が含まれる場合は `Err(Error::Base64DecodeError)` を返す。
+///
+/// パディング文字 '=' は単純にスキップする（RFC 4648 厳密モードではない）。
+/// GDepth:Data の base64 はパディングが正しいことが前提。
 fn base64_decode(input: &[u8]) -> Result<Vec<u8>> {
     const TABLE: [i8; 256] = {
         let mut t = [-1i8; 256];
@@ -206,7 +214,7 @@ fn base64_decode(input: &[u8]) -> Result<Vec<u8>> {
         }
         let v = TABLE[b as usize];
         if v < 0 {
-            return Err(crate::Error::NoDepthMap);
+            return Err(crate::Error::Base64DecodeError);
         }
         buf = (buf << 6) | v as u32;
         bits += 6;
@@ -535,16 +543,9 @@ mod tests {
     }
 
     fn make_portrait_jpeg_with_xmp_attr(gdepth_b64: &str) -> Vec<u8> {
-        // seg_len の先頭 2 バイトが valid UTF-8 になるよう XMP 長を調整する。
-        let xmp_core = format!(
+        let xmp = format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" GDepth:Data="{gdepth_b64}"/></rdf:RDF></x:xmpmeta>"#
         );
-        let target_len = find_valid_xmp_len_for_test(xmp_core.len());
-        let xmp = if xmp_core.len() < target_len {
-            format!("{}{}", " ".repeat(target_len - xmp_core.len()), xmp_core)
-        } else {
-            xmp_core
-        };
         let xmp_bytes = xmp.as_bytes();
         let seg_len = (xmp_bytes.len() + 2) as u16;
         let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1];
@@ -555,15 +556,9 @@ mod tests {
     }
 
     fn make_portrait_jpeg_with_xmp_element(gdepth_b64: &str) -> Vec<u8> {
-        let xmp_core = format!(
+        let xmp = format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/"><GDepth:Data>{gdepth_b64}</GDepth:Data></rdf:Description></rdf:RDF></x:xmpmeta>"#
         );
-        let target_len = find_valid_xmp_len_for_test(xmp_core.len());
-        let xmp = if xmp_core.len() < target_len {
-            format!("{}{}", " ".repeat(target_len - xmp_core.len()), xmp_core)
-        } else {
-            xmp_core
-        };
         let xmp_bytes = xmp.as_bytes();
         let seg_len = (xmp_bytes.len() + 2) as u16;
         let mut data = vec![0xFF, 0xD8, 0xFF, 0xE1];
@@ -571,17 +566,6 @@ mod tests {
         data.extend_from_slice(xmp_bytes);
         data.extend_from_slice(&[0xFF, 0xD9]);
         data
-    }
-
-    fn find_valid_xmp_len_for_test(min_len: usize) -> usize {
-        for xmp_len in min_len..min_len + 256 {
-            let seg_len = (xmp_len + 2) as u16;
-            let bytes = seg_len.to_be_bytes();
-            if std::str::from_utf8(&bytes).is_ok() {
-                return xmp_len;
-            }
-        }
-        panic!("could not find valid UTF-8 seg_len");
     }
 
     fn make_portrait_jpeg_no_gdepth() -> Vec<u8> {
@@ -680,18 +664,12 @@ mod tests {
         let png = make_tiny_gray_png();
         let b64 = base64_encode_test(&png);
 
-        // 1つ目: GDepth:Data なし（短い ASCII XMP → seg_len 小さい → valid UTF-8）
-        let xmp_no_depth = "X".repeat(52); // 52 bytes → seg_len=54=[0x00,0x36] valid
-        // 2つ目: GDepth:Data あり（find_valid_xmp_len_for_test で長さ調整）
-        let xmp_with_depth_core = format!(
+        // 1つ目: GDepth:Data なし（短い ASCII XMP）
+        let xmp_no_depth = "X".repeat(52); // 52 bytes → seg_len=54
+        // 2つ目: GDepth:Data あり
+        let xmp_with_depth = format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" GDepth:Data="{b64}"/></rdf:RDF></x:xmpmeta>"#
         );
-        let target_len = find_valid_xmp_len_for_test(xmp_with_depth_core.len());
-        let xmp_with_depth = if xmp_with_depth_core.len() < target_len {
-            format!("{}{}", " ".repeat(target_len - xmp_with_depth_core.len()), xmp_with_depth_core)
-        } else {
-            xmp_with_depth_core
-        };
 
         let mut data = vec![0xFF, 0xD8];
         // 1つ目 APP1（GDepth:Data なし）
@@ -737,8 +715,20 @@ mod tests {
         // '@' は base64 不正文字
         let result = base64_decode(b"SGVs@G8=");
         assert!(
+            matches!(result, Err(crate::Error::Base64DecodeError)),
+            "invalid char '@' should return Base64DecodeError, got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn read_xmp_depth_zero_seg_len_does_not_panic() {
+        // seg_len == 0 のとき無限ループ・パニックしないこと
+        let data = vec![0xFF, 0xD8, 0xFF, 0xE1, 0x00, 0x00];
+        let result = read_xmp_depth(&data);
+        // panicせず NoDepthMap エラーを返すこと
+        assert!(
             matches!(result, Err(crate::Error::NoDepthMap)),
-            "invalid char '@' should return error, got: {:?}", result
+            "zero seg_len should return NoDepthMap without panic, got: {:?}", result
         );
     }
 }

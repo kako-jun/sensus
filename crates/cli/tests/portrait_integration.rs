@@ -41,36 +41,14 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-/// seg_len = xmp_len + 2 の先頭 2 バイトが valid UTF-8 になる最小 xmp_len を返す。
-/// read_xmp_depth が std::str::from_utf8(seg) でパースするため、
-/// seg の先頭 2 バイト（seg_len フィールド）が valid UTF-8 である必要がある。
-fn find_valid_xmp_len(min_len: usize) -> usize {
-    for xmp_len in min_len..min_len + 256 {
-        let seg_len = (xmp_len + 2) as u16;
-        let bytes = seg_len.to_be_bytes();
-        if std::str::from_utf8(&bytes).is_ok() {
-            return xmp_len;
-        }
-    }
-    panic!("could not find valid UTF-8 seg_len in range {}..{}", min_len, min_len + 256);
-}
-
 /// GDepth:Data 属性を含む合成ポートレート JPEG を生成する。
 fn make_portrait_jpeg_with_depth() -> Vec<u8> {
     let png = make_tiny_gray_png();
     let b64 = base64_encode(&png);
 
-    // seg_len = xmp_bytes.len() + 2 の先頭 2 バイトが valid UTF-8 になる必要がある。
-    // (read_xmp_depth が std::str::from_utf8(seg) でパースするため)
-    let xmp_core = format!(
+    let xmp = format!(
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" GDepth:Data="{b64}"/></rdf:RDF></x:xmpmeta>"#
     );
-    let target_len = find_valid_xmp_len(xmp_core.len());
-    let xmp = if xmp_core.len() < target_len {
-        format!("{}{}", " ".repeat(target_len - xmp_core.len()), xmp_core)
-    } else {
-        xmp_core
-    };
     let xmp_bytes = xmp.as_bytes();
     let seg_len = (xmp_bytes.len() + 2) as u16;
 
@@ -171,15 +149,11 @@ fn cli_portrait_without_input_succeeds() {
 }
 
 // ---------------------------------------------------------------
-// C-P03: --portrait + --mpo 同時 → --mpo が先に処理されて成功するが出力は生成される
-//
-// main.rs の実装では --mpo が先に処理されるため、--portrait + --mpo の組み合わせは
-// --mpo として動作し成功する（--portrait バリデーションには到達しない）。
-// よってこのテストは「--mpo として正常動作する」ことを確認する。
+// C-P03: --portrait + --mpo 同時指定 → clap が conflicts_with でエラーにする
 // ---------------------------------------------------------------
 
 #[test]
-fn cli_portrait_and_mpo_together_uses_mpo_flow() {
+fn cli_portrait_and_mpo_together_returns_error() {
     let dir = TempDir::new().unwrap();
     let portrait_path = dir.path().join("portrait.jpg");
     let mpo_path = dir.path().join("test.mpo");
@@ -190,7 +164,7 @@ fn cli_portrait_and_mpo_together_uses_mpo_flow() {
     let mpo_bytes = make_synthetic_mpo(8, 8);
     std::fs::write(&mpo_path, &mpo_bytes).unwrap();
 
-    // --mpo が先に処理されるため --mpo フローとして実行される
+    // --portrait と --mpo の同時指定は clap が conflicts_with でエラーにする
     let status = cargo_run()
         .args([
             "-o", output_path.to_str().unwrap(),
@@ -201,9 +175,7 @@ fn cli_portrait_and_mpo_together_uses_mpo_flow() {
         .status()
         .unwrap();
 
-    // --mpo フローとして成功する（--portrait は無視される）
-    assert!(status.success(), "--mpo takes precedence over --portrait, should succeed");
-    assert!(output_path.exists(), "output file should be created by --mpo flow");
+    assert!(!status.success(), "--portrait and --mpo together should fail with clap conflicts_with error");
 }
 
 // ---------------------------------------------------------------
