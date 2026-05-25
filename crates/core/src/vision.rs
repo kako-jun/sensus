@@ -4017,7 +4017,7 @@ mod tests {
         // 中央 white dot が拡散して中心輝度が下がるはず。
         let size = 64_u32;
         let input = center_white_dot(size);
-        let depth_max = depth_map_solid(size, 255); // d≈1.0 → scaled≈6.972
+        let depth_max = depth_map_solid(size, 255); // d=1.0 → scaled=7.0 → 最終ビン
 
         let out_blurred = depth_aware_blur(
             input.clone(),
