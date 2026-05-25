@@ -144,7 +144,9 @@ mod tests {
         assert!(result.is_ok(), "valid MPO should return Ok, got: {:?}", result.err());
         let (l, r) = result.unwrap();
         assert_eq!(l.width(), 8);
+        assert_eq!(l.height(), 8);
         assert_eq!(r.width(), 8);
+        assert_eq!(r.height(), 8);
     }
 
     #[test]
@@ -304,7 +306,7 @@ mod tests {
                 left_img.put_pixel(x, y, image::Luma([220]));
             }
         }
-        let left = DynamicImage::ImageLuma8(left_img.clone());
+        let left = DynamicImage::ImageLuma8(left_img);
 
         // 右画像: 同じ縦帯を shift px 左にずらす
         let mut right_img = image::GrayImage::from_pixel(w, h, image::Luma([30]));
@@ -325,7 +327,7 @@ mod tests {
         let cy = h / 2;
         let center_val = luma.get_pixel(cx, cy)[0];
         assert!(
-            center_val > 0,
+            center_val >= 20,
             "known-disparity region should produce non-zero depth value, got {center_val}"
         );
     }
