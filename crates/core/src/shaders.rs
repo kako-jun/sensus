@@ -485,6 +485,12 @@ pub struct StarburstsUniforms {
     pub strength: f32,
     pub threshold: f32,
     pub dispersion: f32,
+    /// レイ本数（CPU `num_rays` と同値）。starbursts.frag の `uNumRays` に渡す。
+    pub num_rays: f32,
+    /// レイ長（ピクセル, CPU `ray_length_px` と同値）。`uRayLengthPx` に渡す。
+    pub ray_length_px: f32,
+    /// テクセルサイズ vec2(1.0/width, 1.0/height)。`uTexelSize` に渡す。
+    pub texel_size: [f32; 2],
 }
 
 /// diplopia の uniform を計算する。
@@ -520,8 +526,30 @@ pub fn nystagmus_uniforms(
 }
 
 /// starbursts の uniform を計算する。
-pub fn starbursts_uniforms(strength: f32, threshold: f32, dispersion: f32) -> StarburstsUniforms {
-    StarburstsUniforms { strength, threshold, dispersion }
+///
+/// `num_rays` / `ray_length_ratio` は CPU `vision::starbursts` と同じ意味。
+/// `ray_length_px` は CPU と同様 `(ray_length_ratio.clamp(0,1) * min(W,H)) as u32` で算出し、
+/// f32 へ変換して GLSL に渡す（GLSL は float seed/整数 uniform を避ける方針）。
+/// gather 型の starbursts.frag はレイの逆方向サンプリングに texel size を必要とする。
+pub fn starbursts_uniforms(
+    strength: f32,
+    threshold: f32,
+    dispersion: f32,
+    num_rays: u32,
+    ray_length_ratio: f32,
+    width: u32,
+    height: u32,
+) -> StarburstsUniforms {
+    let min_dim = width.min(height) as f32;
+    let ray_length_px = (ray_length_ratio.clamp(0.0, 1.0) * min_dim) as u32;
+    StarburstsUniforms {
+        strength,
+        threshold,
+        dispersion,
+        num_rays: num_rays as f32,
+        ray_length_px: ray_length_px as f32,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
 }
 
 /// 視野欠損（vignette 系）フィルタの uniform。
