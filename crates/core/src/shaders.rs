@@ -14,6 +14,8 @@ const PRESBYOPIA_MAX_RADIUS_RATIO: f32 = 0.011;
 const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
 // vision.rs の PHOTOPHOBIA_BLOOM_RADIUS_RATIO と同じ値（bloom 半径 = ratio * min(W,H) * strength）
 const PHOTOPHOBIA_BLOOM_RADIUS_RATIO: f32 = 0.05;
+// vision.rs eye_strain の disk blur 半径係数（半径 = strength * 1.5 px、画像サイズ非依存）
+const EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH: f32 = 1.5;
 
 /// Machado 2009 severity = 1.0 行列（行優先: row0col0, row0col1, row0col2, ...）。
 /// vision.rs の PROTANOPIA 定数と同じ値。
@@ -101,6 +103,37 @@ pub fn starbursts_glsl() -> &'static str {
 /// eye_strain.frag の GLSL ES 3.00 ソースを返す。
 pub fn eye_strain_glsl() -> &'static str {
     include_str!("shaders/eye_strain.frag")
+}
+
+/// eye_strain フィルタの uniform。
+///
+/// CPU 実装 `vision::eye_strain` は contrast+vignette の後に
+/// 半径 `strength * 1.5 px`（画像サイズ非依存）の disk blur を適用する。
+/// シェーダはこの半径を `uRadiusPx` として受け取り、texel size で正規化する。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EyeStrainUniforms {
+    /// strength (0.0..=1.0)。eye_strain.frag の `uStrength` に渡す。
+    pub strength: f32,
+    /// disk blur 半径（ピクセル単位）= strength * 1.5。
+    /// eye_strain.frag の `uRadiusPx` に渡す。
+    pub radius_px: f32,
+    /// テクセルサイズ vec2(1.0/width, 1.0/height)。
+    /// eye_strain.frag の `uTexelSize` に渡す。
+    pub texel_size: [f32; 2],
+}
+
+/// eye_strain の uniform を返す。
+///
+/// `width`, `height`: 画像の幅・高さ（ピクセル）。texel size の算出に使う。
+/// blur 半径は画像サイズ非依存（`strength * 1.5 px`）だが、シェーダ内で
+/// テクスチャ座標へ変換するため texel size が必要。
+pub fn eye_strain_uniforms(strength: f32, width: u32, height: u32) -> EyeStrainUniforms {
+    let radius_px = strength.clamp(0.0, 1.0) * EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH;
+    EyeStrainUniforms {
+        strength,
+        radius_px,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
 }
 
 /// dry_eye.frag の GLSL ES 3.00 ソースを返す。

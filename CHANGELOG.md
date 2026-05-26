@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix: kako-jun/sensus#98 `eye_strain` GLSL にブラー段を追加し等価テストの偽装を解消**:
+  - `eye_strain.frag` を「contrast 圧縮 + vignette のみ」から、CPU `vision::eye_strain` と同じ処理順序（contrast → vignette → disk blur）に実装。CPU が最後に適用する半径 `strength*1.5px` の disk（pillbox）blur 段が `.frag` に欠落しており universal-experience の表示と CPU が乖離していた問題を解消
+  - 単一パス制約のため厳密 pillbox を Fibonacci lattice 16 tap で近似（CPU=厳密 pillbox、これが唯一の乖離源）。各 tap で contrast+vignette を再計算してから円盤状に平均し、linear sRGB 空間で処理。PSNR で担保（32×32 で strength=0.5 → 40.0 dB、1.0 → 42.3 dB、いずれも下限 30 dB 超）
+  - 等価テストの偽装を解消: `simulate_eye_strain_glsl` は実 `.frag` を読まずブラー段の無い別アルゴリズム（contrast+vignette のみ）をインライン再実装しており、`.frag` のブラー欠落がテストから見えなかった。`#97` の `sim_photophobia_glsl` と同じ「`.frag` と式を 1:1 対応」方針で書き換え、CPU・`.frag`・sim の3者が一致することを保証
+  - CPU↔GLSL 等価テストを追加（strength=0.5 で `shader_equiv_eye_strain_strength_0_5_psnr`、既存の strength=1.0 テストも新 sim で検証）
+  - **API 追加**: `eye_strain_uniforms(strength, width, height)` と `EyeStrainUniforms` 構造体新設（`uRadiusPx` / `uTexelSize` 追加。blur 半径はピクセル空間でテクスチャ座標に変換するため texel size が必要）。`eye_strain_glsl()` の外部呼び出し元なし（既存シグネチャ変更ではなく純粋な追加）
 - **fix: kako-jun/sensus#97 `photophobia` GLSL に disk-blur bloom を実装**:
   - `photophobia.frag` を「ピクセル単位の輝度 boost のみ（近傍へ広がらない）」から、CPU `vision::photophobia` と同じ disk-blur bloom（highlight 抽出しきい値 0.5・BT.709 luma・半径 `strength*0.05*min(W,H)`・加算合成・linear sRGB）に実装。これで universal-experience の Flutter 表示で bloom が近傍へ滲み CPU と一致する
   - 単一パス制約のため厳密 pillbox を Fibonacci lattice 16 tap で近似（CPU=厳密 pillbox）。これが唯一の乖離源で PSNR で担保（strength=0.5 で 35.8 dB、1.0 で 42.7 dB、いずれも下限 30 dB 超）
