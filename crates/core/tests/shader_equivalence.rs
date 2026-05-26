@@ -3162,35 +3162,37 @@ fn starbursts_strength_1_emits_rays_from_bright_point() {
 }
 
 // ---------------------------------------------------------------------------
-// cataract（白内障）— 黄変マトリクスは一致するが、白濁ノイズの LCG ハッシュが
-// CPU(64bit) と GLSL(32bit 切り詰め) で異なる（#100 で判明、別 Issue 候補）
+// cataract（白内障）— #125 で白濁ノイズを #99 と同じ 32bit spatial hash に
+// CPU/GLSL 両方統一した。黄変マトリクス（Pokorny 1987）に加えてノイズ項も
+// CPU↔.frag↔sim が bit 一致する。
 //
-// CPU は格子頂点ごとに 64bit 演算でハッシュし `(lcg >> 32)/u32::MAX` を取る。
-// cataract.frag は同じ定数の下位 32bit（0x4c957f2d / 0xf767814f 等）で 32bit
-// 演算しており、生成されるノイズ値が頂点ごとに完全に異なる。よって strength>0
-// の白濁ノイズは一致しない（黄変成分のみ一致）。格子周波数 CELL_SIZE=32 と
-// smoothstep bilinear 補間の幾何は一致する。
-//
-// strength=0 等価は既存 shader_equiv_cataract_strength_zero_psnr で確認済み。
-// ここでは「黄変マトリクスのみ（noise を無視できる単色一様画像）での一致」を
-// 検証して、乖離がノイズ項に限定されることを切り分ける。
+// 旧実装（#100 時点）は CPU が 64bit Knuth LCG の高位ビット抽出
+// `(lcg >> 32)/u32::MAX`、.frag が同定数の下位 32bit 切り詰めで別系列であり、
+// さらに格子規約も CPU は整数ピクセル index `px/CELL`、.frag は `(x+0.5)/CELL`
+// の 0.5px オフセットで食い違っていた（PSNR 19.6dB）。#125 で:
+//   - ノイズハッシュを metamorphopsia/dry_eye と同一の 32bit spatial hash に統一
+//   - 格子規約を整数ピクセル座標 (top-left) に統一（.frag は uv*res-0.5 で復元）
+// した結果、CPU↔GLSL が等価になった。
 // ---------------------------------------------------------------------------
 
+/// cataract.frag の gridNoise を Rust で再現する（CPU `grid_hash` と bit 一致）。
+fn cataract_grid_hash(seed: u32, gx: u32, gy: u32) -> f32 {
+    let mut h = seed
+        .wrapping_mul(0x9e3779b9)
+        .wrapping_add(gx.wrapping_mul(0x85ebca6b))
+        .wrapping_add(gy.wrapping_mul(0xc2b2ae35));
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a2d39);
+    h ^= h >> 15;
+    h as f32 / u32::MAX as f32
+}
+
 /// cataract.frag の黄変マトリクス + 白濁ノイズを Rust で忠実ミラーする。
-/// **注意**: noise の LCG は .frag の 32bit 版を再現する（CPU 64bit とは別物）。
 fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
     let (w, h) = img.dimensions();
 
-    // .frag の gridNoise: 32bit LCG（CPU の 64bit とは異なる）
-    let grid_noise = |gx: f32, gy: f32| -> f32 {
-        let s = seed;
-        let hh = s
-            .wrapping_mul(0x9e3779b9)
-            .wrapping_add((gx as u32).wrapping_mul(0x517cc1b7))
-            .wrapping_add((gy as u32).wrapping_mul(0x6c62272e));
-        let lcg = hh.wrapping_mul(0x4c957f2d).wrapping_add(0xf767814f);
-        lcg as f32 / 0xFFFF_FFFFu32 as f32
-    };
     let smooth_noise = |px: f32, py: f32| -> f32 {
         const CELL: f32 = 32.0;
         let cx = px / CELL;
@@ -3201,10 +3203,12 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
         let cty = cy - ciy;
         let stx = ctx * ctx * (3.0 - 2.0 * ctx);
         let sty = cty * cty * (3.0 - 2.0 * cty);
-        let v00 = grid_noise(cix, ciy);
-        let v10 = grid_noise(cix + 1.0, ciy);
-        let v01 = grid_noise(cix, ciy + 1.0);
-        let v11 = grid_noise(cix + 1.0, ciy + 1.0);
+        let gx0 = cix as u32;
+        let gy0 = ciy as u32;
+        let v00 = cataract_grid_hash(seed, gx0, gy0);
+        let v10 = cataract_grid_hash(seed, gx0 + 1, gy0);
+        let v01 = cataract_grid_hash(seed, gx0, gy0 + 1);
+        let v11 = cataract_grid_hash(seed, gx0 + 1, gy0 + 1);
         v00 * (1.0 - stx) * (1.0 - sty)
             + v10 * stx * (1.0 - sty)
             + v01 * (1.0 - stx) * sty
@@ -3227,8 +3231,8 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
             let ng = g + (yg - g) * strength;
             let nb = b + (yb - b) * strength;
 
-            // pixelPos = vTexCoord * uResolution = (x+0.5, y+0.5)
-            let noise = smooth_noise(x as f32 + 0.5, y as f32 + 0.5);
+            // pixelPos = vTexCoord * uResolution - 0.5 = (x, y)（整数ピクセル座標）
+            let noise = smooth_noise(x as f32, y as f32);
             const WHITE_BLEND_MAX: f32 = 0.4;
             let white_blend = strength * noise * WHITE_BLEND_MAX;
 
@@ -3252,33 +3256,71 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
 }
 
 #[test]
-fn finding_cataract_noise_hash_diverges() {
-    // 黄変 + 白濁ノイズ込みで CPU と GLSL を比較。CPU は 64bit LCG の高位ビット抽出、
-    // GLSL/sim は 32bit ハッシュ切り詰めでノイズ系列が別物。加えて格子サンプリング規約も
-    // 食い違う（CPU は整数ピクセル index px/CELL、.frag は (x+0.5)/CELL の 0.5px オフセット）。
-    // どちらの要因でも非単色画像では一致しないことを「明示的に」記録する。
-    // （仮の等価テストで誤魔化さず、乖離の存在自体をテストで固定する。）
+fn shader_equiv_cataract_noise_hash_strength_1_0() {
+    // #125: 黄変 + 白濁ノイズ込みで CPU と GLSL が等価になったことを検証する。
+    // 旧 finding_cataract_noise_hash_diverges（乖離固定）を昇格させたもの。
+    // ノイズハッシュを 32bit spatial hash に統一し、格子規約も整数ピクセル座標に
+    // 揃えたため、ノイズを含む非単色画像でも一致する。
     use sensus_core::vision::cataract;
     let img = gradient_32();
     let cpu = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
     let gpu = sim_cataract_glsl(&img.to_rgba8(), 1.0, 42);
     let db = psnr(&cpu, &gpu);
-    // ノイズ項のハッシュ差により等価は成立しない（30dB に届かない）。
-    // この assert が将来「等価が成立する」状態（= ハッシュ統一）に変わったら
-    // テストを等価検証に昇格させること。
+    // #125 統一後は bit 一致（PSNR = ∞）。閾値は安全側で 30 dB。
     assert!(
-        db < 30.0,
-        "cataract: CPU↔GLSL が等価になった（PSNR {db:.1} dB ≥ 30）。\
-         ノイズハッシュが統一された可能性。本テストを等価検証へ昇格させよ"
+        db >= 30.0,
+        "cataract strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 30 dB（ノイズハッシュ/格子規約の乖離）"
     );
+}
+
+#[test]
+fn shader_equiv_cataract_noise_hash_strength_0_5() {
+    use sensus_core::vision::cataract;
+    let img = gradient_32();
+    let cpu = cataract(img.clone(), 0.5, 42).unwrap().to_rgba8();
+    let gpu = sim_cataract_glsl(&img.to_rgba8(), 0.5, 42);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "cataract strength=0.5: CPU↔GLSL PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_cataract_noise_hash_non_square() {
+    // 非正方形でも格子規約（整数ピクセル座標）が一致すること。
+    use sensus_core::vision::cataract;
+    let img = gradient_64x32();
+    let cpu = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
+    let gpu = sim_cataract_glsl(&img.to_rgba8(), 1.0, 42);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "cataract non-square 64x32: CPU↔GLSL PSNR {db:.1} dB < 30 dB");
+
+    let img2 = gradient_32x64();
+    let cpu2 = cataract(img2.clone(), 1.0, 42).unwrap().to_rgba8();
+    let gpu2 = sim_cataract_glsl(&img2.to_rgba8(), 1.0, 42);
+    let db2 = psnr(&cpu2, &gpu2);
+    assert!(db2 >= 30.0, "cataract non-square 32x64: CPU↔GLSL PSNR {db2:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_cataract_noise_hash_seed_differs() {
+    // seed が異なれば白濁ノイズパターンが変わること（CPU/GLSL とも同じ系列で変化）。
+    use sensus_core::vision::cataract;
+    let img = gradient_32();
+    let a = cataract(img.clone(), 1.0, 1).unwrap().to_rgba8();
+    let b = cataract(img.clone(), 1.0, 999).unwrap().to_rgba8();
+    let db = psnr(&a, &b);
+    assert!(db < 60.0, "cataract: 異なる seed で同一出力（seed が効いていない疑い、PSNR {db:.1} dB）");
+
+    // GLSL 側でも同 seed なら CPU と一致すること。
+    let ga = sim_cataract_glsl(&img.to_rgba8(), 1.0, 1);
+    let gb = sim_cataract_glsl(&img.to_rgba8(), 1.0, 999);
+    assert!(psnr(&a, &ga) >= 30.0, "cataract seed=1: CPU↔GLSL が乖離");
+    assert!(psnr(&b, &gb) >= 30.0, "cataract seed=999: CPU↔GLSL が乖離");
 }
 
 #[test]
 fn cataract_yellowing_is_warm_shift_cpu() {
     // CPU 単体の検証: 黄変マトリクスが暖色シフト（R/B 比が暖色側へ）を起こすこと。
-    // GLSL との一致は主張しない（白濁ノイズ項が CPU と GLSL で別系列のため、
-    // 黄変成分だけを切り分けて CPU↔GLSL 比較するのは noise を消せず不可）。
-    // CPU↔GLSL の乖離自体は finding_cataract_noise_hash_diverges で記録済み。
+    // CPU↔GLSL の等価は shader_equiv_cataract_noise_hash_* で担保済み。
     use sensus_core::vision::cataract;
     // strength を小さく取り white_blend(=s*noise*0.4) の寄与を抑える。
     let input = solid_rgba(32, 32, [200, 120, 200, 255]); // R=B のマゼンタ
