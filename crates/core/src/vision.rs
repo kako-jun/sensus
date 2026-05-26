@@ -2497,7 +2497,7 @@ pub fn contrast_sensitivity(img: DynamicImage, strength: f32) -> Result<DynamicI
 
 /// 細部喪失（Detail Loss）シミュレーション。
 ///
-/// 矩形タイルごとに平均色に置き換える（pixelation）。
+/// 矩形タイルごとにタイル中心点の色に置き換える（pixelation）。
 /// タイルサイズ = `(strength * 20.0).max(1.0) as u32` px。
 ///
 /// - `strength = 0.0`: identity（タイルサイズ 1px = 変化なし）
