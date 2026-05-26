@@ -525,13 +525,24 @@ pub fn starbursts_uniforms(strength: f32, threshold: f32, dispersion: f32) -> St
 }
 
 /// 視野欠損（vignette 系）フィルタの uniform。
-/// glaucoma / tunnel_vision / macular_degeneration 共通。
+/// tunnel_vision / macular_degeneration 共通。
 #[derive(Debug, Clone)]
 pub struct FieldOfVisionUniforms {
     pub strength: f32,
     /// アスペクト比（width / height）。GLSL シェーダの `uAspect` uniform に渡す。
     /// 距離計算で UV 空間を aspect 補正して Rust 実装（pixel 座標）と一致させる。
     pub aspect: f32,
+}
+
+/// glaucoma 専用の uniform。Vignette に加えて弧状暗点モード（`uMode`）を持つ。
+#[derive(Debug, Clone)]
+pub struct GlaucomaUniforms {
+    pub strength: f32,
+    /// アスペクト比（width / height）。GLSL シェーダの `uAspect` uniform に渡す。
+    pub aspect: f32,
+    /// glaucoma.frag の `uMode` uniform。
+    /// 0=Vignette, 1=ArcuateSuperior, 2=ArcuateInferior, 3=Biarcuate。
+    pub mode: i32,
 }
 
 /// 半盲フィルタの uniform。
@@ -547,10 +558,17 @@ pub struct HemianopiaUniforms {
 /// glaucoma の uniform を計算する。
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
-pub fn glaucoma_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
-    FieldOfVisionUniforms {
+/// `mode`: 暗点モード（[`crate::vision::GlaucomaMode`]）。`uMode` uniform に渡す。
+pub fn glaucoma_uniforms(
+    strength: f32,
+    width: u32,
+    height: u32,
+    mode: crate::vision::GlaucomaMode,
+) -> GlaucomaUniforms {
+    GlaucomaUniforms {
         strength,
         aspect: width as f32 / height as f32,
+        mode: mode.to_glsl_mode(),
     }
 }
 
@@ -899,9 +917,19 @@ mod tests {
 
     #[test]
     fn glaucoma_uniforms_strength_one() {
-        let u = glaucoma_uniforms(1.0, 32, 32);
+        let u = glaucoma_uniforms(1.0, 32, 32, crate::vision::GlaucomaMode::Vignette);
         assert_eq!(u.strength, 1.0);
         assert!((u.aspect - 1.0).abs() < 1e-6, "正方形は aspect=1.0");
+        assert_eq!(u.mode, 0, "Vignette は uMode=0");
+    }
+
+    #[test]
+    fn glaucoma_uniforms_mode_mapping() {
+        use crate::vision::GlaucomaMode;
+        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Vignette).mode, 0);
+        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::ArcuateSuperior).mode, 1);
+        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::ArcuateInferior).mode, 2);
+        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Biarcuate).mode, 3);
     }
 
     #[test]

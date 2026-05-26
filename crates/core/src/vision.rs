@@ -1207,6 +1207,20 @@ pub enum GlaucomaMode {
     Biarcuate,
 }
 
+impl GlaucomaMode {
+    /// glaucoma.frag の `uMode` uniform に渡す GLSL モード値。
+    /// 0=Vignette, 1=ArcuateSuperior, 2=ArcuateInferior, 3=Biarcuate。
+    /// .frag の分岐（[`crate::shaders::glaucoma_glsl`]）と 1 対 1 対応する。
+    pub fn to_glsl_mode(self) -> i32 {
+        match self {
+            GlaucomaMode::Vignette => 0,
+            GlaucomaMode::ArcuateSuperior => 1,
+            GlaucomaMode::ArcuateInferior => 2,
+            GlaucomaMode::Biarcuate => 3,
+        }
+    }
+}
+
 /// 緑内障（glaucoma）シミュレーション。
 ///
 /// 緑内障は眼圧上昇による視神経萎縮が原因で、周辺視野から徐々に欠けていく。
