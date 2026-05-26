@@ -8,7 +8,9 @@ precision mediump float;
 // CPU は highlight レイヤに「均一重み disk blur（半径 r, edge replication）」を
 // 厳密適用する。GPU は単一パスで厳密 pillbox を畳み込めない（半径が大きいと
 // ループ展開不可）ため、Fibonacci lattice 16 tap で円盤を近似サンプリングする。
-// myopia.frag / hyperopia.frag と同じ近似戦略。等価性は PSNR で担保する
+// 16tap lattice 近似サンプリング自体は myopia.frag / hyperopia.frag と同じだが、
+// それらが画像そのものをぼかすのに対し本シェーダは highlight レイヤをぼかして
+// 元画像に加算合成する点が異なる。等価性は PSNR で担保する
 // （shader_equivalence の sim_photophobia_glsl は本シェーダと同一の式を持つ）。
 // 乖離上限: strength=1.0 / 32x32 で PSNR ≈ 42.7 dB（許容下限 30 dB を満たす）。
 

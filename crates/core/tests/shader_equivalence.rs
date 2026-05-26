@@ -631,6 +631,12 @@ fn shader_equiv_photophobia_radius_below_min_no_bloom() {
         gpu_sim, input,
         "radius<0.5: bloom が加算されている（境界で bloom ゼロになっていない）"
     );
+    // CPU 側も同じ境界で bloom ゼロ（identity）になることを確認し、両側を守る。
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu_out, input,
+        "radius<0.5: CPU 側で bloom が加算されている（境界で identity になっていない）"
+    );
 }
 
 #[test]
@@ -705,6 +711,20 @@ fn shader_equiv_photophobia_bloom_spreads_from_bright_point() {
         [corner[0], corner[1], corner[2]],
         [0, 0, 0],
         "bloom 範囲外の暗部が変化した（角の画素 {corner:?}）"
+    );
+
+    // CPU 側も同じく明点が近傍へ広がり、範囲外の暗部は不変であることを確認（両側を守る）。
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    assert!(
+        cpu_out.get_pixel(cx + 1, cy)[0] > 0,
+        "CPU 側で bloom が隣接画素に広がっていない（中心隣 R={}）",
+        cpu_out.get_pixel(cx + 1, cy)[0]
+    );
+    let cpu_corner = cpu_out.get_pixel(0, 0);
+    assert_eq!(
+        [cpu_corner[0], cpu_corner[1], cpu_corner[2]],
+        [0, 0, 0],
+        "CPU 側で bloom 範囲外の暗部が変化した（角の画素 {cpu_corner:?}）"
     );
 }
 
