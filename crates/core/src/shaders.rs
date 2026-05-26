@@ -737,11 +737,19 @@ pub fn vestibular_neuritis_uniforms(strength: f32, width: u32, height: u32) -> V
 /// 半径（`strength * 0.015 * min(width, height)`）の算出に使う。
 pub fn vertigo_uniforms(strength: f32, time: f32, width: u32, height: u32) -> VertigoUniforms {
     let min_dim = width.min(height) as f32;
+    // CPU 実装 (vision::normalize_strength) は NaN を 0 (identity) として扱う。
+    // clamp 単体は NaN を NaN のまま返すため、ここでも NaN→0 に正規化して
+    // radius_px が NaN にならないようにする。
+    let strength_norm = if strength.is_nan() {
+        0.0
+    } else {
+        strength.clamp(0.0, 1.0)
+    };
     VertigoUniforms {
         strength,
         time,
         aspect: width as f32 / height as f32,
-        radius_px: strength.clamp(0.0, 1.0) * 0.015 * min_dim,
+        radius_px: strength_norm * 0.015 * min_dim,
         texel_size: [1.0 / width as f32, 1.0 / height as f32],
     }
 }

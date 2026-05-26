@@ -3201,7 +3201,12 @@ fn sim_vertigo_glsl(img: &RgbaImage, angle: f32, aspect: f32, radius_px: f32) ->
         for x in 0..w {
             let uv_x = (x as f32 + 0.5) / w as f32;
             let uv_y = (y as f32 + 0.5) / h as f32;
-            let (src_u, src_v) = rotate_src_uv(uv_x, uv_y, cos_a, sin_a, aspect);
+            let (raw_u, raw_v) = rotate_src_uv(uv_x, uv_y, cos_a, sin_a, aspect);
+            // .frag は tap ループ前に base srcUV を [0,1] へ clamp する（vertigo.frag line 60）。
+            // base を clamp してから offset を足すので、回転中心が [0,1] 外でも .frag と
+            // 完全な 1:1 ミラーになるよう、ここでも base を clamp する。
+            let src_u = raw_u.clamp(0.0, 1.0);
+            let src_v = raw_v.clamp(0.0, 1.0);
             let center = sample_glsl_bilinear(img, src_u, src_v);
 
             if radius_px < 0.5 {
@@ -3306,7 +3311,7 @@ fn shader_equiv_vertigo_nonsquare_64x32_psnr() {
     let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
     let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
     let db = psnr(&cpu, &gpu);
-    // 実測 PSNR ≈ 37.2 dB（回転のみ、bilinear 丸め差）
+    // 実測 PSNR（回転のみ、bilinear 丸め差）
     assert!(db >= 30.0, "vertigo 64x32: PSNR {db:.1} dB < 30 dB");
     assert!(
         psnr(&cpu, &img.to_rgba8()) < 45.0,
@@ -3326,6 +3331,10 @@ fn shader_equiv_vertigo_nonsquare_32x64_psnr() {
     let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
     let db = psnr(&cpu, &gpu);
     assert!(db >= 30.0, "vertigo 32x64: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        psnr(&cpu, &img.to_rgba8()) < 45.0,
+        "vertigo 32x64 が画像をほぼ変えていない（回転していない）"
+    );
 }
 
 #[test]
@@ -3341,7 +3350,7 @@ fn shader_equiv_vertigo_large_with_blur_psnr() {
     let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
     let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
     let db = psnr(&cpu, &gpu);
-    // 実測 PSNR ≈ 38.4 dB（回転 + 16tap disk blur 近似の合算差）
+    // 実測 PSNR（回転 + 16tap disk blur 近似の合算差）
     assert!(db >= 30.0, "vertigo 128x96 (blur): PSNR {db:.1} dB < 30 dB");
     assert!(
         psnr(&cpu, &img.to_rgba8()) < 45.0,
@@ -3388,7 +3397,7 @@ fn shader_equiv_bppv_rotation_nonsquare_64x32_psnr() {
     let cpu = bppv_rotation(img.clone(), 1.0, time_t).unwrap().to_rgba8();
     let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle, aspect);
     let db = psnr(&cpu, &gpu);
-    // 実測 PSNR ≈ 45.1 dB（回転のみ、bilinear 丸め差）
+    // 実測 PSNR（回転のみ、bilinear 丸め差）
     assert!(db >= 30.0, "bppv_rotation 64x32: PSNR {db:.1} dB < 30 dB");
     assert!(
         psnr(&cpu, &img.to_rgba8()) < 45.0,
