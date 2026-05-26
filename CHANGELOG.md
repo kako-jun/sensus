@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests / Findings
+
+- **test: kako-jun/sensus#100 等価テスト皆無だったフィルタ群に CPU↔GLSL 等価テストを追加 + 乖離を調査記録**:
+  - 実 `.frag` を 1:1 ミラーする sim を作り PSNR 等価検証する確立パターン（#97〜#99）に従い、テストを追加。インライン別アルゴリズムによる偽装合格はしていない。
+  - **nyctalopia**: `.frag` は CPU と式が完全 1:1（暗化 `1-s*0.7`・脱色 `s*0.8`・photopic/scotopic blend・Purkinje shift）。`sim_nyctalopia_glsl` で検証し strength 0.0/0.5/1.0・非正方形 64×32 すべて **max channel err 0（PSNR=∞、完全一致）**。
+  - **diplopia**: `.frag`（texel オフセット + UV clamp + 最近傍参照の alpha blend）を `sim_diplopia_glsl`（GPU 最近傍を `floor(uv*dim)` で再現）でミラー。CPU の整数ピクセルオフセットを texel に変換して同じ ghost 変位を渡し、strength 0.0/0.5/1.0・非正方形 64×32/32×64 で **PSNR ≥ 38dB（実測 ∞）**。
+  - **nystagmus**: `.frag` は astigmatism.frag と同一構造（16-tap 1D directional blur、+90° しない）なので `sim_astigmatism` で忠実ミラー。滑らか gradient では **PSNR 37.8dB（≥30）**。strength=0 identity・radius<0.5px passthrough・非正方形を追加。**乖離（別 Issue 候補）**: CPU は `ellipse_blur`（filled-ellipse box、短軸 0.5px）、GLSL は 16-tap 直線で、同じ 1D motion blur を別カーネルで量子化している。鋭いエッジ（実コンテンツ）では ~20dB まで乖離し、特に radius<1.0px で CPU の楕円が原点のみに退化して blur がほぼ消える。**astigmatism も同じ乖離を共有**するが radius<0.5px の passthrough 領域でしかテストされておらず顕在化していなかった。
+  - **vertigo / bppv_rotation**: `.frag` は UV 空間（正方化）逆回転サンプリング、CPU はピクセル空間逆回転 + bilinear。**正方形画像では両者一致**（`sim_uv_rotation_glsl` で bilinear ミラー、vertigo 49.9dB / bppv 53.8dB）。strength=0 identity も追加。**乖離（別 Issue 候補）**: ① 非正方形では UV 空間回転が角度を歪ませ CPU と不一致。② vertigo CPU は回転後に周辺 disk blur（`s*0.015*min_dim`）を加えるが `.frag` に無い（32px 正方形では 0.48px<0.5px で blur がスキップされる領域で等価を取った）。
+  - **starbursts（大乖離・別 Issue 必須）**: CPU は明部画素起点のレイマーチング（num_rays 本のレイを別レイヤーに加算）だが、`starbursts.frag` は単一パス制約で各画素を「自身の輝度」でその場ブライトニングするだけ。`.frag` コメント自身が「フルレイマーチング版は CPU 実装を参照」と明記。**根本的に別効果**で PSNR 等価は原理的に不成立。仮の等価テストは作らず、strength=0 恒等・決定論・レイ放射の効果アサートのみ追加。
+  - **cataract（ノイズハッシュ乖離・別 Issue 候補）**: 黄変マトリクス（Pokorny 1987）は一致するが、白濁ノイズの LCG ハッシュが CPU（64bit、`(lcg>>32)/u32::MAX` の高位ビット抽出）と GLSL（同定数の下位 32bit で 32bit 演算）で異なり、頂点ノイズ値が完全に別物。格子幾何（CELL_SIZE=32・smoothstep bilinear）は一致。`sim_cataract_glsl`（.frag の 32bit ハッシュを忠実ミラー）で比較し **PSNR 19.6dB（<30、乖離をテストで固定）**。#99 と同様に 32bit spatial hash へ統一すれば等価化できるが、本 Issue では調査記録に留め別 Issue 化を推奨（昇格用の assert を `shader_equiv_cataract_noise_hash_diverges` に明記）。
+  - **glaucoma 弧状暗点（GLSL 移植漏れ・別 Issue 必須）**: `glaucoma.frag` は **Vignette モードしか実装していない**。極座標 Bjerrum 弧状暗点（`ArcuateSuperior`/`ArcuateInferior`/`Biarcuate`）のマスクも、モード選択用 uniform も `.frag` に一切存在しない。CPU 弧状モードの等価テストは作れないため、非クラッシュ・上下マスク非対称・strength=0 恒等のみ検証。**提案: glaucoma.frag に極座標弧状暗点モードを追加する別 Issue を起票**。
+  - テスト総数: shader_equivalence は 118 件 pass（本 Issue で +24 件）。`.frag` の修正は行っていない（乖離が大きく単一パス GPU で再現困難なため、各乖離を別 Issue 化推奨）。
+
 ### Fixed
 
 - **fix: kako-jun/sensus#99 `metamorphopsia` / `dry_eye` のノイズモデルを CPU と統一**:
