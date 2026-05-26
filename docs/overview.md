@@ -108,7 +108,8 @@ let result = Pipeline::new()
   disk blur (`radius = strength × 1.5 px`), and a peripheral vignette using
   `smoothstep(0.3, 1.2, d)` where `d = uv·uv` with `uv ∈ [-1, 1]²`. Both CPU
   and GLSL implementations operate in linear sRGB space and apply identical
-  vignette math, verified by PSNR ≥ 30 dB equivalence test.
+  contrast, vignette, and disk-blur math (the GLSL approximates the CPU pillbox
+  with a 16-tap Fibonacci lattice), verified by PSNR ≥ 30 dB equivalence test.
 - **`dry_eye`**: Applies random per-tile disk blur (tile = 32×32 px) in linear
   sRGB space. Each tile's blur radius is `noise × strength × 3 px`, where
   `noise ∈ [0,1]` comes from a fixed-seed (42) 32-bit integer spatial hash of
