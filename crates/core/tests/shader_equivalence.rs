@@ -908,6 +908,187 @@ fn shader_equiv_eye_strain_strength_0_5_psnr() {
     assert!(db >= 30.0, "eye_strain strength=0.5: PSNR {db:.1} dB < 30 dB");
 }
 
+/// 縦半分が白・縦半分が黒のグラデーション無しのコントラストエッジ画像。
+/// contrast 圧縮の効果（明暗差が縮む）を数値で測るための固定フィクスチャ。
+fn eye_strain_bw_split(w: u32, h: u32) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let v = if x < w / 2 { 255u8 } else { 0u8 };
+            img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// 一様な中間グレー（180）画像。vignette（周辺減光）の効果を中心 vs 角で測るための
+/// 固定フィクスチャ（contrast 圧縮は一様値には影響しないため vignette を分離できる）。
+fn eye_strain_solid_gray(w: u32, h: u32) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            img.put_pixel(x, y, image::Rgba([180, 180, 180, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// 128×128 のグラデーション画像（大画像での近似破綻チェック用）。
+fn gradient_128() -> DynamicImage {
+    let mut img = RgbaImage::new(128, 128);
+    for y in 0..128u32 {
+        for x in 0..128u32 {
+            let v = (x * 2) as u8;
+            img.put_pixel(x, y, image::Rgba([v, v / 2, 255u8.wrapping_sub(v), 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+#[test]
+fn shader_equiv_eye_strain_strength_0_0_is_identity() {
+    // strength=0.0: CPU は早期 return で入力をそのまま byte-exact に返す（契約）。
+    // GLSL ミラーは radius_px=0（< 0.5）で center 経路のみ。さらに strength=0 で
+    // contrast 係数=1・vignette=1 となり processedAt の式は入力そのものを返す（効果オフ）。
+    //
+    // ただし GLSL ミラーは center texel を u=(x+0.5)/w の nearest サンプリングで読むため
+    // ハードエッジ画像では半テクセルのサンプリングずれが出る。効果（contrast/vignette）が
+    // 実際にゼロであることだけを検証したいので、滑らかなグラデーションで PSNR を見る。
+    // ずれがサンプリング由来のみ（効果ゼロ）であれば PSNR は十分高い。
+    let img = gradient_32();
+    let (w, h) = img.to_rgba8().dimensions();
+    let uni = eye_strain_uniforms(0.0, w, h);
+    assert_eq!(uni.radius_px, 0.0, "strength=0.0 で radius_px は 0 のはず");
+    let input = img.to_rgba8();
+    // CPU は byte-exact identity であること（早期 return の契約）。
+    let cpu_out = eye_strain(img.clone(), 0.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu_out, input,
+        "eye_strain strength=0.0: CPU 出力が入力と一致しない（identity 違反）"
+    );
+    // GLSL は contrast/vignette がゼロ（効果オフ）であることを高 PSNR で確認する。
+    // 差はサンプリングずれのみで、効果が乗っていれば PSNR は大きく落ちる。
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
+    let db = psnr(&input, &glsl_out);
+    assert!(
+        db >= 30.0,
+        "eye_strain strength=0.0: GLSL に効果が乗っている疑い（PSNR {db:.1} dB < 30 dB）"
+    );
+}
+
+#[test]
+fn shader_equiv_eye_strain_radius_below_min_no_blur() {
+    // radius < 0.5（MIN_BLUR_RADIUS_PX）境界: blur 段が無効化され contrast+vignette
+    // のみになること。strength=0.3 → radius = 0.3*1.5 = 0.45px < 0.5（画像サイズ非依存）。
+    // GLSL ミラーが「16tap 平均（blur 有）」ではなく「center 経路（blur 無）」を通ること
+    // を、radius を 0 に強制した参照出力と byte-exact 一致で証明する。
+    let img = make_test_image();
+    let (w, h) = img.to_rgba8().dimensions();
+    let uni = eye_strain_uniforms(0.3, w, h);
+    assert!(
+        uni.radius_px < 0.5,
+        "前提: radius_px {} は 0.5 未満であるべき",
+        uni.radius_px
+    );
+    // blur 段を強制的に無効化した参照（radius_px=0 → center 経路確定）。
+    let no_blur_ref = simulate_eye_strain_glsl(&img, uni.strength, 0.0, uni.texel_size);
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
+    assert_eq!(
+        glsl_out, no_blur_ref,
+        "radius<0.5: blur 段が無効化されず 16tap 平均が走っている（境界判定が壊れている）"
+    );
+    // CPU も同じ境界で blur をスキップし、両者が PSNR ≥ 30 dB で一致すること。
+    let cpu_out = eye_strain(img.clone(), 0.3).unwrap().to_rgba8();
+    let db = psnr(&cpu_out, &glsl_out);
+    assert!(db >= 30.0, "eye_strain radius<0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_eye_strain_large_image_128_psnr() {
+    // 大画像 128x128 + strength=1.0（radius=1.5px）。16tap lattice 近似が大画像でも
+    // 破綻せず PSNR 下限 30 dB に余裕を持って収まること。
+    let img = gradient_128();
+    let uni = eye_strain_uniforms(1.0, 128, 128);
+    let cpu_out = eye_strain(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
+    let db = psnr(&cpu_out, &glsl_out);
+    assert!(
+        db >= 30.0,
+        "eye_strain 128x128 strength=1.0: PSNR {db:.1} dB < 30 dB（近似破綻の疑い）"
+    );
+}
+
+#[test]
+fn shader_equiv_eye_strain_non_square_64x32_psnr() {
+    // 非正方形（width=64, height=32）。texel_size の縦横差（1/64 vs 1/32）の下で
+    // blur が等方（ピクセル等方）を保ち、CPU の厳密 pillbox と一致すること。
+    let img = gradient_64x32();
+    let uni = eye_strain_uniforms(1.0, 64, 32);
+    let cpu_out = eye_strain(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
+    let db = psnr(&cpu_out, &glsl_out);
+    assert!(
+        db >= 30.0,
+        "eye_strain non-square 64x32: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_eye_strain_non_square_32x64_psnr() {
+    // 非正方形の縦長版（width=32, height=64）。64x32 と対称に texel_size の縦横差が
+    // 逆転しても blur 等方性が保たれ CPU と一致すること。
+    let img = gradient_32x64();
+    let uni = eye_strain_uniforms(1.0, 32, 64);
+    let cpu_out = eye_strain(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
+    let db = psnr(&cpu_out, &glsl_out);
+    assert!(
+        db >= 30.0,
+        "eye_strain non-square 32x64: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_eye_strain_compresses_contrast_and_vignettes() {
+    // 効果アサート（identity 偽陽性の排除）: 強度 1.0 で
+    //   (a) contrast 圧縮 — 明暗エッジ画像で白側が暗く・黒側が明るくなり明暗差が縮む
+    //   (b) vignette — 一様グレーで角が中心より暗くなる
+    // が GLSL ミラー上で実際に起きることを数値でアサートする。
+    let w = 64u32;
+    let h = 64u32;
+    let uni = eye_strain_uniforms(1.0, w, h);
+
+    // (a) contrast 圧縮: 左半分白(255)・右半分黒(0)。中央列付近を避け各領域内部で測る。
+    let bw = eye_strain_bw_split(w, h);
+    let bw_out = simulate_eye_strain_glsl(&bw, uni.strength, uni.radius_px, uni.texel_size);
+    let white_out = bw_out.get_pixel(w / 4, h / 2)[0]; // 元 255
+    let black_out = bw_out.get_pixel(3 * w / 4, h / 2)[0]; // 元 0
+    assert!(
+        white_out < 255,
+        "contrast 圧縮: 白側が暗くなっていない（white_out={white_out}）"
+    );
+    assert!(
+        black_out > 0,
+        "contrast 圧縮: 黒側が明るくなっていない（black_out={black_out}）"
+    );
+    let orig_range = 255i32 - 0;
+    let out_range = white_out as i32 - black_out as i32;
+    assert!(
+        out_range < orig_range,
+        "contrast 圧縮: 明暗差が縮んでいない（out_range={out_range} >= orig_range={orig_range}）"
+    );
+
+    // (b) vignette: 一様グレー(180)。中心は減光なし、角は smoothstep で減光される。
+    let gray = eye_strain_solid_gray(w, h);
+    let gray_out = simulate_eye_strain_glsl(&gray, uni.strength, uni.radius_px, uni.texel_size);
+    let center = gray_out.get_pixel(w / 2, h / 2)[0];
+    let corner = gray_out.get_pixel(1, 1)[0];
+    assert!(
+        corner < center,
+        "vignette: 角が中心より減光されていない（center={center} corner={corner}）"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // strength=0.0 → 変化なし（全フィルタ共通の境界値テスト）
 // ---------------------------------------------------------------------------
