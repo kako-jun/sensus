@@ -2368,3 +2368,193 @@ fn dry_eye_uniforms_texel_size_matches_resolution() {
     assert!((uni.texel_size[0] - 1.0 / 64.0).abs() < 1e-7);
     assert!((uni.texel_size[1] - 1.0 / 32.0).abs() < 1e-7);
 }
+
+// ---------------------------------------------------------------------------
+// #99 追加: 端差・境界・効果・seed のピンポイント検証
+// （上の strength 0/0.5/1.0・非正方形・identity と重複しない観点のみ）
+// ---------------------------------------------------------------------------
+
+/// 単色画像（任意サイズ）。effect/passthrough 判定用。
+fn solid_rgba(w: u32, h: u32, color: [u8; 4]) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    for p in img.pixels_mut() {
+        *p = image::Rgba(color);
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// 任意サイズの linear グラデーション（128×128 や 32 非倍数サイズ用）。
+fn gradient_wh(w: u32, h: u32) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let v = ((x * 256 / w) as u8).wrapping_add((y * 64 / h) as u8);
+            img.put_pixel(x, y, image::Rgba([v, v.wrapping_mul(3), 255 - v, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// 1ピクセルあたりの RGB 最大絶対差。効果量・境界の上限/下限確認に使う。
+fn max_abs_rgb_diff(a: &RgbaImage, b: &RgbaImage) -> u8 {
+    assert_eq!(a.dimensions(), b.dimensions());
+    let mut m = 0u8;
+    for (pa, pb) in a.pixels().zip(b.pixels()) {
+        for c in 0..3 {
+            m = m.max((pa[c] as i32 - pb[c] as i32).unsigned_abs() as u8);
+        }
+    }
+    m
+}
+
+#[test]
+fn shader_equiv_metamorphopsia_edge_clamp_diff_is_bounded() {
+    // 実装担当が「最終セルで CPU は頂点を grid_w-1 に clamp、GLSL は未 clamp」と報告した
+    // 端差を、画像端（上下端の行・左右端の列）の画素差分上限として検証する。
+    //
+    // 実態: CPU の grid 頂点数は ceil(dim/cell)+2 と +2 余分にパディングしてあり、
+    // 実使用される最大頂点インデックス gx1 = floor((dim-1)/cell)+1 は常に grid_w-1
+    // 未満なので get_grid の clamp は発火しない。したがって CPU と GLSL（未 clamp）の
+    // 変位場は端でも一致し、差は f32 丸めのみに収まる（本ケースの実測は端 RGB 差 0）。
+    // 上限を固定して、将来 clamp が実害化したら検知できるようにする。
+    let img = gradient_32().to_rgba8();
+    let uni = metamorphopsia_uniforms(1.0, 4.0, 42, 32, 32);
+    let cpu = metamorphopsia(DynamicImage::ImageRgba8(img.clone()), 1.0, 4.0, 42)
+        .unwrap()
+        .to_rgba8();
+    let glsl = sim_metamorphopsia_glsl(&img, uni.strength, uni.freq, uni.seed);
+    let (w, h) = img.dimensions();
+
+    let mut edge_max = 0u8;
+    for y in 0..h {
+        for x in 0..w {
+            if x == 0 || x == w - 1 || y == 0 || y == h - 1 {
+                let pc = cpu.get_pixel(x, y);
+                let pg = glsl.get_pixel(x, y);
+                for c in 0..3 {
+                    edge_max =
+                        edge_max.max((pc[c] as i32 - pg[c] as i32).unsigned_abs() as u8);
+                }
+            }
+        }
+    }
+    // f32 丸めのみなら端でも数階調以内。clamp が実害化すると変位 1px=多階調ずれる。
+    assert!(
+        edge_max <= 4,
+        "metamorphopsia の端 clamp 差が大きすぎる: 端画素 RGB 最大差 {edge_max} (>4)。\
+         CPU の頂点 clamp が GLSL 未 clamp と乖離している疑い"
+    );
+}
+
+#[test]
+fn shader_equiv_metamorphopsia_large_128_psnr() {
+    // 128×128（多数セル）でも近似が破綻しないこと。
+    let img = gradient_wh(128, 128);
+    let uni = metamorphopsia_uniforms(1.0, 12.0, 99, 128, 128);
+    let cpu = metamorphopsia(img.clone(), 1.0, 12.0, 99).unwrap().to_rgba8();
+    let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
+    let db = psnr(&cpu, &glsl);
+    assert!(db >= 30.0, "metamorphopsia 128x128: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn metamorphopsia_different_seed_changes_displacement() {
+    // 異なる seed が異なる変位場を生む（seed が実際にハッシュに効いている）こと。
+    let img = gradient_32();
+    let a = metamorphopsia(img.clone(), 1.0, 4.0, 1).unwrap().to_rgba8();
+    let b = metamorphopsia(img.clone(), 1.0, 4.0, 2).unwrap().to_rgba8();
+    assert_ne!(
+        a.as_raw(),
+        b.as_raw(),
+        "metamorphopsia: seed=1 と seed=2 の出力が同一（seed がノイズに効いていない）"
+    );
+}
+
+#[test]
+fn metamorphopsia_strength_1_changes_image() {
+    // strength=1.0 で出力が入力と十分に異なる（identity 偽陽性の排除）。
+    // 単色だと変位しても画素が変わらないためグラデーションを使う。
+    let img = gradient_32();
+    let input = img.to_rgba8();
+    let out = metamorphopsia(img.clone(), 1.0, 4.0, 42).unwrap().to_rgba8();
+    let d = max_abs_rgb_diff(&out, &input);
+    assert!(
+        d >= 8,
+        "metamorphopsia strength=1.0 が入力をほぼ変えていない (最大 RGB 差 {d} < 8)"
+    );
+}
+
+#[test]
+fn shader_equiv_dry_eye_non_multiple_of_32_psnr() {
+    // 幅・高さとも 32 の倍数でないサイズ（50×50, 33×17）で半端タイル列・行が一致すること。
+    for (w, h) in [(50u32, 50u32), (33u32, 17u32)] {
+        let img = gradient_wh(w, h);
+        let cpu = dry_eye(img.clone(), 1.0).unwrap().to_rgba8();
+        let glsl = sim_dry_eye_glsl(&img.to_rgba8(), 1.0);
+        let db = psnr(&cpu, &glsl);
+        assert!(db >= 30.0, "dry_eye {w}x{h}: PSNR {db:.1} dB < 30 dB");
+    }
+}
+
+#[test]
+fn shader_equiv_dry_eye_large_128_psnr() {
+    // 128×128（4×4=16 タイル）でも近似が破綻しないこと。
+    let img = gradient_wh(128, 128);
+    let cpu = dry_eye(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl = sim_dry_eye_glsl(&img.to_rgba8(), 1.0);
+    let db = psnr(&cpu, &glsl);
+    assert!(db >= 30.0, "dry_eye 128x128: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn dry_eye_tile_passthrough_boundary_straddles_min_radius() {
+    // タイルノイズ * strength * 3px が MIN_BLUR_RADIUS_PX(0.5) を跨ぐ境界の検証。
+    // 8x8 タイルぶんの tile_hash を CPU と同一式で評価し、passthrough(<0.5px) と
+    // blur(>=0.5px) の両タイルが共存することを確認する（radius 係数 *3・閾値 0.5 が
+    // 実際に境界として機能している）。
+    let mut saw_passthrough = false;
+    let mut saw_blur = false;
+    for ty in 0..8u32 {
+        for tx in 0..8u32 {
+            let r = dry_eye_tile_hash(tx, ty) * 1.0 * 3.0;
+            if r < 0.5 {
+                saw_passthrough = true;
+            } else {
+                saw_blur = true;
+            }
+            assert!((0.0..=3.0).contains(&r), "blur 半径が想定範囲外: {r}");
+        }
+    }
+    assert!(
+        saw_passthrough && saw_blur,
+        "8x8 タイル内に passthrough と blur の両方が現れるべき \
+         (passthrough={saw_passthrough}, blur={saw_blur})"
+    );
+}
+
+#[test]
+fn dry_eye_strength_1_changes_image() {
+    // strength=1.0 で出力が入力と十分に異なる（identity 偽陽性の排除）。
+    // 単色は blur 不変なのでグラデーションを使う。
+    let img = gradient_wh(64, 64);
+    let input = img.to_rgba8();
+    let out = dry_eye(img.clone(), 1.0).unwrap().to_rgba8();
+    let d = max_abs_rgb_diff(&out, &input);
+    assert!(
+        d >= 4,
+        "dry_eye strength=1.0 が入力をほぼ変えていない (最大 RGB 差 {d} < 4)"
+    );
+}
+
+#[test]
+fn dry_eye_solid_color_is_invariant_under_blur() {
+    // 単色画像は disk blur で値が変わらない（境界 clamp 込みで平均=元色）。
+    // dry_eye の disk blur が「平均」として正しく、色を破壊しないことを保証する。
+    let input = solid_rgba(64, 64, [123, 200, 77, 255]);
+    let out = dry_eye(input.clone(), 1.0).unwrap().to_rgba8();
+    let d = max_abs_rgb_diff(&out, &input.to_rgba8());
+    assert!(
+        d <= 1,
+        "dry_eye が単色を変化させた (最大 RGB 差 {d} > 1)。disk blur の平均が不正"
+    );
+}
