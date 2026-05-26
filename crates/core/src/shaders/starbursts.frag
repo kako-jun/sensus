@@ -12,8 +12,12 @@ precision highp float;
 //   よって出力画素から各レイ方向の逆方向へ t=1..uRayLengthPx だけ遡って
 //   元画像をサンプリングし、その位置が明部なら CPU と同一の重み
 //   src_intensity * (1 - t/L) * uStrength * rayColor を加算する。
-// これは CPU の scatter が訪れる (source, t, ray) タプル集合と完全に一致するため、
-// 加算順序に由来する f32 丸め差を除いて CPU と数値的に等価になる。
+// これは CPU の scatter が訪れる (source, t, ray) タプル集合と完全に一致する。
+// 座標の量子化（round(t*cos), round(t*sin)）は roundHalfAwayFromZero で Rust
+// f32::round と全 f32 値で bit 一致するため、訪れる画素集合は CPU と同一になる。
+// dispersion=1（虹色）のように各 dest 画素への寄与が高々 1 本のときは bit 完全一致
+// （PSNR=∞）。残る唯一の乖離源は dispersion=0 等で複数寄与が重なるときの加算順序に
+// 由来する f32 丸め差で、PSNR は極めて高い。
 //
 // uDispersion=0.0 → 白い光芒、uDispersion=1.0 → 虹色（色相=レイ方向角）の光芒。
 
@@ -40,10 +44,19 @@ float linearToSrgb(float c) {
     return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
-// Rust f32::round（0 から離れる方向に半丸め）を GLSL で再現する。
-// GLSL の floor(x+0.5) は +∞ 方向への半丸めで、負値の .5 で Rust と乖離するため使わない。
+// Rust f32::round（0 から離れる方向に半丸め）を GLSL で全 f32 値で bit 一致再現する。
+// floor(abs(x)+0.5) 方式は abs(x)+0.5 の加算で精度を失い、x が 0.5 の直下（例
+// 0.49999997）のとき和が f32 丸めで 1.0 に切り上がり floor=1 を返してしまう
+// （Rust f32::round(0.49999997)=0 と乖離する）。加算で精度を失わない trunc/fract
+// ベースで実装する。f = x - trunc(x) は Sterbenz 補題により厳密で、x と同符号。
+// |f| >= 0.5 のとき 0 から離れる方向へ 1 だけ進む。負値の .5（-0.5→-1）も正しい。
 float roundHalfAwayFromZero(float x) {
-    return sign(x) * floor(abs(x) + 0.5);
+    float t = trunc(x);
+    float f = x - t;          // 小数部（x と同符号、Sterbenz により厳密）
+    if (abs(f) >= 0.5) {
+        return t + sign(x);
+    }
+    return t;
 }
 
 // HSL(H, S=1, L=0.5) → linear sRGB の虹色変換（CPU hsl_rainbow_to_linear と同一）
@@ -94,8 +107,8 @@ void main() {
     float py = floor(vTexCoord.y * h);
 
     float invDenom = 1.0 / max(1.0 - uThreshold, 1e-6);
-    float numRays = floor(uNumRays + 0.5);
-    float rayLen = floor(uRayLengthPx + 0.5);
+    float numRays = roundHalfAwayFromZero(uNumRays);
+    float rayLen = roundHalfAwayFromZero(uRayLengthPx);
 
     vec3 rayAccum = vec3(0.0);
 

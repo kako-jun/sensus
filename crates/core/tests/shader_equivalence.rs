@@ -3266,11 +3266,15 @@ fn shader_equiv_bppv_rotation_strength_0_0_is_identity() {
 //   src_intensity * (1 - t/L) * strength * rayColor を加算する。
 // scatter が訪れる (source, t, ray) タプル集合と gather が訪れる集合は完全一致する
 // （sx = px - round(t·cosθ), sy = py - round(t·sinθ) は scatter の dest 計算の逆）。
-// 唯一の乖離源は additive 合成の加算順序（scatter は source 走査順、gather は ray→t 順）
-// に由来する f32 丸めのみで、PSNR は極めて高い。
+// 座標の量子化 round は CPU・.frag・sim とも Rust f32::round と全 f32 値で bit 一致する
+// ため、訪れる画素集合は完全に同一。dispersion=1（虹色）のように各 dest 画素への寄与が
+// 高々 1 本のときは CPU↔GLSL が bit 完全一致（PSNR=∞）になる。残る唯一の乖離源は
+// dispersion=0 等で複数寄与が重なるときの additive 合成の加算順序（scatter は source
+// 走査順、gather は ray→t 順）に由来する f32 丸めのみで、PSNR は極めて高い。
 //
-// 重要: Rust の `f32::round` は 0 から離れる方向の半丸め。GLSL の floor(x+0.5) は +∞
-// 方向の半丸めで負値の .5 で乖離するため、.frag は roundHalfAwayFromZero で揃える。
+// 重要: Rust の `f32::round` は 0 から離れる方向の半丸め。GLSL の floor(abs(x)+0.5) は
+// 加算で精度を失い 0.5 直下（0.49999997）で 1 に切り上がり乖離するため、.frag は
+// trunc/fract ベースの roundHalfAwayFromZero で f32::round と全 f32 値 bit 一致させる。
 // sim_starbursts_glsl は starbursts.frag の gather ループを忠実にミラーする。
 // ---------------------------------------------------------------------------
 
@@ -3295,9 +3299,12 @@ fn starbursts_hsl_rainbow(hue_deg: f32) -> [f32; 3] {
     [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)]
 }
 
-/// Rust `f32::round`（0 から離れる方向の半丸め）。GLSL `roundHalfAwayFromZero` と同一。
+/// Rust `f32::round`（0 から離れる方向の半丸め）。starbursts.frag `roundHalfAwayFromZero`
+/// （trunc/fract ベース）と全 f32 値で bit 一致する。CPU vision::starbursts も `f32::round`
+/// を使うため、ここでは標準の `f32::round` をそのまま使う。GLSL 側の trunc 実装が
+/// `f32::round` と全ケース一致することは別途網羅検証済み（0.49999997→0, 0.5→1, -0.5→-1 等）。
 fn round_half_away_from_zero(x: f32) -> f32 {
-    x.signum() * (x.abs() + 0.5).floor()
+    x.round()
 }
 
 /// starbursts.frag（gather 型）を Rust で忠実にミラーする。
@@ -3467,14 +3474,23 @@ fn shader_equiv_starbursts_white_strength_1_0() {
 
 #[test]
 fn shader_equiv_starbursts_rainbow_strength_1_0() {
-    // dispersion=1（虹色）。レイ方向ごとの色相も CPU と GLSL で一致する。
+    // dispersion=1（虹色）。単一明点 + 各レイの色相が異なるため、各 dest 画素への寄与は
+    // 高々 1 本に限られる（加算の重なりが無い）。座標 round が CPU・sim とも f32::round と
+    // bit 一致するので、CPU scatter と GLSL gather は bit 完全一致する（PSNR=∞）。
     let img = bright_point_on_dark(48, 48);
     let cpu = starbursts(img.clone(), 1.0, 12, 0.4, 0.3, 1.0).unwrap().to_rgba8();
     let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 1.0, 12, 0.4);
-    let db = psnr(&cpu, &gpu);
-    assert!(
-        db >= 40.0,
-        "starbursts 虹色 strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 40 dB（色相/gather 不一致）"
+    let diff = cpu
+        .as_raw()
+        .iter()
+        .zip(gpu.as_raw())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert_eq!(
+        diff,
+        0,
+        "starbursts 虹色 strength=1.0: CPU↔GLSL が bit 一致しない（{diff} 画素差, PSNR {:.1} dB）",
+        psnr(&cpu, &gpu)
     );
 }
 
