@@ -20,9 +20,10 @@ use sensus_core::shaders::{
     tunnel_vision_uniforms, vestibular_neuritis_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, deuteranopia, dry_eye, eye_strain, glaucoma, GlaucomaMode,
-    hemianopia, hyperopia, macular_degeneration, metamorphopsia, myopia, photophobia, presbyopia,
-    protanopia, tetrachromacy, tritanopia, tunnel_vision, vestibular_neuritis,
+    achromatopsia, astigmatism, bppv_rotation, deuteranopia, diplopia, dry_eye, eye_strain,
+    glaucoma, GlaucomaMode, hemianopia, hyperopia, macular_degeneration, metamorphopsia, myopia,
+    nyctalopia, nystagmus, photophobia, presbyopia, protanopia, starbursts, tetrachromacy,
+    tritanopia, tunnel_vision, vertigo, vestibular_neuritis,
 };
 
 // ---------------------------------------------------------------------------
@@ -2556,5 +2557,729 @@ fn dry_eye_solid_color_is_invariant_under_blur() {
     assert!(
         d <= 1,
         "dry_eye が単色を変化させた (最大 RGB 差 {d} > 1)。disk blur の平均が不正"
+    );
+}
+
+// ===========================================================================
+// #100 CPU↔GLSL 等価テスト皆無だったフィルタ群
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// nyctalopia（夜盲）— nyctalopia.frag は CPU 実装と式が 1:1 対応（暗化・脱色・Purkinje）
+// ---------------------------------------------------------------------------
+
+/// nyctalopia.frag を Rust で忠実ミラーする。
+/// CPU 実装 `vision::nyctalopia` と完全同一式（per-pixel、近傍参照なし）。
+fn sim_nyctalopia_glsl(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+
+            // photopic luminance（BT.709）/ scotopic luminance（Vos 1978）
+            let y_phot = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+            let y_scot = 0.0610 * rl + 0.3751 * gl + 0.6038 * bl;
+            let y_blend = y_phot + (y_scot - y_phot) * strength;
+
+            let dark_factor = 1.0 - strength * 0.7;
+            let desat = strength * 0.8;
+
+            let dr = rl + (y_blend - rl) * desat;
+            let dg = gl + (y_blend - gl) * desat;
+            let db = bl + (y_blend - bl) * desat;
+
+            // Purkinje shift
+            let pr = dr * (1.0 - strength * 0.2);
+            let pb = db * (1.0 + strength * 0.1);
+
+            let fr = (pr * dark_factor).clamp(0.0, 1.0);
+            let fg = (dg * dark_factor).clamp(0.0, 1.0);
+            let fb = (pb * dark_factor).clamp(0.0, 1.0);
+
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(fr) * 255.0).round() as u8,
+                    (linear_to_srgb(fg) * 255.0).round() as u8,
+                    (linear_to_srgb(fb) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_nyctalopia_strength_1_0() {
+    use sensus_core::shaders::nyctalopia_uniforms;
+    let img = color_chart_32();
+    let u = nyctalopia_uniforms(1.0);
+    let cpu = nyctalopia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu = sim_nyctalopia_glsl(&img.to_rgba8(), u.strength);
+    let e = max_channel_error(&cpu, &gpu);
+    assert!(e <= 2, "nyctalopia strength=1.0: max chan err {e} > 2");
+    // identity 偽陽性排除: strength=1.0 は入力を変える
+    assert!(
+        max_channel_error(&cpu, &img.to_rgba8()) >= 4,
+        "nyctalopia strength=1.0 が画像をほぼ変えていない"
+    );
+}
+
+#[test]
+fn shader_equiv_nyctalopia_strength_0_5() {
+    use sensus_core::shaders::nyctalopia_uniforms;
+    let img = gradient_32();
+    let u = nyctalopia_uniforms(0.5);
+    let cpu = nyctalopia(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu = sim_nyctalopia_glsl(&img.to_rgba8(), u.strength);
+    let e = max_channel_error(&cpu, &gpu);
+    assert!(e <= 2, "nyctalopia strength=0.5: max chan err {e} > 2");
+}
+
+#[test]
+fn shader_equiv_nyctalopia_strength_0_0_is_identity() {
+    let img = color_chart_32();
+    let cpu = nyctalopia(img.clone(), 0.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "nyctalopia strength=0.0 は恒等でなければならない"
+    );
+}
+
+#[test]
+fn shader_equiv_nyctalopia_non_square_64x32() {
+    use sensus_core::shaders::nyctalopia_uniforms;
+    let img = gradient_64x32();
+    let u = nyctalopia_uniforms(0.8);
+    let cpu = nyctalopia(img.clone(), 0.8).unwrap().to_rgba8();
+    let gpu = sim_nyctalopia_glsl(&img.to_rgba8(), u.strength);
+    let e = max_channel_error(&cpu, &gpu);
+    assert!(e <= 2, "nyctalopia 64x32: max chan err {e} > 2");
+}
+
+// ---------------------------------------------------------------------------
+// diplopia（複視）— diplopia.frag は ghost を texel オフセット + UV clamp + 最近傍参照で
+// alpha blend する。CPU は整数ピクセルオフセット + 端 clamp で同じ blend を行う。
+// ---------------------------------------------------------------------------
+
+/// diplopia.frag を Rust で忠実ミラーする。
+/// `offset_x_texel` / `offset_y_texel` は .frag に渡す texel 単位オフセット。
+/// GPU の最近傍サンプリングを `vTexCoord = (x+0.5)/w` の floor で再現する。
+fn sim_diplopia_glsl(
+    img: &RgbaImage,
+    strength: f32,
+    offset_x_texel: f32,
+    offset_y_texel: f32,
+    ghost_strength: f32,
+) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let alpha = (ghost_strength.clamp(0.0, 1.0) * strength).clamp(0.0, 1.0);
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let orig = img.get_pixel(x, y);
+
+            // ghostUV = clamp(vTexCoord - offset, 0, 1)（.frag と同じ）
+            let u = (x as f32 + 0.5) / w as f32 - offset_x_texel;
+            let v = (y as f32 + 0.5) / h as f32 - offset_y_texel;
+            let uc = u.clamp(0.0, 1.0);
+            let vc = v.clamp(0.0, 1.0);
+            // GPU 最近傍: floor(uv * dim)（端 clamp）
+            let gx = ((uc * w as f32).floor() as i32).clamp(0, w as i32 - 1) as u32;
+            let gy = ((vc * h as f32).floor() as i32).clamp(0, h as i32 - 1) as u32;
+            let ghost = img.get_pixel(gx, gy);
+
+            let o = [
+                srgb_to_linear(orig[0] as f32 / 255.0),
+                srgb_to_linear(orig[1] as f32 / 255.0),
+                srgb_to_linear(orig[2] as f32 / 255.0),
+            ];
+            let g = [
+                srgb_to_linear(ghost[0] as f32 / 255.0),
+                srgb_to_linear(ghost[1] as f32 / 255.0),
+                srgb_to_linear(ghost[2] as f32 / 255.0),
+            ];
+            let blended = [
+                o[0] * (1.0 - alpha) + g[0] * alpha,
+                o[1] * (1.0 - alpha) + g[1] * alpha,
+                o[2] * (1.0 - alpha) + g[2] * alpha,
+            ];
+
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(blended[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blended[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blended[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    orig[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// diplopia の CPU 内部と同じ整数ピクセルオフセットを計算し、
+/// それを texel 単位に変換して uniform 化する（CPU と GLSL に同じ ghost 変位を渡す）。
+fn diplopia_test_uniforms(
+    img: &RgbaImage,
+    strength: f32,
+    offset_x: f32,
+    offset_y: f32,
+    ghost_strength: f32,
+) -> sensus_core::shaders::DiplopiaUniforms {
+    use sensus_core::shaders::diplopia_uniforms;
+    let (w, h) = img.dimensions();
+    let min_dim = w.min(h) as f32;
+    // CPU と同じ整数ピクセル変位（round）
+    let dx_px = (offset_x * min_dim).round();
+    let dy_px = (offset_y * min_dim).round();
+    diplopia_uniforms(strength, dx_px, dy_px, ghost_strength, w, h)
+}
+
+#[test]
+fn shader_equiv_diplopia_strength_1_0_psnr() {
+    let img = color_chart_32();
+    let input = img.to_rgba8();
+    let u = diplopia_test_uniforms(&input, 1.0, 0.1, 0.05, 0.6);
+    let cpu = diplopia(img.clone(), 1.0, 0.1, 0.05, 0.6).unwrap().to_rgba8();
+    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 40.0, "diplopia strength=1.0: PSNR {db:.1} dB < 40 dB");
+    // identity 偽陽性排除
+    assert!(
+        psnr(&cpu, &input) < 40.0,
+        "diplopia strength=1.0 が画像をほぼ変えていない"
+    );
+}
+
+#[test]
+fn shader_equiv_diplopia_strength_0_5_psnr() {
+    let img = gradient_32();
+    let input = img.to_rgba8();
+    let u = diplopia_test_uniforms(&input, 0.5, 0.08, 0.0, 0.7);
+    let cpu = diplopia(img.clone(), 0.5, 0.08, 0.0, 0.7).unwrap().to_rgba8();
+    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 40.0, "diplopia strength=0.5: PSNR {db:.1} dB < 40 dB");
+}
+
+#[test]
+fn shader_equiv_diplopia_strength_0_0_is_identity() {
+    let img = color_chart_32();
+    let cpu = diplopia(img.clone(), 0.0, 0.1, 0.05, 0.6).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "diplopia strength=0.0 は恒等でなければならない"
+    );
+}
+
+#[test]
+fn shader_equiv_diplopia_non_square_64x32_psnr() {
+    let img = gradient_64x32();
+    let input = img.to_rgba8();
+    let u = diplopia_test_uniforms(&input, 0.8, 0.1, 0.1, 0.5);
+    let cpu = diplopia(img.clone(), 0.8, 0.1, 0.1, 0.5).unwrap().to_rgba8();
+    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 38.0, "diplopia 64x32: PSNR {db:.1} dB < 38 dB");
+}
+
+#[test]
+fn shader_equiv_diplopia_non_square_32x64_psnr() {
+    let img = gradient_32x64();
+    let input = img.to_rgba8();
+    let u = diplopia_test_uniforms(&input, 0.8, 0.1, 0.1, 0.5);
+    let cpu = diplopia(img.clone(), 0.8, 0.1, 0.1, 0.5).unwrap().to_rgba8();
+    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 38.0, "diplopia 32x64: PSNR {db:.1} dB < 38 dB");
+}
+
+// ---------------------------------------------------------------------------
+// nystagmus（眼振）— nystagmus.frag は astigmatism.frag と同一構造の 16-tap 1D
+// directional blur（uniform 名のみ違い、+90° しない）。よって sim_astigmatism で
+// .frag を忠実ミラーできる（axis_deg = direction_deg をそのまま渡す）。
+//
+// 既知の乖離（#100 で判明、別 Issue 候補）:
+//   CPU は ellipse_blur（filled-ellipse box、短軸 = MIN_BLUR_RADIUS_PX=0.5px）、
+//   GLSL は ±radius_px を 16 tap でサンプルする直線ブラー。両者は同じ 1D motion
+//   blur を別カーネルで量子化しており、滑らかな gradient では PSNR ≥ 30dB で一致
+//   するが、鋭いエッジ（color_chart 等の実コンテンツ）では ~20dB まで乖離する。
+//   特に radius_px < 1.0px では CPU の楕円が原点のみに退化して blur がほぼ無く
+//   なる一方、16-tap 直線は常にエッジを広げるため不一致が大きい。
+//   ※この乖離は astigmatism も共有する（astigmatism は radius<0.5px の passthrough
+//   領域でしかテストしていないため顕在化していない）。
+//   滑らかコンテンツでの等価を担保し、エッジ乖離は別 Issue で扱う。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shader_equiv_nystagmus_strength_1_0_psnr() {
+    use sensus_core::shaders::nystagmus_uniforms;
+    // 滑らかな gradient で等価を取る（エッジ乖離はコメント参照、別 Issue 候補）。
+    let img = gradient_32();
+    let amplitude = 0.1; // radius = 0.1 * 1.0 * 32 = 3.2px（実ブラー）
+    let dir = 0.0;
+    let u = nystagmus_uniforms(1.0, amplitude, dir, 32);
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+    // nystagmus.frag は astigmatism.frag と同一: 軸をそのままぼかし方向に使う
+    let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "nystagmus strength=1.0 dir=0: PSNR {db:.1} dB < 30 dB");
+    // identity 偽陽性排除: radius 3.2px の blur は gradient を実際に変える
+    assert!(
+        max_abs_rgb_diff(&cpu, &img.to_rgba8()) >= 2,
+        "nystagmus strength=1.0 が gradient をまったく変えていない（blur 未適用）"
+    );
+}
+
+#[test]
+fn shader_equiv_nystagmus_direction_90_psnr() {
+    use sensus_core::shaders::nystagmus_uniforms;
+    let img = gradient_32();
+    let amplitude = 0.1;
+    let dir = 90.0;
+    let u = nystagmus_uniforms(1.0, amplitude, dir, 32);
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+    let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "nystagmus dir=90: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_nystagmus_strength_0_0_is_identity() {
+    let img = gradient_32();
+    let cpu = nystagmus(img.clone(), 0.0, 0.05, 0.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "nystagmus strength=0.0 は恒等でなければならない"
+    );
+}
+
+#[test]
+fn shader_equiv_nystagmus_radius_below_min_is_passthrough() {
+    use sensus_core::shaders::nystagmus_uniforms;
+    // amplitude*strength*min_dim < 0.5 → CPU/GLSL ともに passthrough
+    let img = gradient_32();
+    let amplitude = 0.001; // 0.001 * 1.0 * 32 = 0.032px < 0.5
+    let u = nystagmus_uniforms(1.0, amplitude, 0.0, 32);
+    assert!(u.radius_px < 0.5);
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, 0.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "nystagmus radius<0.5px は passthrough でなければならない"
+    );
+    let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
+    assert_eq!(gpu.as_raw(), img.to_rgba8().as_raw());
+}
+
+#[test]
+fn shader_equiv_nystagmus_non_square_64x32_psnr() {
+    use sensus_core::shaders::nystagmus_uniforms;
+    let img = gradient_64x32();
+    let amplitude = 0.08;
+    let dir = 0.0;
+    let u = nystagmus_uniforms(1.0, amplitude, dir, 32); // min_dim = 32
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+    let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 28.0, "nystagmus 64x32: PSNR {db:.1} dB < 28 dB");
+}
+
+// ---------------------------------------------------------------------------
+// vertigo / bppv_rotation（回転変位）
+//
+// .frag は UV 空間（0..1、正方化）で逆回転サンプリングする。CPU はピクセル空間で
+// 逆回転 + bilinear サンプリングする。**正方形画像では UV 回転 = ピクセル回転**
+// （aspect=1）なので等価。GPU の texture() は bilinear なので CPU の sample_bilinear
+// と対応する。
+//
+// 既知の乖離（非正方形・追加処理）:
+// - 非正方形画像では .frag の UV 空間回転が角度を歪ませ、CPU のピクセル空間回転と
+//   一致しない（別 Issue 候補。下記 report テストで明示）。
+// - vertigo CPU は回転後に周辺 disk blur（radius = s*0.015*min_dim）を加えるが
+//   .frag には無い。32px 正方形では s=1.0 でも 0.48px < 0.5px となり blur が
+//   スキップされるため、本テストはその領域で等価を取る。
+// ---------------------------------------------------------------------------
+
+/// UV 空間逆回転 + bilinear サンプリングを行う共通ヘルパ（vertigo.frag / bppv_rotation.frag）。
+/// `angle` はラジアン。clamp(srcUV, 0, 1) → bilinear。
+fn sim_uv_rotation_glsl(img: &RgbaImage, angle: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+
+    // .frag: texture(uTexture, clamp(srcUV,0,1)) — GPU bilinear をピクセル中心規約で再現
+    let sample = |fu: f32, fv: f32| -> [f32; 4] {
+        // UV → ピクセル中心座標: px = uv*dim - 0.5
+        let fx = fu * w as f32 - 0.5;
+        let fy = fv * h as f32 - 0.5;
+        let x0 = fx.floor() as i32;
+        let y0 = fy.floor() as i32;
+        let tx = fx - x0 as f32;
+        let ty = fy - y0 as f32;
+        let get = |x: i32, y: i32| -> [f32; 4] {
+            let xi = x.clamp(0, w as i32 - 1) as u32;
+            let yi = y.clamp(0, h as i32 - 1) as u32;
+            let p = img.get_pixel(xi, yi);
+            [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+        };
+        let p00 = get(x0, y0);
+        let p10 = get(x0 + 1, y0);
+        let p01 = get(x0, y0 + 1);
+        let p11 = get(x0 + 1, y0 + 1);
+        let mut out = [0f32; 4];
+        for i in 0..4 {
+            out[i] = p00[i] * (1.0 - tx) * (1.0 - ty)
+                + p10[i] * tx * (1.0 - ty)
+                + p01[i] * (1.0 - tx) * ty
+                + p11[i] * tx * ty;
+        }
+        out
+    };
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let uv_x = (x as f32 + 0.5) / w as f32 - 0.5;
+            let uv_y = (y as f32 + 0.5) / h as f32 - 0.5;
+            let src_u = (cos_a * uv_x + sin_a * uv_y) + 0.5;
+            let src_v = (-sin_a * uv_x + cos_a * uv_y) + 0.5;
+            let suc = src_u.clamp(0.0, 1.0);
+            let svc = src_v.clamp(0.0, 1.0);
+            let s = sample(suc, svc);
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    s[0].round().clamp(0.0, 255.0) as u8,
+                    s[1].round().clamp(0.0, 255.0) as u8,
+                    s[2].round().clamp(0.0, 255.0) as u8,
+                    s[3].round().clamp(0.0, 255.0) as u8,
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// vertigo の回転角（CPU/.frag 共通式）。
+fn vertigo_angle(strength: f32, time_t: f32) -> f32 {
+    const MAX_ANGLE_RAD: f32 = 0.2618;
+    strength * MAX_ANGLE_RAD * (2.0 * std::f32::consts::PI * 0.3 * time_t).sin()
+}
+
+/// bppv_rotation の回転角（CPU/.frag 共通式）。
+fn bppv_angle(strength: f32, time_t: f32) -> f32 {
+    const MAX_ANGLE_RAD: f32 = 0.3491;
+    let period = 2.0_f32;
+    let phase = time_t.rem_euclid(period) / period;
+    let fast = 0.3_f32;
+    let angle_norm = if phase < fast {
+        phase / fast
+    } else {
+        1.0 - (phase - fast) / (1.0 - fast)
+    };
+    strength * MAX_ANGLE_RAD * angle_norm
+}
+
+#[test]
+fn shader_equiv_vertigo_square_no_blur_psnr() {
+    // 32px 正方形 + s=1.0: blur_radius = 0.015*32 = 0.48 < 0.5 → CPU は blur 無し。
+    // UV 回転（.frag）= ピクセル回転（CPU）が成立する領域で等価を取る。
+    let img = gradient_32();
+    let time_t = 1.0; // sin(2π*0.3*1.0) ≈ sin(1.885) ≈ 0.951 → 非ゼロ角
+    let angle = vertigo_angle(1.0, time_t);
+    assert!(angle.abs() > 0.01, "回転角がほぼ 0（テスト設計ミス）");
+    let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "vertigo 32px square: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        psnr(&cpu, &img.to_rgba8()) < 45.0,
+        "vertigo が画像をほぼ変えていない（回転していない）"
+    );
+}
+
+#[test]
+fn shader_equiv_vertigo_strength_0_0_is_identity() {
+    let img = gradient_32();
+    let cpu = vertigo(img.clone(), 0.0, 1.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "vertigo strength=0.0 は恒等でなければならない"
+    );
+}
+
+#[test]
+fn shader_equiv_bppv_rotation_square_psnr() {
+    // bppv_rotation は CPU/.frag ともに blur 無し（回転のみ）。正方形で UV=ピクセル回転。
+    let img = gradient_32();
+    let time_t = 0.15; // 急速相の途中（angle_norm = 0.5）→ 非ゼロ角
+    let angle = bppv_angle(1.0, time_t);
+    assert!(angle.abs() > 0.01, "回転角がほぼ 0（テスト設計ミス）");
+    let cpu = bppv_rotation(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "bppv_rotation 32px square: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        psnr(&cpu, &img.to_rgba8()) < 45.0,
+        "bppv_rotation が画像をほぼ変えていない（回転していない）"
+    );
+}
+
+#[test]
+fn shader_equiv_bppv_rotation_strength_0_0_is_identity() {
+    let img = gradient_32();
+    let cpu = bppv_rotation(img.clone(), 0.0, 0.15).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "bppv_rotation strength=0.0 は恒等でなければならない"
+    );
+}
+
+
+// ---------------------------------------------------------------------------
+// starbursts（光芒）— CPU↔GLSL は別アルゴリズム（#100 で判明、別 Issue 候補）
+//
+// CPU（vision::starbursts）は明部画素を起点にレイマーチングして放射状の光芒を
+// 別レイヤーに加算する（num_rays 本のレイを ray_length_px だけ伸ばす）。
+// 一方 starbursts.frag は単一パス制約のため、各画素を「自身の輝度」に応じて
+// その場でブライトニングするだけで、レイの放射・伝播を一切行わない。
+// .frag のコメント自身が「フルレイマーチング版は CPU 実装を参照」と明記している。
+//
+// 両者は根本的に異なる効果（CPU=明部から伸びる光条、GLSL=明部のその場強調）
+// なので PSNR 等価は成立しない。仮の等価テストで誤魔化さず、
+// 「CPU 決定論」と「strength=0 恒等」のみ検証し、乖離は別 Issue 化する。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn starbursts_strength_0_0_is_identity() {
+    let img = color_chart_32();
+    let cpu = starbursts(img.clone(), 0.0, 8, 0.1, 0.5, 1.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "starbursts strength=0.0 は恒等でなければならない"
+    );
+}
+
+#[test]
+fn starbursts_is_deterministic() {
+    // 乱数を使わない決定論的フィルタ（seed なし）。同一入力で常に同一出力。
+    let img = bright_point_on_dark(32, 32);
+    let a = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0).unwrap().to_rgba8();
+    let b = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0).unwrap().to_rgba8();
+    assert_eq!(a.as_raw(), b.as_raw(), "starbursts は決定論的でなければならない");
+}
+
+#[test]
+fn starbursts_strength_1_emits_rays_from_bright_point() {
+    // 明部からレイが放射されること（CPU レイマーチングの効果確認）。
+    // .frag はこのレイ放射を再現しないため CPU↔GLSL 等価は別 Issue（コメント参照）。
+    let img = bright_point_on_dark(48, 48);
+    let input = img.to_rgba8();
+    let out = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0).unwrap().to_rgba8();
+    // 中心の明点から離れた画素が明るくなる（レイが伸びている）
+    let d = max_abs_rgb_diff(&out, &input);
+    assert!(d >= 4, "starbursts strength=1.0 がレイを放射していない (max RGB 差 {d})");
+}
+
+// ---------------------------------------------------------------------------
+// cataract（白内障）— 黄変マトリクスは一致するが、白濁ノイズの LCG ハッシュが
+// CPU(64bit) と GLSL(32bit 切り詰め) で異なる（#100 で判明、別 Issue 候補）
+//
+// CPU は格子頂点ごとに 64bit 演算でハッシュし `(lcg >> 32)/u32::MAX` を取る。
+// cataract.frag は同じ定数の下位 32bit（0x4c957f2d / 0xf767814f 等）で 32bit
+// 演算しており、生成されるノイズ値が頂点ごとに完全に異なる。よって strength>0
+// の白濁ノイズは一致しない（黄変成分のみ一致）。格子周波数 CELL_SIZE=32 と
+// smoothstep bilinear 補間の幾何は一致する。
+//
+// strength=0 等価は既存 shader_equiv_cataract_strength_zero_psnr で確認済み。
+// ここでは「黄変マトリクスのみ（noise を無視できる単色一様画像）での一致」を
+// 検証して、乖離がノイズ項に限定されることを切り分ける。
+// ---------------------------------------------------------------------------
+
+/// cataract.frag の黄変マトリクス + 白濁ノイズを Rust で忠実ミラーする。
+/// **注意**: noise の LCG は .frag の 32bit 版を再現する（CPU 64bit とは別物）。
+fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+
+    // .frag の gridNoise: 32bit LCG（CPU の 64bit とは異なる）
+    let grid_noise = |gx: f32, gy: f32| -> f32 {
+        let s = seed;
+        let hh = s
+            .wrapping_mul(0x9e3779b9)
+            .wrapping_add((gx as u32).wrapping_mul(0x517cc1b7))
+            .wrapping_add((gy as u32).wrapping_mul(0x6c62272e));
+        let lcg = hh.wrapping_mul(0x4c957f2d).wrapping_add(0xf767814f);
+        lcg as f32 / 0xFFFF_FFFFu32 as f32
+    };
+    let smooth_noise = |px: f32, py: f32| -> f32 {
+        const CELL: f32 = 32.0;
+        let cx = px / CELL;
+        let cy = py / CELL;
+        let cix = cx.floor();
+        let ciy = cy.floor();
+        let ctx = cx - cix;
+        let cty = cy - ciy;
+        let stx = ctx * ctx * (3.0 - 2.0 * ctx);
+        let sty = cty * cty * (3.0 - 2.0 * cty);
+        let v00 = grid_noise(cix, ciy);
+        let v10 = grid_noise(cix + 1.0, ciy);
+        let v01 = grid_noise(cix, ciy + 1.0);
+        let v11 = grid_noise(cix + 1.0, ciy + 1.0);
+        v00 * (1.0 - stx) * (1.0 - sty)
+            + v10 * stx * (1.0 - sty)
+            + v01 * (1.0 - stx) * sty
+            + v11 * stx * sty
+    };
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let r = srgb_to_linear(px[0] as f32 / 255.0);
+            let g = srgb_to_linear(px[1] as f32 / 255.0);
+            let b = srgb_to_linear(px[2] as f32 / 255.0);
+
+            let yr = (r * 1.00 + g * 0.05 + b * (-0.05)).clamp(0.0, 1.0);
+            let yg = (r * 0.02 + g * 1.00 + b * (-0.02)).clamp(0.0, 1.0);
+            let yb = (r * 0.00 + g * 0.00 + b * 0.85).clamp(0.0, 1.0);
+
+            let nr = r + (yr - r) * strength;
+            let ng = g + (yg - g) * strength;
+            let nb = b + (yb - b) * strength;
+
+            // pixelPos = vTexCoord * uResolution = (x+0.5, y+0.5)
+            let noise = smooth_noise(x as f32 + 0.5, y as f32 + 0.5);
+            const WHITE_BLEND_MAX: f32 = 0.4;
+            let white_blend = strength * noise * WHITE_BLEND_MAX;
+
+            let fr = (nr + (1.0 - nr) * white_blend).clamp(0.0, 1.0);
+            let fg = (ng + (1.0 - ng) * white_blend).clamp(0.0, 1.0);
+            let fb = (nb + (1.0 - nb) * white_blend).clamp(0.0, 1.0);
+
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(fr) * 255.0).round() as u8,
+                    (linear_to_srgb(fg) * 255.0).round() as u8,
+                    (linear_to_srgb(fb) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn finding_cataract_noise_hash_diverges() {
+    // 黄変 + 白濁ノイズ込みで CPU と GLSL を比較。CPU は 64bit LCG の高位ビット抽出、
+    // GLSL/sim は 32bit ハッシュ切り詰めでノイズ系列が別物。加えて格子サンプリング規約も
+    // 食い違う（CPU は整数ピクセル index px/CELL、.frag は (x+0.5)/CELL の 0.5px オフセット）。
+    // どちらの要因でも非単色画像では一致しないことを「明示的に」記録する。
+    // （仮の等価テストで誤魔化さず、乖離の存在自体をテストで固定する。）
+    use sensus_core::vision::cataract;
+    let img = gradient_32();
+    let cpu = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
+    let gpu = sim_cataract_glsl(&img.to_rgba8(), 1.0, 42);
+    let db = psnr(&cpu, &gpu);
+    // ノイズ項のハッシュ差により等価は成立しない（30dB に届かない）。
+    // この assert が将来「等価が成立する」状態（= ハッシュ統一）に変わったら
+    // テストを等価検証に昇格させること。
+    assert!(
+        db < 30.0,
+        "cataract: CPU↔GLSL が等価になった（PSNR {db:.1} dB ≥ 30）。\
+         ノイズハッシュが統一された可能性。本テストを等価検証へ昇格させよ"
+    );
+}
+
+#[test]
+fn cataract_yellowing_is_warm_shift_cpu() {
+    // CPU 単体の検証: 黄変マトリクスが暖色シフト（R/B 比が暖色側へ）を起こすこと。
+    // GLSL との一致は主張しない（白濁ノイズ項が CPU と GLSL で別系列のため、
+    // 黄変成分だけを切り分けて CPU↔GLSL 比較するのは noise を消せず不可）。
+    // CPU↔GLSL の乖離自体は finding_cataract_noise_hash_diverges で記録済み。
+    use sensus_core::vision::cataract;
+    // strength を小さく取り white_blend(=s*noise*0.4) の寄与を抑える。
+    let input = solid_rgba(32, 32, [200, 120, 200, 255]); // R=B のマゼンタ
+    let cpu = cataract(input.clone(), 0.2, 7).unwrap().to_rgba8();
+    let cpu_px = cpu.get_pixel(16, 16);
+    // 黄変は B を 0.85 倍に減衰し R はほぼ保つ → 出力で R > B（暖色シフト）になる。
+    assert!(
+        cpu_px[0] > cpu_px[2],
+        "cataract 黄変が暖色シフトしていない (R={} B={})",
+        cpu_px[0],
+        cpu_px[2]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// glaucoma 弧状暗点（ArcuateSuperior/Inferior/Biarcuate）— GLSL 未実装（移植漏れ）
+//
+// #100 調査結果: glaucoma.frag は Vignette モード（中心保存 + 周辺 smoothstep
+// 暗化）しか実装していない。極座標 Bjerrum 弧状暗点マスク（vision::glaucoma の
+// ArcuateSuperior/Inferior/Biarcuate）は .frag に一切存在せず、モード選択用の
+// uniform も無い。よって弧状モードの CPU↔GLSL 等価テストは作れない（移植漏れ）。
+//
+// → 別 Issue 化を提案: 「glaucoma.frag に弧状暗点（極座標マスク）モードを追加」。
+//   ここでは CPU 弧状モードの非クラッシュ・効果・恒等のみ検証する。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn glaucoma_arcuate_modes_run_without_crash_and_have_effect() {
+    let img = solid_rgba(64, 64, [180, 180, 180, 255]);
+    let input = img.to_rgba8();
+    for mode in [
+        GlaucomaMode::ArcuateSuperior,
+        GlaucomaMode::ArcuateInferior,
+        GlaucomaMode::Biarcuate,
+    ] {
+        let out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
+        let d = max_abs_rgb_diff(&out, &input);
+        assert!(
+            d >= 4,
+            "glaucoma {mode:?} strength=1.0 が画像を暗化していない (max RGB 差 {d})"
+        );
+    }
+}
+
+#[test]
+fn glaucoma_arcuate_superior_inferior_differ() {
+    // 上方弧状と下方弧状は異なる領域を暗化する（極座標マスクの上下非対称性）。
+    let img = solid_rgba(64, 64, [180, 180, 180, 255]);
+    let sup = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateSuperior).unwrap().to_rgba8();
+    let inf = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateInferior).unwrap().to_rgba8();
+    assert_ne!(
+        sup.as_raw(),
+        inf.as_raw(),
+        "ArcuateSuperior と ArcuateInferior が同一出力（上下マスクが効いていない）"
+    );
+}
+
+#[test]
+fn glaucoma_arcuate_strength_0_0_is_identity() {
+    let img = solid_rgba(64, 64, [180, 180, 180, 255]);
+    let out = glaucoma(img.clone(), 0.0, GlaucomaMode::Biarcuate).unwrap().to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        img.to_rgba8().as_raw(),
+        "glaucoma 弧状 strength=0.0 は恒等でなければならない"
     );
 }
