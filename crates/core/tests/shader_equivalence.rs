@@ -1329,6 +1329,60 @@ fn shader_equiv_cataract_strength_zero_psnr() {
 // S-2: apply(Filter::DetailLoss) 経由のテスト
 // ---------------------------------------------------------------------------
 
+/// detail_loss シェーダ（detail_loss.frag, 中心点サンプリング）を、タイルサイズ = cell_size
+/// 直接指定で Rust シミュレートする。apply(Filter::DetailLoss) 経路（detail_loss_with_cell_size）
+/// の等価検証用（kako-jun/sensus#96）。
+fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let tile_size = cell_size.max(1) as f32;
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let tile_ox = (x as f32 / tile_size).floor() * tile_size;
+            let tile_oy = (y as f32 / tile_size).floor() * tile_size;
+            let center_px = (tile_ox + tile_size * 0.5, tile_oy + tile_size * 0.5);
+            let sx = (center_px.0.clamp(0.0, (w - 1) as f32)) as u32;
+            let sy = (center_px.1.clamp(0.0, (h - 1) as f32)) as u32;
+            let s = img.get_pixel(sx, sy);
+            let lin_r = srgb_to_linear(s[0] as f32 / 255.0);
+            let lin_g = srgb_to_linear(s[1] as f32 / 255.0);
+            let lin_b = srgb_to_linear(s[2] as f32 / 255.0);
+            let orig_alpha = img.get_pixel(x, y)[3];
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb(lin_r.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(lin_g.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb(lin_b.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                orig_alpha,
+            ]));
+        }
+    }
+    out
+}
+
+/// kako-jun/sensus#96: apply(Filter::DetailLoss) が実際に呼ぶ detail_loss_with_cell_size を
+/// GLSL シェーダ（中心点サンプリング）と等価検証する。以前は同関数が全平均で、公開 API 経路が
+/// シェーダとも検証済み関数とも異なる出力を出していた。
+#[test]
+fn shader_equiv_apply_detail_loss_cpu_gpu_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    // tile_size に半端な境界を含むよう cell_size=7 を使う（32 / 7 でタイルがはみ出す）
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 60.0, "apply(DetailLoss) cell_size=7 CPU/GPU: PSNR {db:.1} dB < 60 dB");
+}
+
+#[test]
+fn shader_equiv_apply_detail_loss_cell_size_20_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 20).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 20);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 60.0, "apply(DetailLoss) cell_size=20 CPU/GPU: PSNR {db:.1} dB < 60 dB");
+}
+
 #[test]
 fn apply_detail_loss_strength_0_identity() {
     use sensus_core::{apply, Filter};

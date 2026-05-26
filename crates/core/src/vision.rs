@@ -2505,8 +2505,9 @@ pub fn contrast_sensitivity(img: DynamicImage, strength: f32) -> Result<DynamicI
 ///
 /// ## アルゴリズムの注意
 /// このバリアントは**タイル中心点参照**（GLSL シェーダと同一アルゴリズム）。
-/// `apply(Filter::DetailLoss)` 経由時は `detail_loss_with_cell_size` を呼ぶため
-/// アルゴリズムが異なる（→ [`detail_loss_with_cell_size`] 参照）。
+/// `apply(Filter::DetailLoss)` 経由時は `detail_loss_with_cell_size` を呼ぶが、
+/// kako-jun/sensus#96 で同関数も中心点サンプリングに統一済みなので
+/// アルゴリズムは同一（異なるのはタイルサイズの決め方だけ → [`detail_loss_with_cell_size`] 参照）。
 pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -2562,10 +2563,14 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// `cell_size` が 1 の場合は各ピクセルが単独のセルになるため identity と等価です（早期リターン）。
 ///
 /// ## アルゴリズムの注意
-/// このバリアントは**タイル内全ピクセルの linear sRGB 平均**を使用する。
-/// これは [`detail_loss`]（タイル中心点参照）や GLSL シェーダと異なり、
-/// 視覚的に高品質だが CPU コストが増加する。
-/// `apply(Filter::DetailLoss)` 経由時はこのバリアントが呼ばれる。
+/// このバリアントは**タイル中心点参照**（pixelation）を使用する。
+/// これは [`detail_loss`] および GLSL シェーダ（`detail_loss.frag`）と同一アルゴリズムであり、
+/// 異なるのはタイルサイズの決め方だけ（こちらは `cell_size` 直接指定、[`detail_loss`] は
+/// `strength` から導出）。`apply(Filter::DetailLoss)` 経由時はこのバリアントが呼ばれる。
+///
+/// kako-jun/sensus#96: 以前はタイル内全ピクセルの linear sRGB 平均を使用しており、
+/// 公開 API（apply 経由）が GLSL シェーダとも等価テスト済み関数とも異なる出力を出していた。
+/// シェーダ（universal-experience の表示経路 = 正本）の中心点サンプリングに統一した。
 #[allow(unused_variables)]
 pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: u32) -> Result<DynamicImage> {
     let rgba = img.to_rgba8();
@@ -2586,23 +2591,17 @@ pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: 
             let y0 = ty * tile_size;
             let x1 = (x0 + tile_size).min(width);
             let y1 = (y0 + tile_size).min(height);
-            let count = ((x1 - x0) * (y1 - y0)) as u64;
-            if count == 0 {
+            if x1 <= x0 || y1 <= y0 {
                 continue;
             }
 
-            let mut sum = [0.0_f64; 3];
-            for py in y0..y1 {
-                for px in x0..x1 {
-                    let p = rgba.get_pixel(px, py);
-                    sum[0] += srgb_to_linear(p[0] as f32 / 255.0) as f64;
-                    sum[1] += srgb_to_linear(p[1] as f32 / 255.0) as f64;
-                    sum[2] += srgb_to_linear(p[2] as f32 / 255.0) as f64;
-                }
-            }
-            let avg_r = pack_u8(linear_to_srgb((sum[0] / count as f64) as f32));
-            let avg_g = pack_u8(linear_to_srgb((sum[1] / count as f64) as f32));
-            let avg_b = pack_u8(linear_to_srgb((sum[2] / count as f64) as f32));
+            // タイル中心1点をサンプリング（GLSL シェーダと同一アルゴリズム: pixelation）
+            let cx = (x0 + tile_size / 2).min(width - 1);
+            let cy = (y0 + tile_size / 2).min(height - 1);
+            let cp = rgba.get_pixel(cx, cy);
+            let avg_r = cp[0];
+            let avg_g = cp[1];
+            let avg_b = cp[2];
 
             for py in y0..y1 {
                 for px in x0..x1 {
@@ -2610,6 +2609,7 @@ pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: 
                     p[0] = avg_r;
                     p[1] = avg_g;
                     p[2] = avg_b;
+                    // alpha はそのまま
                 }
             }
         }
