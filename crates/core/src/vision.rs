@@ -656,45 +656,55 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     // 白濁ノイズの最大ブレンド量
     const WHITE_BLEND_MAX: f32 = 0.4;
     // 格子セルサイズ（旧 BLOCK_SIZE=8 より大きい 32px で空間相関を確保）
-    const CELL_SIZE: u32 = 32;
+    const CELL_SIZE: f32 = 32.0;
 
-    // 格子頂点数（+1 は境界含むため）
-    let grid_cols = width.div_ceil(CELL_SIZE) + 1;
-    let grid_rows = height.div_ceil(CELL_SIZE) + 1;
+    // 格子頂点ごとの白濁ノイズ値を 32bit 整数 spatial hash で生成する。
+    //
+    // #125: GPU 単一パスで bit 単位に再現できるよう、旧 64bit Knuth LCG
+    // （`(lcg >> 32)` の高位ビット抽出を含む）を #99 と同じ純粋 32bit 整数
+    // spatial hash（黄金比定数混合 + XOR-shift finalizer）に置き換えた。各頂点の
+    // 値は seed と頂点座標 (gx, gy) だけの決定論的関数で、逐次状態を持たない。
+    // `cataract.frag` の `gridHash`（= metamorphopsia/dry_eye と同一の系列）と
+    // bit 単位に一致する（u32 演算は GLSL の uint 同様 mod 2^32 で wrap する）。
+    let seed32 = seed as u32;
+    // 1 頂点ぶんの 32bit ハッシュ（0.0..=1.0 を返す）。
+    let grid_hash = |gx: u32, gy: u32| -> f32 {
+        let mut h = seed32
+            .wrapping_mul(0x9e3779b9)
+            .wrapping_add(gx.wrapping_mul(0x85ebca6b))
+            .wrapping_add(gy.wrapping_mul(0xc2b2ae35));
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2c1b3c6d);
+        h ^= h >> 12;
+        h = h.wrapping_mul(0x297a2d39);
+        h ^= h >> 15;
+        h as f32 / u32::MAX as f32 // 0.0..=1.0
+    };
 
-    // 各格子頂点の LCG ノイズ値を事前計算
-    let mut grid_noise: Vec<f32> = Vec::with_capacity((grid_cols * grid_rows) as usize);
-    for gy in 0..grid_rows {
-        for gx in 0..grid_cols {
-            // 頂点ごとに独立したシードを生成（空間ハッシュ）
-            let h = seed
-                .wrapping_mul(0x9e3779b97f4a7c15)
-                .wrapping_add((gx as u64).wrapping_mul(0x517cc1b727220a95))
-                .wrapping_add((gy as u64).wrapping_mul(0x6c62272e07bb0142));
-            // LCG を 1 ステップ回して上位 32bit を 0.0..=1.0 に正規化
-            let lcg = h.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            let n = (lcg >> 32) as f32 / u32::MAX as f32;
-            grid_noise.push(n);
-        }
-    }
-
-    // 格子頂点の値を bilinear 補間する内部関数
+    // 格子頂点の値を smoothstep bilinear 補間する内部関数。
+    //
+    // 格子座標規約は CPU/GLSL で統一: 整数ピクセル index `px / CELL_SIZE` の
+    // floor を頂点インデックスとする（top-left 規約、metamorphopsia と同一）。
+    // `cataract.frag` は `vTexCoord * uResolution - 0.5` で整数ピクセル座標を
+    // 復元してこの規約に合わせている（旧 .frag の `(x+0.5)/CELL` 0.5px
+    // オフセットを廃止）。頂点ハッシュは座標だけの関数なので境界配列は不要。
     let grid_sample = |px: u32, py: u32| -> f32 {
-        // セル内の位置（0.0..=1.0）
-        let fx = px as f32 / CELL_SIZE as f32;
-        let fy = py as f32 / CELL_SIZE as f32;
-        let gx0 = (px / CELL_SIZE) as usize;
-        let gy0 = (py / CELL_SIZE) as usize;
-        let gx1 = (gx0 + 1).min(grid_cols as usize - 1);
-        let gy1 = (gy0 + 1).min(grid_rows as usize - 1);
-        let tx = fx - gx0 as f32; // セル内 x 位置
-        let ty = fy - gy0 as f32; // セル内 y 位置
+        let fx = px as f32 / CELL_SIZE;
+        let fy = py as f32 / CELL_SIZE;
+        let gx0 = fx.floor();
+        let gy0 = fy.floor();
+        let tx = fx - gx0; // セル内 x 位置（0.0..=1.0）
+        let ty = fy - gy0; // セル内 y 位置（0.0..=1.0）
+        let gx0 = gx0 as u32;
+        let gy0 = gy0 as u32;
+        let gx1 = gx0 + 1;
+        let gy1 = gy0 + 1;
 
         // 4 頂点の値を取得
-        let v00 = grid_noise[gy0 * grid_cols as usize + gx0];
-        let v10 = grid_noise[gy0 * grid_cols as usize + gx1];
-        let v01 = grid_noise[gy1 * grid_cols as usize + gx0];
-        let v11 = grid_noise[gy1 * grid_cols as usize + gx1];
+        let v00 = grid_hash(gx0, gy0);
+        let v10 = grid_hash(gx1, gy0);
+        let v01 = grid_hash(gx0, gy1);
+        let v11 = grid_hash(gx1, gy1);
 
         // smoothstep で補間（線形補間より自然な見た目）
         let stx = tx * tx * (3.0 - 2.0 * tx);
@@ -731,6 +741,10 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let noise = grid_sample(x, y);
             let white_blend = strength * noise * WHITE_BLEND_MAX;
 
+            // nr∈[0,1]・white_blend∈[0,WHITE_BLEND_MAX(0.4)] より fr∈[0,1] が常に成り立つので
+            // ここでは clamp しない（pack_u8 が sRGB 空間で最終 clamp する）。GLSL/sim は linear 空間で
+            // clamp(0,1) するが入力域上は等価で bit 一致する。WHITE_BLEND_MAX を上げる/黄変係数を負に
+            // 振る等で fr が [0,1] を外れる変更を入れる場合は、CPU/GLSL の clamp 段を揃え直すこと。
             let fr = nr + (1.0 - nr) * white_blend;
             let fg = ng + (1.0 - ng) * white_blend;
             let fb = nb + (1.0 - nb) * white_blend;

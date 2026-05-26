@@ -1,9 +1,10 @@
 #version 300 es
-precision mediump float;
+precision highp float;
+precision highp int;
 
 // 白内障（Cataract）シミュレーション。
-// 黄変マトリクス + Simplex-like LCG ノイズ（空間相関あり）による白濁。
-// CPU 実装 vision::cataract に対応。
+// 黄変マトリクス + 32bit spatial hash ノイズ（空間相関あり）による白濁。
+// CPU 実装 vision::cataract と同一のノイズモデル（#125 で統一）。
 //
 // ### 黄変マトリクス（linear sRGB → yellowed linear sRGB）
 // 係数出典: Pokorny et al. (1987) "Aging of the human lens" Applied Optics 26(8)
@@ -15,8 +16,10 @@ precision mediump float;
 //   | yb |   | 0.00  0.00  0.85 | | b |
 //
 // ### 散乱ノイズ
-// 格子頂点に LCG ノイズを割り当て、smoothstep bilinear 補間で空間相関を付与。
-// CPU 実装の CELL_SIZE=32 に対応する格子周波数で uResolution から格子座標を計算する。
+// 格子頂点に 32bit 整数 spatial hash でノイズを割り当て、smoothstep bilinear
+// 補間で空間相関を付与する。CELL_SIZE=32px の格子で、CPU の整数ピクセル座標
+// 基準 (px/CELL の floor) に合わせるため、フラグメント中心 uv から
+// `vTexCoord * uResolution - 0.5` で整数ピクセル座標を復元する。
 
 uniform sampler2D uTexture;
 uniform float uStrength;
@@ -33,23 +36,24 @@ float linearToSrgb(float c) {
     return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
-// LCG ハッシュ: 格子頂点 (gx, gy) の擬似ランダム値（0.0..=1.0）
-// CPU 実装（vision::cataract）の Knuth 64bit LCG 定数を uint（32bit）で近似。
-//   mul = 6364136223846793005 mod 2^32 = 0x4c957f2du
-//   add = 1442695040888963407 mod 2^32 = 0xf767814fu
-// これにより CPU と同じシードから同等のノイズパターンが生成される。
+// 格子頂点 (gx, gy) の擬似ランダム値（0.0..=1.0）。
+// #125: CPU 実装 vision::cataract の grid_hash と完全に同じ 32bit 整数演算
+// （= metamorphopsia/dry_eye と同一の系列。GLSL の uint は CPU の u32 と同じく
+// mod 2^32 で wrap する）。黄金比定数混合 + XOR-shift finalizer。
 float gridNoise(float gx, float gy) {
-    // CPU 実装と同じ空間ハッシュ定数
-    uint s = uint(uSeed);
-    uint h = s * 0x9e3779b9u
-        + uint(gx) * 0x517cc1b7u
-        + uint(gy) * 0x6c62272eu;
-    // LCG 1 ステップ（CPU の Knuth 定数の下位 32bit）
-    uint lcg = h * 0x4c957f2du + 0xf767814fu;
-    return float(lcg) / float(0xFFFFFFFFu);
+    uint h = uSeed * 0x9e3779b9u
+        + uint(gx) * 0x85ebca6bu
+        + uint(gy) * 0xc2b2ae35u;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return float(h) / float(0xFFFFFFFFu); // 0.0..=1.0
 }
 
-// smoothstep bilinear 補間でグリッドノイズをサンプリング
+// smoothstep bilinear 補間でグリッドノイズをサンプリング。
+// pixelPos は整数ピクセル座標（CPU の x, y に対応）。
 float smoothNoise(vec2 pixelPos) {
     const float CELL_SIZE = 32.0;
     vec2 cell = pixelPos / CELL_SIZE;
@@ -86,8 +90,9 @@ void main() {
     float ng = g + (yg - g) * uStrength;
     float nb = b + (yb - b) * uStrength;
 
-    // Simplex-like 格子補間ノイズによる白濁
-    vec2 pixelPos = vTexCoord * uResolution;
+    // 32bit spatial hash 格子補間ノイズによる白濁
+    // CPU の整数ピクセル座標 (x, y) を復元（フラグメント中心 uv = (x+0.5)/res）。
+    vec2 pixelPos = vTexCoord * uResolution - 0.5;
     float noise = smoothNoise(pixelPos);
     const float WHITE_BLEND_MAX = 0.4;
     float whiteBlend = uStrength * noise * WHITE_BLEND_MAX;
