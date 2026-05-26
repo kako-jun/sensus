@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **starbursts（大乖離・別 Issue 必須）**: CPU は明部画素起点のレイマーチング（num_rays 本のレイを別レイヤーに加算）だが、`starbursts.frag` は単一パス制約で各画素を「自身の輝度」でその場ブライトニングするだけ。`.frag` コメント自身が「フルレイマーチング版は CPU 実装を参照」と明記。**根本的に別効果**で PSNR 等価は原理的に不成立。仮の等価テストは作らず、strength=0 恒等・決定論・レイ放射の効果アサートのみ追加。
   - **cataract（ノイズハッシュ乖離・別 Issue 候補）**: 黄変マトリクス（Pokorny 1987）は一致するが、白濁ノイズの LCG ハッシュが CPU（64bit、`(lcg>>32)/u32::MAX` の高位ビット抽出）と GLSL（同定数の下位 32bit で 32bit 演算）で異なり、頂点ノイズ値が完全に別物。加えて格子サンプリング規約も食い違う（CPU は整数ピクセル index `px/CELL` で頂点参照、.frag は `(x+0.5)/CELL` の 0.5px オフセット）。`sim_cataract_glsl`（.frag の 32bit ハッシュを忠実ミラー）で比較し **PSNR 19.6dB（<30、乖離をテストで固定）**。#99 と同様に 32bit spatial hash へ統一すれば等価化できるが、その際は**ハッシュだけでなく格子座標規約（±0.5px）も統一対象**にする必要がある。本 Issue では調査記録に留め別 Issue 化を推奨（昇格用の assert を `finding_cataract_noise_hash_diverges` に明記）。
   - **glaucoma 弧状暗点（GLSL 移植漏れ・別 Issue 必須）**: `glaucoma.frag` は **Vignette モードしか実装していない**。極座標 Bjerrum 弧状暗点（`ArcuateSuperior`/`ArcuateInferior`/`Biarcuate`）のマスクも、モード選択用 uniform も `.frag` に一切存在しない。CPU 弧状モードの等価テストは作れないため、非クラッシュ・上下マスク非対称・strength=0 恒等のみ検証。**提案: glaucoma.frag に極座標弧状暗点モードを追加する別 Issue を起票**（→ #123 で解消済み）。
-  - テスト総数: shader_equivalence は 118 件 pass（本 Issue で +24 件）。`.frag` の修正は行っていない（乖離が大きく単一パス GPU で再現困難なため、各乖離を別 Issue 化推奨）。
+  - テスト総数: shader_equivalence は #100 時点で 118 件 pass（#100 で +24 件）。`.frag` の修正は #100 では行わず、各乖離を別 Issue 化（#123-#127）。以降の Issue 解消で総数はさらに増える。
 
 ### Fixed
 

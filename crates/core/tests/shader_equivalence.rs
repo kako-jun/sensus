@@ -1189,7 +1189,7 @@ fn sim_glaucoma_arcuate(
             let r_min = min_dim_n * 0.20;
             let r_max = min_dim_n * 0.55 * strength.sqrt();
 
-            let mul = if r_n <= r_min || r_n >= r_max {
+            let mul = if r_n < r_min || r_n > r_max {
                 1.0
             } else {
                 let t_r = (r_n - r_min) / (r_max - r_min);

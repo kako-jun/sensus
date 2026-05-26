@@ -63,10 +63,10 @@ float arcuateMul(bool applySuperior, bool applyInferior) {
     float rMin = minDimN * 0.20;
     float rMax = minDimN * 0.55 * sqrt(uStrength); // strength で外側境界が拡大
 
-    // 弧状帯の外なら暗化なし。
-    // strength≈0.133 付近で rMax≈rMin になりうるが、その場合 rMin<rN<rMax が
-    // 成立せず早期 return するため、ゼロ除算・NaN は発生しない。
-    if (rN <= rMin || rN >= rMax) {
+    // 弧状帯の外なら暗化なし。境界包含は CPU 正本（r < rMin || r > rMax、band は
+    // [rMin, rMax] 閉区間）と一致させる。strength≈0.133 付近で rMax≈rMin になりうるが、
+    // その場合 band が潰れて早期 return するため、ゼロ除算・NaN は発生しない。
+    if (rN < rMin || rN > rMax) {
         return 1.0;
     }
 
