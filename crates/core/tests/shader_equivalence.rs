@@ -16,8 +16,8 @@ use sensus_core::shaders::{
     achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms, dry_eye_uniforms,
     eye_strain_uniforms, glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
     macular_degeneration_uniforms, metamorphopsia_uniforms, myopia_uniforms, photophobia_uniforms,
-    presbyopia_uniforms, protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms,
-    tunnel_vision_uniforms, vestibular_neuritis_uniforms,
+    presbyopia_uniforms, protanopia_uniforms, starbursts_uniforms, tetrachromacy_uniforms,
+    tritanopia_uniforms, tunnel_vision_uniforms, vestibular_neuritis_uniforms,
 };
 use sensus_core::vision::{
     achromatopsia, astigmatism, bppv_rotation, deuteranopia, diplopia, dry_eye, eye_strain,
@@ -3254,18 +3254,161 @@ fn shader_equiv_bppv_rotation_strength_0_0_is_identity() {
 
 
 // ---------------------------------------------------------------------------
-// starbursts（光芒）— CPU↔GLSL は別アルゴリズム（#100 で判明、別 Issue 候補）
+// starbursts（光芒）— CPU↔GLSL を gather 型で統一（#124）
 //
-// CPU（vision::starbursts）は明部画素を起点にレイマーチングして放射状の光芒を
-// 別レイヤーに加算する（num_rays 本のレイを ray_length_px だけ伸ばす）。
-// 一方 starbursts.frag は単一パス制約のため、各画素を「自身の輝度」に応じて
-// その場でブライトニングするだけで、レイの放射・伝播を一切行わない。
-// .frag のコメント自身が「フルレイマーチング版は CPU 実装を参照」と明記している。
+// CPU（vision::starbursts）は明部画素を起点に num_rays 本のレイを放射し、各レイに
+// 沿って距離減衰させながら additive 合成する scatter（散乱）型。GPU の単一パスでは
+// scatter を直接表現できないため、starbursts.frag を「その厳密な転置（transpose）」
+// である gather（収集）型に書き換えた:
+//   出力画素に光を寄与しうる明部画素は、各レイ方向 theta_i の逆方向（theta_i+180°）
+//   に距離 t だけ離れた位置にある。よって出力画素から各レイ方向の逆方向へ
+//   t=1..ray_length_px だけ遡って明部を探し、CPU と同一の重み
+//   src_intensity * (1 - t/L) * strength * rayColor を加算する。
+// scatter が訪れる (source, t, ray) タプル集合と gather が訪れる集合は完全一致する
+// （sx = px - round(t·cosθ), sy = py - round(t·sinθ) は scatter の dest 計算の逆）。
+// 唯一の乖離源は additive 合成の加算順序（scatter は source 走査順、gather は ray→t 順）
+// に由来する f32 丸めのみで、PSNR は極めて高い。
 //
-// 両者は根本的に異なる効果（CPU=明部から伸びる光条、GLSL=明部のその場強調）
-// なので PSNR 等価は成立しない。仮の等価テストで誤魔化さず、
-// 「CPU 決定論」と「strength=0 恒等」のみ検証し、乖離は別 Issue 化する。
+// 重要: Rust の `f32::round` は 0 から離れる方向の半丸め。GLSL の floor(x+0.5) は +∞
+// 方向の半丸めで負値の .5 で乖離するため、.frag は roundHalfAwayFromZero で揃える。
+// sim_starbursts_glsl は starbursts.frag の gather ループを忠実にミラーする。
 // ---------------------------------------------------------------------------
+
+/// HSL(H, S=1, L=0.5) → linear sRGB（starbursts.frag `hslRainbow` と同一）。
+fn starbursts_hsl_rainbow(hue_deg: f32) -> [f32; 3] {
+    let h = hue_deg.rem_euclid(360.0);
+    let sector = (h / 60.0).floor();
+    let f = h / 60.0 - sector;
+    let (r, g, b) = if sector < 1.0 {
+        (1.0, f, 0.0)
+    } else if sector < 2.0 {
+        (1.0 - f, 1.0, 0.0)
+    } else if sector < 3.0 {
+        (0.0, 1.0, f)
+    } else if sector < 4.0 {
+        (0.0, 1.0 - f, 1.0)
+    } else if sector < 5.0 {
+        (f, 0.0, 1.0)
+    } else {
+        (1.0, 0.0, 1.0 - f)
+    };
+    [srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b)]
+}
+
+/// Rust `f32::round`（0 から離れる方向の半丸め）。GLSL `roundHalfAwayFromZero` と同一。
+fn round_half_away_from_zero(x: f32) -> f32 {
+    x.signum() * (x.abs() + 0.5).floor()
+}
+
+/// starbursts.frag（gather 型）を Rust で忠実にミラーする。
+///
+/// 各出力画素から各レイ方向の逆方向へ t=1..ray_length_px だけ遡り、明部なら
+/// CPU と同一の重みを加算する。texCoord 中心サンプリング（nearest=整数画素）。
+fn sim_starbursts_glsl(
+    img: &RgbaImage,
+    strength: f32,
+    threshold: f32,
+    dispersion: f32,
+    num_rays: u32,
+    ray_length_px: u32,
+) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    if strength <= 0.0 || num_rays < 1 || ray_length_px < 1 {
+        return img.clone();
+    }
+
+    const R_LUMA: f32 = 0.2126;
+    const G_LUMA: f32 = 0.7152;
+    const B_LUMA: f32 = 0.0722;
+    let inv_denom = 1.0 / (1.0 - threshold).max(1e-6);
+
+    // 整数画素 (sx, sy) の linear RGB と BT.709 luma。範囲外は luma<0（寄与なし）。
+    let sample = |sx: i32, sy: i32| -> ([f32; 3], f32) {
+        if sx < 0 || sx >= w as i32 || sy < 0 || sy >= h as i32 {
+            return ([0.0; 3], -1.0);
+        }
+        let p = img.get_pixel(sx as u32, sy as u32);
+        let rl = srgb_to_linear(p[0] as f32 / 255.0);
+        let gl = srgb_to_linear(p[1] as f32 / 255.0);
+        let bl = srgb_to_linear(p[2] as f32 / 255.0);
+        ([rl, gl, bl], R_LUMA * rl + G_LUMA * gl + B_LUMA * bl)
+    };
+
+    let mut out = img.clone();
+    for py in 0..h as i32 {
+        for px in 0..w as i32 {
+            let orig = img.get_pixel(px as u32, py as u32);
+            let rl = srgb_to_linear(orig[0] as f32 / 255.0);
+            let gl = srgb_to_linear(orig[1] as f32 / 255.0);
+            let bl = srgb_to_linear(orig[2] as f32 / 255.0);
+
+            let mut accum = [0.0f32; 3];
+            for i in 0..num_rays {
+                let theta = i as f32 * 2.0 * std::f32::consts::PI / num_rays as f32;
+                let cos_t = theta.cos();
+                let sin_t = theta.sin();
+                let angle_deg = theta.to_degrees().rem_euclid(360.0);
+                let rainbow = starbursts_hsl_rainbow(angle_deg);
+                let ray_color = [
+                    1.0 + (rainbow[0] - 1.0) * dispersion,
+                    1.0 + (rainbow[1] - 1.0) * dispersion,
+                    1.0 + (rainbow[2] - 1.0) * dispersion,
+                ];
+                for t in 1..=ray_length_px {
+                    let tf = t as f32;
+                    let sx = px - round_half_away_from_zero(tf * cos_t) as i32;
+                    let sy = py - round_half_away_from_zero(tf * sin_t) as i32;
+                    let (_lin, luma) = sample(sx, sy);
+                    if luma <= threshold {
+                        continue;
+                    }
+                    let src_intensity = (luma - threshold) * inv_denom;
+                    let weight = src_intensity * (1.0 - tf / ray_length_px as f32) * strength;
+                    accum[0] += weight * ray_color[0];
+                    accum[1] += weight * ray_color[1];
+                    accum[2] += weight * ray_color[2];
+                }
+            }
+
+            let r = linear_to_srgb((rl + accum[0]).clamp(0.0, 1.0));
+            let g = linear_to_srgb((gl + accum[1]).clamp(0.0, 1.0));
+            let b = linear_to_srgb((bl + accum[2]).clamp(0.0, 1.0));
+            out.put_pixel(
+                px as u32,
+                py as u32,
+                image::Rgba([
+                    (r * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (g * 255.0).round().clamp(0.0, 255.0) as u8,
+                    (b * 255.0).round().clamp(0.0, 255.0) as u8,
+                    orig[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// starbursts_uniforms から sim_starbursts_glsl を呼ぶ薄いラッパ。
+/// uniform 計算（ray_length_px の算出）も含めて経路を検証する。
+fn sim_starbursts_via_uniforms(
+    img: &RgbaImage,
+    strength: f32,
+    threshold: f32,
+    dispersion: f32,
+    num_rays: u32,
+    ray_length_ratio: f32,
+) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let u = starbursts_uniforms(strength, threshold, dispersion, num_rays, ray_length_ratio, w, h);
+    sim_starbursts_glsl(
+        img,
+        u.strength,
+        u.threshold,
+        u.dispersion,
+        u.num_rays as u32,
+        u.ray_length_px as u32,
+    )
+}
 
 #[test]
 fn starbursts_strength_0_0_is_identity() {
@@ -3276,6 +3419,9 @@ fn starbursts_strength_0_0_is_identity() {
         img.to_rgba8().as_raw(),
         "starbursts strength=0.0 は恒等でなければならない"
     );
+    // GLSL ミラーも strength=0 で恒等。
+    let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 0.0, 0.5, 1.0, 8, 0.1);
+    assert_eq!(gpu.as_raw(), img.to_rgba8().as_raw(), "GLSL も strength=0 で恒等");
 }
 
 #[test]
@@ -3285,18 +3431,74 @@ fn starbursts_is_deterministic() {
     let a = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0).unwrap().to_rgba8();
     let b = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0).unwrap().to_rgba8();
     assert_eq!(a.as_raw(), b.as_raw(), "starbursts は決定論的でなければならない");
+    // GLSL ミラーも決定論的。
+    let ga = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.5, 0.5, 8, 0.3);
+    let gb = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.5, 0.5, 8, 0.3);
+    assert_eq!(ga.as_raw(), gb.as_raw(), "GLSL starbursts も決定論的");
 }
 
 #[test]
 fn starbursts_strength_1_emits_rays_from_bright_point() {
-    // 明部からレイが放射されること（CPU レイマーチングの効果確認）。
-    // .frag はこのレイ放射を再現しないため CPU↔GLSL 等価は別 Issue（コメント参照）。
+    // 明部からレイが放射されること（gather 型でも光条が伸びる）。
     let img = bright_point_on_dark(48, 48);
     let input = img.to_rgba8();
     let out = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0).unwrap().to_rgba8();
-    // 中心の明点から離れた画素が明るくなる（レイが伸びている）
     let d = max_abs_rgb_diff(&out, &input);
-    assert!(d >= 4, "starbursts strength=1.0 がレイを放射していない (max RGB 差 {d})");
+    assert!(d >= 4, "CPU starbursts strength=1.0 がレイを放射していない (max RGB 差 {d})");
+    // GLSL gather 版も明点から光条を放射する。
+    let gpu = sim_starbursts_via_uniforms(&input, 1.0, 0.3, 0.0, 8, 0.4);
+    let dg = max_abs_rgb_diff(&gpu, &input);
+    assert!(dg >= 4, "GLSL starbursts strength=1.0 がレイを放射していない (max RGB 差 {dg})");
+}
+
+#[test]
+fn shader_equiv_starbursts_white_strength_1_0() {
+    // dispersion=0（白）。CPU scatter ↔ GLSL gather は同一タプル集合を訪れるため
+    // 加算順序由来の f32 丸めを除き等価。bright point で光条が一致する。
+    let img = bright_point_on_dark(48, 48);
+    let cpu = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0).unwrap().to_rgba8();
+    let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 0.0, 8, 0.4);
+    let db = psnr(&cpu, &gpu);
+    assert!(
+        db >= 40.0,
+        "starbursts 白 strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 40 dB（gather 転置が不一致）"
+    );
+}
+
+#[test]
+fn shader_equiv_starbursts_rainbow_strength_1_0() {
+    // dispersion=1（虹色）。レイ方向ごとの色相も CPU と GLSL で一致する。
+    let img = bright_point_on_dark(48, 48);
+    let cpu = starbursts(img.clone(), 1.0, 12, 0.4, 0.3, 1.0).unwrap().to_rgba8();
+    let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 1.0, 12, 0.4);
+    let db = psnr(&cpu, &gpu);
+    assert!(
+        db >= 40.0,
+        "starbursts 虹色 strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 40 dB（色相/gather 不一致）"
+    );
+}
+
+#[test]
+fn shader_equiv_starbursts_multi_source() {
+    // 複数明部・中間 strength・カラー画像でも等価（光条が交差・重畳する難ケース）。
+    let img = half_bright(48, 48);
+    let cpu = starbursts(img.clone(), 0.6, 6, 0.3, 0.4, 0.5).unwrap().to_rgba8();
+    let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 0.6, 0.4, 0.5, 6, 0.3);
+    let db = psnr(&cpu, &gpu);
+    assert!(
+        db >= 40.0,
+        "starbursts multi-source strength=0.6: CPU↔GLSL PSNR {db:.1} dB < 40 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_starbursts_non_square() {
+    // 非正方形でも min(W,H) ベースの ray_length_px 算出と座標規約が一致する。
+    let img = bright_point_on_dark(64, 32);
+    let cpu = starbursts(img.clone(), 1.0, 8, 0.5, 0.3, 0.0).unwrap().to_rgba8();
+    let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 0.0, 8, 0.5);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 40.0, "starbursts non-square 64x32: CPU↔GLSL PSNR {db:.1} dB < 40 dB");
 }
 
 // ---------------------------------------------------------------------------
