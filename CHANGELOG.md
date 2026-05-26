@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix: kako-jun/sensus#96 `detail_loss` の apply 経路を等価テスト対象に統一**:
+  - `apply(Filter::DetailLoss)` / `pipeline` が呼ぶ `detail_loss_with_cell_size` を、タイル内全ピクセル linear sRGB 平均からタイル中心点サンプリング（pixelation）に変更。これで GLSL シェーダ（`detail_loss.frag`、universal-experience の表示経路 = 正本）・等価テスト済みの `detail_loss`・公開 API（apply 経由）の3者が同一アルゴリズムになった。`detail_loss_with_cell_size` と `detail_loss` の違いはタイルサイズの決め方（`cell_size` 直接指定 vs `strength` 導出）だけ
+  - apply 経路の関数（`detail_loss_with_cell_size`）に対する CPU↔GLSL 等価テストを追加: `shader_equiv_apply_detail_loss_cpu_gpu_psnr`（cell_size=7、半端境界、PSNR ≥ 60 dB）、`shader_equiv_apply_detail_loss_cell_size_20_psnr`（cell_size=20、PSNR ≥ 60 dB）。中心点サンプリング用シミュレータ `sim_detail_loss_shader_cell` も追加
+  - `detail_loss.frag` / `detail_loss` / `detail_loss_with_cell_size` の docコメントを統一後の事実に更新
+
 ## [0.4.0] - 2026-05-25
 
 ### Fixed
