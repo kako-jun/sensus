@@ -186,16 +186,23 @@ fn sim_disk_blur(img: &RgbaImage, radius_px: f32) -> RgbaImage {
 }
 
 /// 乱視シェーダ（astigmatism.frag）をソフトウェアシミュレートする。
-/// 16 tap の directional blur。`axis_deg` はぼかし方向（シェーダに渡す値）。
+///
+/// #126 で .frag を CPU `ellipse_blur` の filled-ellipse box（長軸 a=radius_px,
+/// 短軸 b=0.5px）に統一した。本ミラーも同一の整数格子点列挙を行う:
+///   各 (dx, dy) を回転座標 (u, v) に写し、u²/a² + v²/b² ≤ 1 の点だけ一様加算。
+/// 端は clamp-to-edge（CPU edge replication と一致）。`axis_deg` はぼかし方向
+/// （シェーダ uAxisDeg / uDirectionDeg に渡す値）。
+///
+/// `RMAX`/`B_RADIUS` は astigmatism.frag・nystagmus.frag の同名定数と一致させる。
 fn sim_astigmatism(img: &RgbaImage, radius_px: f32, axis_deg: f32) -> RgbaImage {
-    const N: usize = 16;
+    const RMAX: i32 = 15;
+    const B_RADIUS: f32 = 0.5;
     let (w, h) = img.dimensions();
-    let texel_w = 1.0 / w as f32;
-    let texel_h = 1.0 / h as f32;
 
-    let sample = |img: &RgbaImage, u: f32, v: f32| -> [f32; 3] {
-        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
-        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+    // texel 中心 nearest fetch（.frag の texture() + clamp-to-edge と一致）。
+    let sample = |img: &RgbaImage, sx: i32, sy: i32| -> [f32; 3] {
+        let px_x = sx.clamp(0, w as i32 - 1) as u32;
+        let px_y = sy.clamp(0, h as i32 - 1) as u32;
         let px = img.get_pixel(px_x, px_y);
         [
             srgb_to_linear(px[0] as f32 / 255.0),
@@ -211,26 +218,35 @@ fn sim_astigmatism(img: &RgbaImage, radius_px: f32, axis_deg: f32) -> RgbaImage 
     }
 
     let rad = axis_deg * std::f32::consts::PI / 180.0;
-    let dir_x = rad.cos();
-    let dir_y = rad.sin();
+    let cos_t = rad.cos();
+    let sin_t = rad.sin();
+    let a2 = (radius_px * radius_px).max(1e-6);
+    let b2 = (B_RADIUS * B_RADIUS).max(1e-6);
+
+    let a_max = radius_px.max(B_RADIUS);
+    let r_max = (a_max.ceil() as i32).min(RMAX);
 
     for y in 0..h {
         for x in 0..w {
-            let u = (x as f32 + 0.5) / w as f32;
-            let v = (y as f32 + 0.5) / h as f32;
-
             let mut acc = [0f32; 3];
-            for i in 0..N {
-                // t in -1..+1
-                let t = (i as f32 / (N - 1) as f32) * 2.0 - 1.0;
-                let offset_u = dir_x * (t * radius_px) * texel_w;
-                let offset_v = dir_y * (t * radius_px) * texel_h;
-                let s = sample(img, u + offset_u, v + offset_v);
-                acc[0] += s[0];
-                acc[1] += s[1];
-                acc[2] += s[2];
+            let mut n = 0f32;
+            for dy in -r_max..=r_max {
+                for dx in -r_max..=r_max {
+                    let fdx = dx as f32;
+                    let fdy = dy as f32;
+                    let u = fdx * cos_t + fdy * sin_t;
+                    let v = -fdx * sin_t + fdy * cos_t;
+                    if (u * u) / a2 + (v * v) / b2 <= 1.0 {
+                        let s = sample(img, x as i32 + dx, y as i32 + dy);
+                        acc[0] += s[0];
+                        acc[1] += s[1];
+                        acc[2] += s[2];
+                        n += 1.0;
+                    }
+                }
             }
-            let blurred = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
+            let inv = 1.0 / n.max(1.0);
+            let blurred = [acc[0] * inv, acc[1] * inv, acc[2] * inv];
 
             let src = img.get_pixel(x, y);
             out.put_pixel(
@@ -771,6 +787,132 @@ fn shader_equiv_astigmatism_axis_90_psnr() {
         db >= 30.0,
         "astigmatism axis=90°: PSNR {db:.1} dB < 30 dB"
     );
+}
+
+/// 鋭エッジのカラーチャート（任意サイズ）。4 象限を別色で塗る。
+/// 旧 16-tap 直線カーネルが CPU box と最も乖離する（#126, ~20dB）コンテンツ。
+fn color_chart_wh(w: u32, h: u32) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    let (hw, hh) = (w / 2, h / 2);
+    for y in 0..h {
+        for x in 0..w {
+            let px = match (x < hw, y < hh) {
+                (true, true) => [220, 50, 50, 255],
+                (false, true) => [50, 200, 50, 255],
+                (true, false) => [50, 50, 220, 255],
+                (false, false) => [200, 200, 200, 255],
+            };
+            img.put_pixel(x, y, image::Rgba(px));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+// ---------------------------------------------------------------------------
+// #126: 乱視 実ブラー領域での CPU↔GLSL カーネル統一テスト
+//
+// 既存の astigmatism テストは 32px 画像（radius = 0.011*32 = 0.35px < 0.5px）の
+// passthrough 領域でしか検証しておらず、実ブラー領域のカーネル乖離が隠れていた。
+// #126 で .frag を CPU ellipse_blur（filled-ellipse box）に統一したので、256px の
+// 鋭エッジ画像（radius = 0.011*256 = 2.82px の実ブラー）で軸 0/45/90 を検証する。
+// 旧 16-tap 直線カーネルでは鋭エッジで ~20dB まで落ちていたが、box 統一後は
+// 整数格子点列挙が一致するため sRGB 丸めのみの高 PSNR（≥45dB 目安）になる。
+// ---------------------------------------------------------------------------
+
+/// 256px の鋭エッジ画像で実ブラー領域の CPU↔GLSL 等価を軸 0/45/90 で確認する。
+#[test]
+fn shader_equiv_astigmatism_real_blur_sharp_edge_axes() {
+    let img = color_chart_wh(256, 256);
+    let min_dim = 256u32;
+    // strength=1.0 で radius = 0.011*256 = 2.816px（実ブラー、> 0.5px）。
+    for sharp_axis in [0.0_f32, 45.0, 90.0] {
+        let uni = astigmatism_uniforms(1.0, min_dim, sharp_axis);
+        assert!(
+            uni.radius_px > 0.5,
+            "テスト前提: radius {}px が実ブラー領域でない",
+            uni.radius_px
+        );
+        let cpu = astigmatism(img.clone(), 1.0, sharp_axis).unwrap().to_rgba8();
+        // .frag に渡すのはぼかし方向 uni.axis_deg（= sharp_axis + 90）。
+        let gpu = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
+        let db = psnr(&cpu, &gpu);
+        assert!(
+            db >= 45.0,
+            "astigmatism sharp_axis={sharp_axis}° 実ブラー: PSNR {db:.1} dB < 45 dB \
+             (box カーネル統一後は鋭エッジでも高 PSNR のはず)"
+        );
+        // identity 偽陽性排除: 実ブラーは鋭エッジを実際になまさなければならない。
+        assert!(
+            max_abs_rgb_diff(&cpu, &img.to_rgba8()) >= 2,
+            "astigmatism sharp_axis={sharp_axis}° が鋭エッジを変えていない（blur 未適用）"
+        );
+    }
+}
+
+/// astigmatism の軸（sharp_axis）が CPU↔GLSL で同じ向きにブラーをかける根拠:
+/// 水平シャープ(axis=0→ぼかし垂直)と垂直シャープ(axis=90→ぼかし水平)の出力は
+/// CPU でも GLSL でも互いに有意に異なり、かつ各軸で CPU↔GLSL が一致する。
+#[test]
+fn shader_equiv_astigmatism_axis_direction_matches_cpu_glsl() {
+    let img = color_chart_wh(256, 256);
+    let min_dim = 256u32;
+
+    let uni0 = astigmatism_uniforms(1.0, min_dim, 0.0);
+    let uni90 = astigmatism_uniforms(1.0, min_dim, 90.0);
+
+    let cpu0 = astigmatism(img.clone(), 1.0, 0.0).unwrap().to_rgba8();
+    let cpu90 = astigmatism(img.clone(), 1.0, 90.0).unwrap().to_rgba8();
+    let gpu0 = sim_astigmatism(&img.to_rgba8(), uni0.radius_px, uni0.axis_deg);
+    let gpu90 = sim_astigmatism(&img.to_rgba8(), uni90.radius_px, uni90.axis_deg);
+
+    // 各軸で CPU↔GLSL が一致（同じ向き・同じ半径のカーネル）。
+    assert!(psnr(&cpu0, &gpu0) >= 45.0, "axis=0 CPU↔GLSL 不一致");
+    assert!(psnr(&cpu90, &gpu90) >= 45.0, "axis=90 CPU↔GLSL 不一致");
+
+    // 軸 0 と 90 でブラー方向が直交するため出力は有意に異なる（CPU・GLSL とも）。
+    assert!(
+        max_abs_rgb_diff(&cpu0, &cpu90) >= 2,
+        "CPU: 軸 0/90 でブラー方向が変わっていない"
+    );
+    assert!(
+        max_abs_rgb_diff(&gpu0, &gpu90) >= 2,
+        "GLSL: 軸 0/90 でブラー方向が変わっていない"
+    );
+    // CPU と GLSL が「軸違いで同方向に変化する」: 軸 0 同士・軸 90 同士の差より
+    // 軸 0↔90 のクロス差の方が大きい（同じ軸対応が最も近い）。
+    let cross = psnr(&cpu0, &gpu90);
+    let aligned = psnr(&cpu0, &gpu0);
+    assert!(
+        aligned > cross,
+        "軸対応がずれている: aligned(0↔0)={aligned:.1}dB ≤ cross(0↔90)={cross:.1}dB"
+    );
+}
+
+/// nystagmus を手動の大半径で駆動し、実ブラー領域の鋭エッジ等価を確認する。
+/// nystagmus は radius = amplitude*strength*min_dim を直接指定できるため、
+/// astigmatism より広い実ブラー半径（軸 0/45/90）を box カーネルで検証できる。
+#[test]
+fn shader_equiv_nystagmus_real_blur_sharp_edge_axes() {
+    use sensus_core::shaders::nystagmus_uniforms;
+    let img = color_chart_wh(64, 64);
+    let min_dim = 64u32;
+    let amplitude = 0.12; // radius = 0.12*1.0*64 = 7.68px（実ブラー、ceil=8 < RMAX=15）
+    for dir in [0.0_f32, 45.0, 90.0] {
+        let u = nystagmus_uniforms(1.0, amplitude, dir, min_dim);
+        assert!(u.radius_px > 0.5 && u.radius_px.ceil() <= 15.0);
+        let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+        // nystagmus.frag は揺れ方向をそのままぼかし方向に使う（+90° しない）。
+        let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
+        let db = psnr(&cpu, &gpu);
+        assert!(
+            db >= 45.0,
+            "nystagmus dir={dir}° 実ブラー鋭エッジ: PSNR {db:.1} dB < 45 dB"
+        );
+        assert!(
+            max_abs_rgb_diff(&cpu, &img.to_rgba8()) >= 2,
+            "nystagmus dir={dir}° が鋭エッジを変えていない（blur 未適用）"
+        );
+    }
 }
 
 /// テスト用の 32x32 グラデーション画像を作るヘルパー。
@@ -2869,20 +3011,16 @@ fn shader_equiv_diplopia_non_square_32x64_psnr() {
 }
 
 // ---------------------------------------------------------------------------
-// nystagmus（眼振）— nystagmus.frag は astigmatism.frag と同一構造の 16-tap 1D
-// directional blur（uniform 名のみ違い、+90° しない）。よって sim_astigmatism で
-// .frag を忠実ミラーできる（axis_deg = direction_deg をそのまま渡す）。
+// nystagmus（眼振）— nystagmus.frag は astigmatism.frag と同一カーネル（uniform 名
+// のみ違い、+90° しない）。よって sim_astigmatism で .frag を忠実ミラーできる
+// （axis_deg = direction_deg をそのまま渡す）。
 //
-// 既知の乖離（#100 で判明、別 Issue 候補）:
-//   CPU は ellipse_blur（filled-ellipse box、短軸 = MIN_BLUR_RADIUS_PX=0.5px）、
-//   GLSL は ±radius_px を 16 tap でサンプルする直線ブラー。両者は同じ 1D motion
-//   blur を別カーネルで量子化しており、滑らかな gradient では PSNR ≥ 30dB で一致
-//   するが、鋭いエッジ（color_chart 等の実コンテンツ）では ~20dB まで乖離する。
-//   特に radius_px < 1.0px では CPU の楕円が原点のみに退化して blur がほぼ無く
-//   なる一方、16-tap 直線は常にエッジを広げるため不一致が大きい。
-//   ※この乖離は astigmatism も共有する（astigmatism は radius<0.5px の passthrough
-//   領域でしかテストしていないため顕在化していない）。
-//   滑らかコンテンツでの等価を担保し、エッジ乖離は別 Issue で扱う。
+// #126 で旧 16-tap 直線カーネルを CPU ellipse_blur（filled-ellipse box）に統一した。
+// 旧実装は CPU の box 楕円と別カーネルで、鋭エッジ（color_chart 等）では ~20dB まで
+// 乖離していた（#100 で判明）。box 統一後は CPU と同じ整数格子点列挙を行うため、
+// 滑らかな gradient でも鋭エッジでも sRGB 丸めのみの高 PSNR で一致する。
+// 実ブラー領域の鋭エッジ等価は shader_equiv_nystagmus_real_blur_sharp_edge_axes /
+// shader_equiv_astigmatism_real_blur_sharp_edge_axes で検証している。
 // ---------------------------------------------------------------------------
 
 #[test]
