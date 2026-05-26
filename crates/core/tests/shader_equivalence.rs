@@ -3101,65 +3101,75 @@ fn shader_equiv_nystagmus_non_square_64x32_psnr() {
 // ---------------------------------------------------------------------------
 // vertigo / bppv_rotation（回転変位）
 //
-// .frag は UV 空間（0..1、正方化）で逆回転サンプリングする。CPU はピクセル空間で
-// 逆回転 + bilinear サンプリングする。**正方形画像では UV 回転 = ピクセル回転**
-// （aspect=1）なので等価。GPU の texture() は bilinear なので CPU の sample_bilinear
+// .frag は UV を aspect 補正したピクセル比例空間で逆回転サンプリングする
+// （uv.x *= uAspect → 回転 → uv.x /= uAspect）。CPU はピクセル空間で逆回転 +
+// bilinear サンプリングする。aspect 補正により **非正方形でも UV 回転 = ピクセル
+// 回転** となり等価。GPU の texture() は bilinear なので CPU の sample_bilinear
 // と対応する。
 //
-// 既知の乖離（非正方形・追加処理）:
-// - 非正方形画像では .frag の UV 空間回転が角度を歪ませ、CPU のピクセル空間回転と
-//   一致しない（別 Issue 候補。下記 report テストで明示）。
-// - vertigo CPU は回転後に周辺 disk blur（radius = s*0.015*min_dim）を加えるが
-//   .frag には無い。32px 正方形では s=1.0 でも 0.48px < 0.5px となり blur が
-//   スキップされるため、本テストはその領域で等価を取る。
+// vertigo は回転後に等方 disk blur（radius = s*0.015*min_dim）を linear sRGB で
+// 加える。.frag は「回転後の像」を blur するため、出力（回転後）空間のオフセットを
+// 逆回転して元 UV へ写してから 16tap サンプリングする。bppv_rotation は回転のみ
+// （CPU/.frag とも blur 無し）。
 // ---------------------------------------------------------------------------
 
-/// UV 空間逆回転 + bilinear サンプリングを行う共通ヘルパ（vertigo.frag / bppv_rotation.frag）。
-/// `angle` はラジアン。clamp(srcUV, 0, 1) → bilinear。
-fn sim_uv_rotation_glsl(img: &RgbaImage, angle: f32) -> RgbaImage {
+/// `texture()` clamp-to-edge + bilinear をピクセル中心規約で再現する内部ヘルパ。
+/// UV → ピクセル中心座標 px = uv*dim - 0.5。
+fn sample_glsl_bilinear(img: &RgbaImage, fu: f32, fv: f32) -> [f32; 4] {
+    let (w, h) = img.dimensions();
+    let fu = fu.clamp(0.0, 1.0);
+    let fv = fv.clamp(0.0, 1.0);
+    let fx = fu * w as f32 - 0.5;
+    let fy = fv * h as f32 - 0.5;
+    let x0 = fx.floor() as i32;
+    let y0 = fy.floor() as i32;
+    let tx = fx - x0 as f32;
+    let ty = fy - y0 as f32;
+    let get = |x: i32, y: i32| -> [f32; 4] {
+        let xi = x.clamp(0, w as i32 - 1) as u32;
+        let yi = y.clamp(0, h as i32 - 1) as u32;
+        let p = img.get_pixel(xi, yi);
+        [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+    };
+    let p00 = get(x0, y0);
+    let p10 = get(x0 + 1, y0);
+    let p01 = get(x0, y0 + 1);
+    let p11 = get(x0 + 1, y0 + 1);
+    let mut out = [0f32; 4];
+    for i in 0..4 {
+        out[i] = p00[i] * (1.0 - tx) * (1.0 - ty)
+            + p10[i] * tx * (1.0 - ty)
+            + p01[i] * (1.0 - tx) * ty
+            + p11[i] * tx * ty;
+    }
+    out
+}
+
+/// aspect 補正した逆回転で出力 UV → 元 UV を求める（vertigo.frag / bppv_rotation.frag）。
+fn rotate_src_uv(uv_x: f32, uv_y: f32, cos_a: f32, sin_a: f32, aspect: f32) -> (f32, f32) {
+    // ピクセル比例空間へ
+    let px = (uv_x - 0.5) * aspect;
+    let py = uv_y - 0.5;
+    let rx = cos_a * px + sin_a * py;
+    let ry = -sin_a * px + cos_a * py;
+    // UV へ戻す
+    (rx / aspect + 0.5, ry + 0.5)
+}
+
+/// UV 空間逆回転 + bilinear サンプリング（bppv_rotation.frag、blur 無し）。
+/// `aspect` = width / height。
+fn sim_uv_rotation_glsl(img: &RgbaImage, angle: f32, aspect: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let cos_a = angle.cos();
     let sin_a = angle.sin();
 
-    // .frag: texture(uTexture, clamp(srcUV,0,1)) — GPU bilinear をピクセル中心規約で再現
-    let sample = |fu: f32, fv: f32| -> [f32; 4] {
-        // UV → ピクセル中心座標: px = uv*dim - 0.5
-        let fx = fu * w as f32 - 0.5;
-        let fy = fv * h as f32 - 0.5;
-        let x0 = fx.floor() as i32;
-        let y0 = fy.floor() as i32;
-        let tx = fx - x0 as f32;
-        let ty = fy - y0 as f32;
-        let get = |x: i32, y: i32| -> [f32; 4] {
-            let xi = x.clamp(0, w as i32 - 1) as u32;
-            let yi = y.clamp(0, h as i32 - 1) as u32;
-            let p = img.get_pixel(xi, yi);
-            [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
-        };
-        let p00 = get(x0, y0);
-        let p10 = get(x0 + 1, y0);
-        let p01 = get(x0, y0 + 1);
-        let p11 = get(x0 + 1, y0 + 1);
-        let mut out = [0f32; 4];
-        for i in 0..4 {
-            out[i] = p00[i] * (1.0 - tx) * (1.0 - ty)
-                + p10[i] * tx * (1.0 - ty)
-                + p01[i] * (1.0 - tx) * ty
-                + p11[i] * tx * ty;
-        }
-        out
-    };
-
     let mut out = img.clone();
     for y in 0..h {
         for x in 0..w {
-            let uv_x = (x as f32 + 0.5) / w as f32 - 0.5;
-            let uv_y = (y as f32 + 0.5) / h as f32 - 0.5;
-            let src_u = (cos_a * uv_x + sin_a * uv_y) + 0.5;
-            let src_v = (-sin_a * uv_x + cos_a * uv_y) + 0.5;
-            let suc = src_u.clamp(0.0, 1.0);
-            let svc = src_v.clamp(0.0, 1.0);
-            let s = sample(suc, svc);
+            let uv_x = (x as f32 + 0.5) / w as f32;
+            let uv_y = (y as f32 + 0.5) / h as f32;
+            let (src_u, src_v) = rotate_src_uv(uv_x, uv_y, cos_a, sin_a, aspect);
+            let s = sample_glsl_bilinear(img, src_u, src_v);
             out.put_pixel(
                 x,
                 y,
@@ -3168,6 +3178,70 @@ fn sim_uv_rotation_glsl(img: &RgbaImage, angle: f32) -> RgbaImage {
                     s[1].round().clamp(0.0, 255.0) as u8,
                     s[2].round().clamp(0.0, 255.0) as u8,
                     s[3].round().clamp(0.0, 255.0) as u8,
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// vertigo.frag の忠実ミラー: aspect 補正逆回転 + 16tap disk blur（linear sRGB）。
+/// `radius_px < 0.5` のとき blur 段はスキップ（回転のみ）。
+fn sim_vertigo_glsl(img: &RgbaImage, angle: f32, aspect: f32, radius_px: f32) -> RgbaImage {
+    const N: usize = 16;
+    const PHI: f32 = 2.399_963_2; // 黄金角（.frag と同じ）
+    let (w, h) = img.dimensions();
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+    let texel_w = 1.0 / w as f32;
+    let texel_h = 1.0 / h as f32;
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let uv_x = (x as f32 + 0.5) / w as f32;
+            let uv_y = (y as f32 + 0.5) / h as f32;
+            let (src_u, src_v) = rotate_src_uv(uv_x, uv_y, cos_a, sin_a, aspect);
+            let center = sample_glsl_bilinear(img, src_u, src_v);
+
+            if radius_px < 0.5 {
+                out.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([
+                        center[0].round().clamp(0.0, 255.0) as u8,
+                        center[1].round().clamp(0.0, 255.0) as u8,
+                        center[2].round().clamp(0.0, 255.0) as u8,
+                        center[3].round().clamp(0.0, 255.0) as u8,
+                    ]),
+                );
+                continue;
+            }
+
+            let mut acc = [0f32; 3];
+            for i in 0..N {
+                let t = i as f32 / N as f32;
+                let r = t.sqrt() * radius_px;
+                let theta = i as f32 * PHI;
+                // 出力（回転後）空間のオフセットを逆回転して元 UV 空間へ
+                let out_ox = theta.cos() * r;
+                let out_oy = theta.sin() * r;
+                let src_ox = (cos_a * out_ox + sin_a * out_oy) * texel_w;
+                let src_oy = (-sin_a * out_ox + cos_a * out_oy) * texel_h;
+                let s = sample_glsl_bilinear(img, src_u + src_ox, src_v + src_oy);
+                acc[0] += srgb_to_linear(s[0] / 255.0);
+                acc[1] += srgb_to_linear(s[1] / 255.0);
+                acc[2] += srgb_to_linear(s[2] / 255.0);
+            }
+            let blurred = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    center[3].round().clamp(0.0, 255.0) as u8,
                 ]),
             );
         }
@@ -3195,21 +3269,83 @@ fn bppv_angle(strength: f32, time_t: f32) -> f32 {
     strength * MAX_ANGLE_RAD * angle_norm
 }
 
+/// vertigo の disk blur 半径（CPU/.frag 共通式）。
+fn vertigo_radius_px(strength: f32, w: u32, h: u32) -> f32 {
+    strength.clamp(0.0, 1.0) * 0.015 * w.min(h) as f32
+}
+
 #[test]
 fn shader_equiv_vertigo_square_no_blur_psnr() {
-    // 32px 正方形 + s=1.0: blur_radius = 0.015*32 = 0.48 < 0.5 → CPU は blur 無し。
+    // 32px 正方形 + s=1.0: blur_radius = 0.015*32 = 0.48 < 0.5 → CPU/.frag とも blur 無し。
     // UV 回転（.frag）= ピクセル回転（CPU）が成立する領域で等価を取る。
     let img = gradient_32();
     let time_t = 1.0; // sin(2π*0.3*1.0) ≈ sin(1.885) ≈ 0.951 → 非ゼロ角
     let angle = vertigo_angle(1.0, time_t);
     assert!(angle.abs() > 0.01, "回転角がほぼ 0（テスト設計ミス）");
+    let radius = vertigo_radius_px(1.0, 32, 32);
+    assert!(radius < 0.5, "32px square は blur 無し領域のはず");
     let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
-    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle);
+    let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, 1.0, radius);
     let db = psnr(&cpu, &gpu);
     assert!(db >= 30.0, "vertigo 32px square: PSNR {db:.1} dB < 30 dB");
     assert!(
         psnr(&cpu, &img.to_rgba8()) < 45.0,
         "vertigo が画像をほぼ変えていない（回転していない）"
+    );
+}
+
+#[test]
+fn shader_equiv_vertigo_nonsquare_64x32_psnr() {
+    // 非正方形 64×32（aspect=2.0）。blur 半径 = 0.015*32 = 0.48 < 0.5 → 回転のみ。
+    // aspect 補正により .frag の UV 回転が CPU のピクセル回転と一致することを確認。
+    let img = gradient_wh(64, 32);
+    let time_t = 1.0;
+    let angle = vertigo_angle(1.0, time_t);
+    let aspect = 64.0 / 32.0;
+    let radius = vertigo_radius_px(1.0, 64, 32);
+    let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
+    let db = psnr(&cpu, &gpu);
+    // 実測 PSNR ≈ 37.2 dB（回転のみ、bilinear 丸め差）
+    assert!(db >= 30.0, "vertigo 64x32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        psnr(&cpu, &img.to_rgba8()) < 45.0,
+        "vertigo 64x32 が画像をほぼ変えていない（回転していない）"
+    );
+}
+
+#[test]
+fn shader_equiv_vertigo_nonsquare_32x64_psnr() {
+    // 非正方形 32×64（aspect=0.5）の縦長でも一致することを確認。
+    let img = gradient_wh(32, 64);
+    let time_t = 1.0;
+    let angle = vertigo_angle(1.0, time_t);
+    let aspect = 32.0 / 64.0;
+    let radius = vertigo_radius_px(1.0, 32, 64);
+    let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "vertigo 32x64: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_vertigo_large_with_blur_psnr() {
+    // 大画像 128×96（aspect≈1.333）。blur 半径 = 0.015*96 = 1.44 ≥ 0.5 → blur が効く。
+    // 回転 + disk blur の両方を含めて CPU↔.frag 一致を確認する。
+    let img = gradient_wh(128, 96);
+    let time_t = 1.0;
+    let angle = vertigo_angle(1.0, time_t);
+    let aspect = 128.0 / 96.0;
+    let radius = vertigo_radius_px(1.0, 128, 96);
+    assert!(radius >= 0.5, "128x96 は blur が効くはず（radius={radius}）");
+    let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
+    let db = psnr(&cpu, &gpu);
+    // 実測 PSNR ≈ 38.4 dB（回転 + 16tap disk blur 近似の合算差）
+    assert!(db >= 30.0, "vertigo 128x96 (blur): PSNR {db:.1} dB < 30 dB");
+    assert!(
+        psnr(&cpu, &img.to_rgba8()) < 45.0,
+        "vertigo 128x96 が画像をほぼ変えていない（回転/blur が効いていない）"
     );
 }
 
@@ -3232,13 +3368,45 @@ fn shader_equiv_bppv_rotation_square_psnr() {
     let angle = bppv_angle(1.0, time_t);
     assert!(angle.abs() > 0.01, "回転角がほぼ 0（テスト設計ミス）");
     let cpu = bppv_rotation(img.clone(), 1.0, time_t).unwrap().to_rgba8();
-    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle);
+    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle, 1.0);
     let db = psnr(&cpu, &gpu);
     assert!(db >= 30.0, "bppv_rotation 32px square: PSNR {db:.1} dB < 30 dB");
     assert!(
         psnr(&cpu, &img.to_rgba8()) < 45.0,
         "bppv_rotation が画像をほぼ変えていない（回転していない）"
     );
+}
+
+#[test]
+fn shader_equiv_bppv_rotation_nonsquare_64x32_psnr() {
+    // 非正方形 64×32（aspect=2.0）。aspect 補正で .frag の UV 回転が CPU の
+    // ピクセル回転と一致することを確認（bppv は回転のみ、blur 無し）。
+    let img = gradient_wh(64, 32);
+    let time_t = 0.15;
+    let angle = bppv_angle(1.0, time_t);
+    let aspect = 64.0 / 32.0;
+    let cpu = bppv_rotation(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle, aspect);
+    let db = psnr(&cpu, &gpu);
+    // 実測 PSNR ≈ 45.1 dB（回転のみ、bilinear 丸め差）
+    assert!(db >= 30.0, "bppv_rotation 64x32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        psnr(&cpu, &img.to_rgba8()) < 45.0,
+        "bppv_rotation 64x32 が画像をほぼ変えていない（回転していない）"
+    );
+}
+
+#[test]
+fn shader_equiv_bppv_rotation_nonsquare_32x64_psnr() {
+    // 非正方形 32×64（aspect=0.5）の縦長でも一致することを確認。
+    let img = gradient_wh(32, 64);
+    let time_t = 0.15;
+    let angle = bppv_angle(1.0, time_t);
+    let aspect = 32.0 / 64.0;
+    let cpu = bppv_rotation(img.clone(), 1.0, time_t).unwrap().to_rgba8();
+    let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle, aspect);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 30.0, "bppv_rotation 32x64: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
