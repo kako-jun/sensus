@@ -1072,7 +1072,7 @@ fn shader_equiv_eye_strain_compresses_contrast_and_vignettes() {
         black_out > 0,
         "contrast 圧縮: 黒側が明るくなっていない（black_out={black_out}）"
     );
-    let orig_range = 255i32 - 0;
+    let orig_range = 255i32; // 入力の白(255)と黒(0)の差
     let out_range = white_out as i32 - black_out as i32;
     assert!(
         out_range < orig_range,
