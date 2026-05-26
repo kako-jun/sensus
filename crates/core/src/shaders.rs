@@ -12,6 +12,8 @@ const MYOPIA_MAX_RADIUS_RATIO: f32 = 0.023;
 const HYPEROPIA_MAX_RADIUS_RATIO: f32 = 0.015;
 const PRESBYOPIA_MAX_RADIUS_RATIO: f32 = 0.011;
 const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
+// vision.rs の PHOTOPHOBIA_BLOOM_RADIUS_RATIO と同じ値（bloom 半径 = ratio * min(W,H) * strength）
+const PHOTOPHOBIA_BLOOM_RADIUS_RATIO: f32 = 0.05;
 
 /// Machado 2009 severity = 1.0 行列（行優先: row0col0, row0col1, row0col2, ...）。
 /// vision.rs の PROTANOPIA 定数と同じ値。
@@ -171,7 +173,8 @@ pub fn cataract_glsl() -> &'static str {
     include_str!("shaders/cataract.frag")
 }
 
-/// photophobia / nyctalopia / cataract の共通 uniform（strength のみ）。
+/// nyctalopia / cataract の共通 uniform（strength のみ）。
+/// （photophobia は bloom 半径が必要なため `PhotophobiaUniforms` を使う。）
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SimpleStrengthUniforms {
     /// strength (0.0..=1.0)
@@ -196,9 +199,33 @@ pub struct FlickeringStarsUniforms {
     pub seed: u32,
 }
 
+/// photophobia フィルタの uniform。
+///
+/// bloom 半径は画像サイズ依存（CPU 実装と同じ式）なので strength のみでは表せない。
+/// disk blur フィルタ（myopia 等）と同様に `radius_px` と `texel_size` を持つ。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PhotophobiaUniforms {
+    /// strength (0.0..=1.0)
+    pub strength: f32,
+    /// bloom 半径（ピクセル単位）= strength * 0.05 * min(width, height)。
+    /// photophobia.frag の `uRadiusPx` に渡す。
+    pub radius_px: f32,
+    /// テクセルサイズ vec2(1.0/width, 1.0/height)。
+    /// photophobia.frag の `uTexelSize` に渡す。
+    pub texel_size: [f32; 2],
+}
+
 /// photophobia の uniform を返す。
-pub fn photophobia_uniforms(strength: f32) -> SimpleStrengthUniforms {
-    SimpleStrengthUniforms { strength }
+///
+/// `width`, `height`: 画像の幅・高さ（ピクセル）。bloom 半径と texel size の算出に使う。
+pub fn photophobia_uniforms(strength: f32, width: u32, height: u32) -> PhotophobiaUniforms {
+    let min_dim = width.min(height) as f32;
+    let radius_px = strength.clamp(0.0, 1.0) * PHOTOPHOBIA_BLOOM_RADIUS_RATIO * min_dim;
+    PhotophobiaUniforms {
+        strength,
+        radius_px,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
 }
 
 /// nyctalopia の uniform を返す。
