@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix: kako-jun/sensus#97 `photophobia` GLSL に disk-blur bloom を実装**:
+  - `photophobia.frag` を「ピクセル単位の輝度 boost のみ（近傍へ広がらない）」から、CPU `vision::photophobia` と同じ disk-blur bloom（highlight 抽出しきい値 0.5・BT.709 luma・半径 `strength*0.05*min(W,H)`・加算合成・linear sRGB）に実装。これで universal-experience の Flutter 表示で bloom が近傍へ滲み CPU と一致する
+  - 単一パス制約のため厳密 pillbox を Fibonacci lattice 16 tap で近似（CPU=厳密 pillbox）。これが唯一の乖離源で PSNR で担保（strength=0.5 で 35.8 dB、1.0 で 42.7 dB、いずれも下限 30 dB 超）
+  - **API 変更**: `photophobia_uniforms(strength)` → `photophobia_uniforms(strength, width, height)`、`PhotophobiaUniforms` 構造体新設（`uRadiusPx` / `uTexelSize` 追加。bloom 半径はピクセル空間計算のため画像サイズが必要）。外部呼び出し元なし
+  - CPU↔GLSL 等価テストを追加（strength 0.0/0.5/1.0、radius<0.5 境界、128×128 大画像、非正方形、明点 bloom 拡散の効果アサート）。`.frag` を忠実にミラーする `sim_photophobia_glsl` で検証（乖離隠蔽なし）
 - **fix: kako-jun/sensus#96 `detail_loss` の apply 経路を等価テスト対象に統一**:
   - `apply(Filter::DetailLoss)` / `pipeline` が呼ぶ `detail_loss_with_cell_size` を、タイル内全ピクセル linear sRGB 平均からタイル中心点サンプリング（pixelation）に変更。これで GLSL シェーダ（`detail_loss.frag`、universal-experience の表示経路 = 正本）・等価テスト済みの `detail_loss`・公開 API（apply 経由）の3者が同一アルゴリズムになった。`detail_loss_with_cell_size` と `detail_loss` の違いはタイルサイズの決め方（`cell_size` 直接指定 vs `strength` 導出）だけ
   - apply 経路の関数（`detail_loss_with_cell_size`）に対する CPU↔GLSL 等価テストを追加: `shader_equiv_apply_detail_loss_cpu_gpu_psnr`（cell_size=7、半端境界、PSNR ≥ 60 dB）、`shader_equiv_apply_detail_loss_cell_size_20_psnr`（cell_size=20、PSNR ≥ 60 dB）。中心点サンプリング用シミュレータ `sim_detail_loss_shader_cell` も追加

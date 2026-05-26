@@ -15,13 +15,13 @@ use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
     achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms,
     glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
-    macular_degeneration_uniforms, myopia_uniforms, presbyopia_uniforms,
+    macular_degeneration_uniforms, myopia_uniforms, photophobia_uniforms, presbyopia_uniforms,
     protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
     vestibular_neuritis_uniforms,
 };
 use sensus_core::vision::{
     achromatopsia, astigmatism, deuteranopia, eye_strain, glaucoma, GlaucomaMode, hemianopia,
-    hyperopia, macular_degeneration, myopia, presbyopia, protanopia, tetrachromacy,
+    hyperopia, macular_degeneration, myopia, photophobia, presbyopia, protanopia, tetrachromacy,
     tritanopia, tunnel_vision, vestibular_neuritis,
 };
 
@@ -247,6 +247,85 @@ fn sim_astigmatism(img: &RgbaImage, radius_px: f32, axis_deg: f32) -> RgbaImage 
     out
 }
 
+/// photophobia.frag を Rust で再現する。
+///
+/// .frag と同一の式:
+/// - highlightAt(uv): luma > 0.5 の超過分でマスクした linear RGB
+/// - bloomSpread(uv): Fibonacci lattice 16 tap で highlight 円盤を平均（近似 disk blur）
+/// - out = clamp(orig_linear + bloom, 1.0)
+///
+/// strength は radius_px の算出にのみ使われ、bloom 振幅には掛けない（CPU と同じ）。
+fn sim_photophobia_glsl(img: &RgbaImage, radius_px: f32) -> RgbaImage {
+    const N: usize = 16;
+    const PHI: f32 = 2.399_963_2; // 黄金角（.frag と同じ）
+    const THRESHOLD: f32 = 0.5;
+    const MIN_RADIUS_PX: f32 = 0.5;
+    let (w, h) = img.dimensions();
+    let texel_w = 1.0 / w as f32;
+    let texel_h = 1.0 / h as f32;
+
+    // texture(uTexture, uv) の clamp-to-edge サンプリング → highlight レイヤ
+    let highlight_at = |u: f32, v: f32| -> [f32; 3] {
+        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
+        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+        let px = img.get_pixel(px_x, px_y);
+        let lin = [
+            srgb_to_linear(px[0] as f32 / 255.0),
+            srgb_to_linear(px[1] as f32 / 255.0),
+            srgb_to_linear(px[2] as f32 / 255.0),
+        ];
+        let luma = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2];
+        let mask = if luma > THRESHOLD {
+            (luma - THRESHOLD) / (1.0 - THRESHOLD)
+        } else {
+            0.0
+        };
+        [lin[0] * mask, lin[1] * mask, lin[2] * mask]
+    };
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+
+            // bloom spread（半径が小さすぎる場合は bloom なし）
+            let mut bloom = [0f32; 3];
+            if radius_px >= MIN_RADIUS_PX {
+                let mut acc = [0f32; 3];
+                for i in 0..N {
+                    let t = i as f32 / N as f32;
+                    let r = t.sqrt() * radius_px;
+                    let theta = i as f32 * PHI;
+                    let s = highlight_at(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
+                    acc[0] += s[0];
+                    acc[1] += s[1];
+                    acc[2] += s[2];
+                }
+                bloom = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
+            }
+
+            let px = img.get_pixel(x, y);
+            let lin = [
+                srgb_to_linear(px[0] as f32 / 255.0),
+                srgb_to_linear(px[1] as f32 / 255.0),
+                srgb_to_linear(px[2] as f32 / 255.0),
+            ];
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb((lin[0] + bloom[0]).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((lin[1] + bloom[1]).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((lin[2] + bloom[2]).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // 比較ユーティリティ
 // ---------------------------------------------------------------------------
@@ -442,6 +521,210 @@ fn shader_equiv_presbyopia_strength_1_0_psnr() {
     assert!(
         db >= 30.0,
         "presbyopia strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// photophobia（bloom）等価性テスト（PSNR ≥ 30 dB）
+// ---------------------------------------------------------------------------
+// CPU は highlight に厳密 pillbox disk blur（半径 r, edge replication）を適用。
+// GPU は単一パスで厳密畳み込めないため Fibonacci lattice 16 tap で円盤を近似。
+// 近似手法が違うため厳密一致は期待せず PSNR で判定する（他 disk blur 系と同じ）。
+
+#[test]
+fn shader_equiv_photophobia_strength_1_0_psnr() {
+    // color_chart_32 は灰(200,200,200) と緑(50,200,50) の象限が luma>0.5 となり
+    // bloom 源になる。min_dim=32 → radius_px = 0.05*32 = 1.6px（>= 0.5）。
+    let img = color_chart_32();
+    let uni = photophobia_uniforms(1.0, 32, 32);
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "photophobia strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+// 明るいハイライト点（中心 1px のみ白、周囲は黒）を持つ画像。
+// bloom が周囲に広がる「効果」を検証するための専用フィクスチャ。
+fn bright_point_on_dark(w: u32, h: u32) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            img.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+        }
+    }
+    // 中心に純白の点（luma=1.0 > 0.5 → bloom 源）
+    img.put_pixel(w / 2, h / 2, image::Rgba([255, 255, 255, 255]));
+    DynamicImage::ImageRgba8(img)
+}
+
+// 半分が明るい灰 (200,200,200, luma>0.5)、半分が黒 (0,0,0) の画像。
+// bloom 源を確実に含む汎用フィクスチャ（任意サイズ）。
+fn half_bright(w: u32, h: u32) -> DynamicImage {
+    let mut img = RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let px = if x < w / 2 {
+                [200, 200, 200, 255]
+            } else {
+                [10, 10, 10, 255]
+            };
+            img.put_pixel(x, y, image::Rgba(px));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+#[test]
+fn shader_equiv_photophobia_strength_0_5_psnr() {
+    // 中間値 strength=0.5: bloom 半径 = 0.5*0.05*32 = 0.8px（>= 0.5 → bloom あり）。
+    // pillbox（CPU）と 16tap Fibonacci 近似（GLSL）の差が出やすい小半径領域。
+    let img = color_chart_32();
+    let uni = photophobia_uniforms(0.5, 32, 32);
+    let cpu_out = photophobia(img.clone(), 0.5).unwrap().to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "photophobia strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_photophobia_strength_0_0_is_identity() {
+    // strength=0.0: CPU は早期 return で入力をそのまま返す。
+    // GLSL ミラーも radius_px=0（< 0.5）で bloom ゼロ → 入力不変であるべき。
+    // CPU と GLSL の両方が「入力 == 出力」になることを確認する。
+    let img = color_chart_32();
+    let uni = photophobia_uniforms(0.0, 32, 32);
+    assert_eq!(uni.radius_px, 0.0, "strength=0.0 で radius_px は 0 のはず");
+    let input = img.to_rgba8();
+    let cpu_out = photophobia(img.clone(), 0.0).unwrap().to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&input, uni.radius_px);
+    assert_eq!(
+        cpu_out, input,
+        "photophobia strength=0.0: CPU 出力が入力と一致しない（identity 違反）"
+    );
+    assert_eq!(
+        gpu_sim, input,
+        "photophobia strength=0.0: GLSL 出力が入力と一致しない（identity 違反）"
+    );
+}
+
+#[test]
+fn shader_equiv_photophobia_radius_below_min_no_bloom() {
+    // radius_px < 0.5（MIN_BLUR_RADIUS_PX）境界: bloom が完全にゼロになること。
+    // 8x8 + strength=1.0 → radius = 0.05*8 = 0.4px < 0.5 → CPU/GLSL とも bloom なし。
+    // ハイライトを含む画像でも出力が入力と一致する（bloom 加算が起きない）。
+    let img = half_bright(8, 8);
+    let uni = photophobia_uniforms(1.0, 8, 8);
+    assert!(
+        uni.radius_px < 0.5,
+        "前提: radius_px {} は 0.5 未満であるべき",
+        uni.radius_px
+    );
+    let input = img.to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&input, uni.radius_px);
+    assert_eq!(
+        gpu_sim, input,
+        "radius<0.5: bloom が加算されている（境界で bloom ゼロになっていない）"
+    );
+    // CPU 側も同じ境界で bloom ゼロ（identity）になることを確認し、両側を守る。
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    assert_eq!(
+        cpu_out, input,
+        "radius<0.5: CPU 側で bloom が加算されている（境界で identity になっていない）"
+    );
+}
+
+#[test]
+fn shader_equiv_photophobia_large_image_128_psnr() {
+    // 大きめ画像 128x128 + 半径大（radius = 0.05*128 = 6.4px）で 16tap 近似が
+    // 粗くなる領域。PSNR 閾値の余裕（30 dB 下限）を満たし近似が破綻しないこと。
+    let img = half_bright(128, 128);
+    let uni = photophobia_uniforms(1.0, 128, 128);
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "photophobia 128x128 strength=1.0: PSNR {db:.1} dB < 30 dB（近似破綻の疑い）"
+    );
+}
+
+#[test]
+fn shader_equiv_photophobia_non_square_64x32_psnr() {
+    // 非正方形（width=64, height=32）。texel_size の縦横差（1/64 vs 1/32）が
+    // CPU の等方 disk（ピクセル等方）と一致するか検証する。
+    // radius = 0.05 * min(64,32) = 1.6px。
+    let img = half_bright(64, 32);
+    let uni = photophobia_uniforms(1.0, 64, 32);
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "photophobia non-square 64x32: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_photophobia_non_square_32x64_psnr() {
+    // 非正方形の縦長版（width=32, height=64）。64x32 と対称に texel_size の
+    // 縦横差が逆転しても CPU 等方 disk と一致すること。
+    let img = half_bright(32, 64);
+    let uni = photophobia_uniforms(1.0, 32, 64);
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&img.to_rgba8(), uni.radius_px);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 30.0,
+        "photophobia non-square 32x64: PSNR {db:.1} dB < 30 dB"
+    );
+}
+
+#[test]
+fn shader_equiv_photophobia_bloom_spreads_from_bright_point() {
+    // 効果アサート（identity 偽陽性の排除）: 暗背景に明るい点 1px を置くと、
+    // bloom が周囲（隣接画素）へ広がり、かつ画像端の暗部は不変であること。
+    // 64x64 → radius = 0.05*64 = 3.2px（>= 0.5）。GLSL ミラーで検証する。
+    let img = bright_point_on_dark(64, 64);
+    let uni = photophobia_uniforms(1.0, 64, 64);
+    let input = img.to_rgba8();
+    let gpu_sim = sim_photophobia_glsl(&input, uni.radius_px);
+
+    // 中心の隣（半径内）の暗画素は bloom で明るくなる（元は黒 0）。
+    let cx = 32u32;
+    let cy = 32u32;
+    let neighbor = gpu_sim.get_pixel(cx + 1, cy);
+    assert!(
+        neighbor[0] > 0,
+        "bloom が隣接画素に広がっていない（中心隣 R={}）",
+        neighbor[0]
+    );
+
+    // 半径外（角）の暗部は不変（黒のまま）。
+    let corner = gpu_sim.get_pixel(0, 0);
+    assert_eq!(
+        [corner[0], corner[1], corner[2]],
+        [0, 0, 0],
+        "bloom 範囲外の暗部が変化した（角の画素 {corner:?}）"
+    );
+
+    // CPU 側も同じく明点が近傍へ広がり、範囲外の暗部は不変であることを確認（両側を守る）。
+    let cpu_out = photophobia(img.clone(), 1.0).unwrap().to_rgba8();
+    assert!(
+        cpu_out.get_pixel(cx + 1, cy)[0] > 0,
+        "CPU 側で bloom が隣接画素に広がっていない（中心隣 R={}）",
+        cpu_out.get_pixel(cx + 1, cy)[0]
+    );
+    let cpu_corner = cpu_out.get_pixel(0, 0);
+    assert_eq!(
+        [cpu_corner[0], cpu_corner[1], cpu_corner[2]],
+        [0, 0, 0],
+        "CPU 側で bloom 範囲外の暗部が変化した（角の画素 {cpu_corner:?}）"
     );
 }
 
