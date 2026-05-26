@@ -1404,6 +1404,119 @@ fn apply_detail_loss_strength_1_runs_without_crash() {
 }
 
 // ---------------------------------------------------------------------------
+// S-2b: apply(Filter::DetailLoss) 経路の非正方形・cell_size 境界・alpha 保存
+// （kako-jun/sensus#96 追加観点）
+// ---------------------------------------------------------------------------
+
+/// 32×64 の縦長グラデーション画像（gradient_64x32 の transpose 相当）。
+fn gradient_32x64() -> DynamicImage {
+    let mut img = RgbaImage::new(32, 64);
+    for y in 0..64u32 {
+        for x in 0..32u32 {
+            let v = (y * 4) as u8;
+            img.put_pixel(x, y, image::Rgba([v, v / 2, 255 - v, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// alpha が画素ごとに変化する 32×32 RGBA 画像（alpha 保存検証用）。
+fn varying_alpha_32() -> DynamicImage {
+    let mut img = RgbaImage::new(32, 32);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let v = (x * 8) as u8;
+            let a = (y * 8) as u8;
+            img.put_pixel(x, y, image::Rgba([v, 255 - v, v / 2, a]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
+/// kako-jun/sensus#96: 横長（64×32）でも apply 経路（detail_loss_with_cell_size）が
+/// 中心点サンプリングシェーダと等価。width が tile_size で割り切れない端タイルを含む。
+#[test]
+fn shader_equiv_apply_detail_loss_non_square_64x32_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = gradient_64x32();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 60.0, "apply(DetailLoss) non-square 64×32 cell_size=7: PSNR {db:.1} dB < 60 dB");
+}
+
+/// kako-jun/sensus#96: 縦長（32×64）でも apply 経路が中心点サンプリングシェーダと等価。
+/// 横長と縦長の両方を守ることで width/height の取り違えを検出する。
+#[test]
+fn shader_equiv_apply_detail_loss_non_square_32x64_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = gradient_32x64();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 60.0, "apply(DetailLoss) non-square 32×64 cell_size=7: PSNR {db:.1} dB < 60 dB");
+}
+
+/// kako-jun/sensus#96: cell_size=0 は tile_size = cell_size.max(1) = 1 で identity 早期リターン。
+/// strength を 1.0 にしても cell_size が支配的で何も変化しない契約を守る。
+#[test]
+fn apply_detail_loss_cell_size_0_identity() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let out = detail_loss_with_cell_size(img.clone(), 1.0, 0).unwrap().to_rgba8();
+    let orig = img.to_rgba8();
+    assert_eq!(out.as_raw(), orig.as_raw(), "detail_loss cell_size=0 should be identity (tile_size=max(1))");
+}
+
+/// kako-jun/sensus#96: cell_size が画像サイズを超えると全体が1タイルになり、
+/// 全画素が中心点（floor の (16,16)）の色になる。シミュレータと等価。
+#[test]
+fn shader_equiv_apply_detail_loss_cell_size_exceeds_image_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    // cell_size=100 > 32: タイルは1つ、中心 = (50,50) を clamp(31) → 右下灰
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 100).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 100);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 60.0, "apply(DetailLoss) cell_size>image: PSNR {db:.1} dB < 60 dB");
+    // 全画素が同一色（1タイルに塗り潰し）であること
+    let first = *cpu_out.get_pixel(0, 0);
+    assert!(
+        cpu_out.pixels().all(|p| p[0] == first[0] && p[1] == first[1] && p[2] == first[2]),
+        "cell_size>image: 全 RGB が単一色になるはず"
+    );
+}
+
+/// kako-jun/sensus#96: 画像幅（32）と互いに素な cell_size=5 で端タイルが半端に切れても
+/// 中心点サンプリングシェーダと等価（端タイルでの中心 clamp が正しい）。
+#[test]
+fn shader_equiv_apply_detail_loss_coprime_cell_size_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = gradient_32();
+    // gcd(32,5)=1: 端で 32 % 5 = 2px の半端タイルが残る
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 5).unwrap().to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(db >= 60.0, "apply(DetailLoss) coprime cell_size=5: PSNR {db:.1} dB < 60 dB");
+}
+
+/// kako-jun/sensus#96: 中心点方式は alpha チャンネルを変質させない。
+/// RGB はタイルごとに塗り潰されるが、各画素の alpha は入力のまま保持される。
+#[test]
+fn apply_detail_loss_preserves_alpha_per_pixel() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = varying_alpha_32();
+    let orig = img.to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), 1.0, 8).unwrap().to_rgba8();
+    // RGB は実際に変化していること（テストが無意味な identity でないことを保証）
+    assert_ne!(out.as_raw(), orig.as_raw(), "detail_loss cell_size=8 should change RGB");
+    // alpha は1画素ずつ完全一致
+    for (po, pi) in out.pixels().zip(orig.pixels()) {
+        assert_eq!(po[3], pi[3], "alpha は画素ごとに保存されるべき");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // S-3: cataract strength=1.0 のクラッシュ/動作確認テスト
 // ---------------------------------------------------------------------------
 
