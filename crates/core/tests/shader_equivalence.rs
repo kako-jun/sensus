@@ -13,16 +13,16 @@
 
 use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
-    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms,
+    achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms, dry_eye_uniforms,
     eye_strain_uniforms, glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
-    macular_degeneration_uniforms, myopia_uniforms, photophobia_uniforms, presbyopia_uniforms,
-    protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
-    vestibular_neuritis_uniforms,
+    macular_degeneration_uniforms, metamorphopsia_uniforms, myopia_uniforms, photophobia_uniforms,
+    presbyopia_uniforms, protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms,
+    tunnel_vision_uniforms, vestibular_neuritis_uniforms,
 };
 use sensus_core::vision::{
-    achromatopsia, astigmatism, deuteranopia, eye_strain, glaucoma, GlaucomaMode, hemianopia,
-    hyperopia, macular_degeneration, myopia, photophobia, presbyopia, protanopia, tetrachromacy,
-    tritanopia, tunnel_vision, vestibular_neuritis,
+    achromatopsia, astigmatism, deuteranopia, dry_eye, eye_strain, glaucoma, GlaucomaMode,
+    hemianopia, hyperopia, macular_degeneration, metamorphopsia, myopia, photophobia, presbyopia,
+    protanopia, tetrachromacy, tritanopia, tunnel_vision, vestibular_neuritis,
 };
 
 // ---------------------------------------------------------------------------
@@ -1779,6 +1779,18 @@ fn gradient_64x32() -> DynamicImage {
     DynamicImage::ImageRgba8(img)
 }
 
+/// 64×64 のグラデーション画像（複数タイルでの dry_eye / metamorphopsia 検証用）。
+fn gradient_64() -> DynamicImage {
+    let mut img = RgbaImage::new(64, 64);
+    for y in 0..64u32 {
+        for x in 0..64u32 {
+            let v = (x * 4) as u8;
+            img.put_pixel(x, y, image::Rgba([v, (v / 2).wrapping_add(y as u8), 255 - v, 255]));
+        }
+    }
+    DynamicImage::ImageRgba8(img)
+}
+
 #[test]
 fn shader_equiv_glaucoma_non_square_64x32_psnr() {
     // 非正方形（width=64, height=32, aspect=2.0）で aspect 補正が機能することを確認
@@ -2066,4 +2078,293 @@ fn shader_cataract_strength_1_runs_without_crash() {
     let out = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
     // 出力が入力と異なること（白内障フィルタが適用されている）
     assert_ne!(out.as_raw(), img.to_rgba8().as_raw(), "cataract strength=1 should change image");
+}
+
+// ---------------------------------------------------------------------------
+// #99: metamorphopsia / dry_eye ノイズモデル統一の等価性テスト（PSNR ≥ 30 dB）
+// ---------------------------------------------------------------------------
+// CPU と GLSL を同一の 32bit 整数 spatial hash + 同一の補間/disk blur に統一した。
+// 以下の sim は実 .frag を 1:1 でミラーする（別アルゴリズムのインライン化はしない）。
+
+/// metamorphopsia.frag の `gridHash` を Rust で再現する（CPU 実装と bit 一致）。
+fn metamorphopsia_grid_hash(seed: u32, gx: u32, gy: u32, axis: u32) -> f32 {
+    let mut h = seed
+        .wrapping_mul(0x9e3779b9)
+        .wrapping_add(gx.wrapping_mul(0x85ebca6b))
+        .wrapping_add(gy.wrapping_mul(0xc2b2ae35))
+        .wrapping_add(axis.wrapping_mul(0x27d4eb2f));
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a2d39);
+    h ^= h >> 15;
+    h as f32 / u32::MAX as f32
+}
+
+/// CPU `sample_bilinear` と同じ sRGB バイト空間の双線形サンプリング（edge clamp）。
+fn sample_bilinear_srgb(img: &RgbaImage, fx: f32, fy: f32) -> [u8; 4] {
+    let w = img.width() as i32;
+    let h = img.height() as i32;
+    let x0 = fx.floor() as i32;
+    let y0 = fy.floor() as i32;
+    let x1 = x0 + 1;
+    let y1 = y0 + 1;
+    let tx = fx - x0 as f32;
+    let ty = fy - y0 as f32;
+    let get = |x: i32, y: i32| -> [f32; 4] {
+        let xi = x.clamp(0, w - 1) as u32;
+        let yi = y.clamp(0, h - 1) as u32;
+        let p = img.get_pixel(xi, yi);
+        [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+    };
+    let p00 = get(x0, y0);
+    let p10 = get(x1, y0);
+    let p01 = get(x0, y1);
+    let p11 = get(x1, y1);
+    let mut out = [0u8; 4];
+    for i in 0..4 {
+        let v = p00[i] * (1.0 - tx) * (1.0 - ty)
+            + p10[i] * tx * (1.0 - ty)
+            + p01[i] * (1.0 - tx) * ty
+            + p11[i] * tx * ty;
+        out[i] = v.round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// metamorphopsia.frag を Rust で忠実にミラーする。
+fn sim_metamorphopsia_glsl(img: &RgbaImage, strength: f32, freq: f32, seed: u32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    if strength <= 0.0 {
+        return img.clone();
+    }
+    const MAX_DISP_PX: f32 = 8.0;
+    let max_disp = strength * MAX_DISP_PX;
+    let min_dim = w.min(h) as f32;
+    let freq_clamped = freq.clamp(0.1, 1000.0);
+    let cell_size = (min_dim / freq_clamped).max(1.0);
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            // CPU 整数ピクセル座標を復元（フラグメント中心 uv = (x+0.5)/w）。
+            let px_pos_x = x as f32;
+            let px_pos_y = y as f32;
+            let cx = px_pos_x / cell_size;
+            let cy = px_pos_y / cell_size;
+            let ci_x = cx.floor();
+            let ci_y = cy.floor();
+            let tx = cx - ci_x;
+            let ty = cy - ci_y;
+            let gx0 = ci_x.max(0.0) as u32;
+            let gy0 = ci_y.max(0.0) as u32;
+            let gx1 = gx0 + 1;
+            let gy1 = gy0 + 1;
+
+            let d = |gx: u32, gy: u32| -> (f32, f32) {
+                (
+                    metamorphopsia_grid_hash(seed, gx, gy, 0) * 2.0 - 1.0,
+                    metamorphopsia_grid_hash(seed, gx, gy, 1) * 2.0 - 1.0,
+                )
+            };
+            let (d00x, d00y) = d(gx0, gy0);
+            let (d10x, d10y) = d(gx1, gy0);
+            let (d01x, d01y) = d(gx0, gy1);
+            let (d11x, d11y) = d(gx1, gy1);
+
+            let disp_x = (d00x * (1.0 - tx) * (1.0 - ty)
+                + d10x * tx * (1.0 - ty)
+                + d01x * (1.0 - tx) * ty
+                + d11x * tx * ty)
+                * max_disp;
+            let disp_y = (d00y * (1.0 - tx) * (1.0 - ty)
+                + d10y * tx * (1.0 - ty)
+                + d01y * (1.0 - tx) * ty
+                + d11y * tx * ty)
+                * max_disp;
+
+            let src_x = (px_pos_x + disp_x).clamp(0.0, (w - 1) as f32);
+            let src_y = (px_pos_y + disp_y).clamp(0.0, (h - 1) as f32);
+            let p = sample_bilinear_srgb(img, src_x, src_y);
+            out.put_pixel(x, y, image::Rgba(p));
+        }
+    }
+    out
+}
+
+/// dry_eye.frag の `tileHash` を Rust で再現する（CPU 実装と bit 一致）。
+fn dry_eye_tile_hash(tx: u32, ty: u32) -> f32 {
+    const SEED: u32 = 42;
+    let mut h = SEED
+        .wrapping_mul(0x9e3779b9)
+        .wrapping_add(tx.wrapping_mul(0x85ebca6b))
+        .wrapping_add(ty.wrapping_mul(0xc2b2ae35));
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a2d39);
+    h ^= h >> 15;
+    h as f32 / u32::MAX as f32
+}
+
+/// dry_eye.frag を Rust で忠実にミラーする。
+fn sim_dry_eye_glsl(img: &RgbaImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    if strength <= 0.0 {
+        return img.clone();
+    }
+    const TILE_SIZE: f32 = 32.0;
+    const MIN_BLUR_RADIUS_PX: f32 = 0.5;
+
+    let sample_lin = |px: f32, py: f32| -> [f32; 3] {
+        let xi = (px.clamp(0.0, (w - 1) as f32)) as u32;
+        let yi = (py.clamp(0.0, (h - 1) as f32)) as u32;
+        let p = img.get_pixel(xi, yi);
+        [
+            srgb_to_linear(p[0] as f32 / 255.0),
+            srgb_to_linear(p[1] as f32 / 255.0),
+            srgb_to_linear(p[2] as f32 / 255.0),
+        ]
+    };
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let orig = *img.get_pixel(x, y);
+            let px_pos_x = x as f32;
+            let px_pos_y = y as f32;
+            let tx = (px_pos_x / TILE_SIZE).floor() as u32;
+            let ty = (px_pos_y / TILE_SIZE).floor() as u32;
+            let noise = dry_eye_tile_hash(tx, ty);
+            let blur_radius = noise * strength * 3.0;
+            if blur_radius < MIN_BLUR_RADIUS_PX {
+                continue; // passthrough
+            }
+            let r_max = blur_radius.ceil() as i32;
+            let r2 = blur_radius * blur_radius;
+            let mut acc = [0f32; 3];
+            let mut count = 0f32;
+            for dy in -r_max..=r_max {
+                for dx in -r_max..=r_max {
+                    let fdx = dx as f32;
+                    let fdy = dy as f32;
+                    if fdx * fdx + fdy * fdy <= r2 {
+                        let s = sample_lin(px_pos_x + fdx, px_pos_y + fdy);
+                        acc[0] += s[0];
+                        acc[1] += s[1];
+                        acc[2] += s[2];
+                        count += 1.0;
+                    }
+                }
+            }
+            let blurred = if count > 0.0 {
+                [acc[0] / count, acc[1] / count, acc[2] / count]
+            } else {
+                sample_lin(px_pos_x, px_pos_y)
+            };
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    orig[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_metamorphopsia_strength_1_0_psnr() {
+    // CPU と GLSL ミラーが同一の 32bit hash 変位場 + 同一補間で一致すること。
+    // 唯一の乖離源は sample_bilinear の f32 丸めと、最終セルの頂点 clamp 差（端のみ）。
+    let img = gradient_32();
+    let uni = metamorphopsia_uniforms(1.0, 4.0, 42, 32, 32);
+    let cpu_out = metamorphopsia(img.clone(), 1.0, 4.0, 42).unwrap().to_rgba8();
+    let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
+    let db = psnr(&cpu_out, &glsl);
+    assert!(db >= 30.0, "metamorphopsia strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_metamorphopsia_strength_0_5_psnr() {
+    let img = gradient_32();
+    let uni = metamorphopsia_uniforms(0.5, 8.0, 7, 32, 32);
+    let cpu_out = metamorphopsia(img.clone(), 0.5, 8.0, 7).unwrap().to_rgba8();
+    let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
+    let db = psnr(&cpu_out, &glsl);
+    assert!(db >= 30.0, "metamorphopsia strength=0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_metamorphopsia_non_square_64x32_psnr() {
+    let img = gradient_64x32();
+    let uni = metamorphopsia_uniforms(1.0, 6.0, 123, 64, 32);
+    let cpu_out = metamorphopsia(img.clone(), 1.0, 6.0, 123).unwrap().to_rgba8();
+    let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
+    let db = psnr(&cpu_out, &glsl);
+    assert!(db >= 30.0, "metamorphopsia non-square 64x32: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_metamorphopsia_strength_0_0_is_identity() {
+    // strength=0: CPU は byte-exact identity、GLSL ミラーも early return で恒等。
+    let img = gradient_32();
+    let input = img.to_rgba8();
+    let uni = metamorphopsia_uniforms(0.0, 4.0, 42, 32, 32);
+    let cpu_out = metamorphopsia(img.clone(), 0.0, 4.0, 42).unwrap().to_rgba8();
+    assert_eq!(cpu_out, input, "metamorphopsia strength=0.0: CPU が identity でない");
+    let glsl = sim_metamorphopsia_glsl(&input, uni.strength, uni.freq, uni.seed);
+    assert_eq!(glsl, input, "metamorphopsia strength=0.0: GLSL が identity でない");
+}
+
+#[test]
+fn shader_equiv_dry_eye_strength_1_0_psnr() {
+    // 64x64（複数タイル）でタイルごとに異なる blur 半径が出る。CPU と GLSL ミラーが
+    // 同一のタイルノイズ + 同一 disk blur で一致すること。
+    let img = gradient_64();
+    let cpu_out = dry_eye(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl = sim_dry_eye_glsl(&img.to_rgba8(), 1.0);
+    let db = psnr(&cpu_out, &glsl);
+    assert!(db >= 30.0, "dry_eye strength=1.0: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_dry_eye_strength_0_5_psnr() {
+    let img = gradient_64();
+    let cpu_out = dry_eye(img.clone(), 0.5).unwrap().to_rgba8();
+    let glsl = sim_dry_eye_glsl(&img.to_rgba8(), 0.5);
+    let db = psnr(&cpu_out, &glsl);
+    assert!(db >= 30.0, "dry_eye strength=0.5: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_dry_eye_non_square_64x32_psnr() {
+    let img = gradient_64x32();
+    let cpu_out = dry_eye(img.clone(), 1.0).unwrap().to_rgba8();
+    let glsl = sim_dry_eye_glsl(&img.to_rgba8(), 1.0);
+    let db = psnr(&cpu_out, &glsl);
+    assert!(db >= 30.0, "dry_eye non-square 64x32: PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_dry_eye_strength_0_0_is_identity() {
+    let img = gradient_64();
+    let input = img.to_rgba8();
+    let cpu_out = dry_eye(img.clone(), 0.0).unwrap().to_rgba8();
+    assert_eq!(cpu_out, input, "dry_eye strength=0.0: CPU が identity でない");
+    let glsl = sim_dry_eye_glsl(&input, 0.0);
+    assert_eq!(glsl, input, "dry_eye strength=0.0: GLSL が identity でない");
+}
+
+#[test]
+fn dry_eye_uniforms_texel_size_matches_resolution() {
+    // dry_eye_uniforms が texel_size = 1/解像度 を返すこと（frag が解像度復元に使う）。
+    let uni = dry_eye_uniforms(0.7, 64, 32);
+    assert_eq!(uni.strength, 0.7);
+    assert!((uni.texel_size[0] - 1.0 / 64.0).abs() < 1e-7);
+    assert!((uni.texel_size[1] - 1.0 / 32.0).abs() < 1e-7);
 }

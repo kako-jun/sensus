@@ -141,6 +141,31 @@ pub fn dry_eye_glsl() -> &'static str {
     include_str!("shaders/dry_eye.frag")
 }
 
+/// dry_eye フィルタの uniform。
+///
+/// CPU 実装 `vision::dry_eye` は 32×32 ピクセルタイルごとに seed=42 の 32bit
+/// spatial hash でノイズ値を決め、半径 `noise * strength * 3px` の等方 disk blur を
+/// linear sRGB 空間で適用する（#99 で CPU/GLSL のノイズモデルを統一）。
+/// シェーダはタイル座標とピクセル座標の算出に `uTexelSize` を必要とする。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DryEyeUniforms {
+    /// strength (0.0..=1.0)。dry_eye.frag の `uStrength` に渡す。
+    pub strength: f32,
+    /// テクセルサイズ vec2(1.0/width, 1.0/height)。dry_eye.frag の `uTexelSize` に渡す。
+    pub texel_size: [f32; 2],
+}
+
+/// dry_eye の uniform を返す。
+///
+/// `width`, `height`: 画像の幅・高さ（ピクセル）。タイル座標・disk 半径の
+/// テクスチャ座標変換に使う texel size を算出する。
+pub fn dry_eye_uniforms(strength: f32, width: u32, height: u32) -> DryEyeUniforms {
+    DryEyeUniforms {
+        strength,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
+}
+
 /// contrast_sensitivity.frag の GLSL ES 3.00 ソースを返す。
 pub fn contrast_sensitivity_glsl() -> &'static str {
     include_str!("shaders/contrast_sensitivity.frag")
@@ -677,13 +702,18 @@ pub fn metamorphopsia_glsl() -> &'static str {
 }
 
 /// Metamorphopsia シェーダーの uniform 値。
+///
+/// CPU 実装 `vision::metamorphopsia` と同一のノイズモデル（#99 で統一）。
+/// グリッド頂点ごとの変位を 32bit 整数 spatial hash（`seed` + 頂点座標）で生成し、
+/// `metamorphopsia.frag` は `uTexelSize` から解像度を復元してグリッド頂点座標を
+/// CPU と同じ整数ピクセル基準で計算する。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetamorphopsiaUniforms {
     /// 歪み強度（0.0..=1.0）
     pub strength: f32,
     /// 空間周波数（グリッド分割数）
     pub freq: f32,
-    /// LCG シード（uint で精度損失なく渡す）
+    /// 32bit spatial hash シード（u64 シードの下位 32bit。uint で精度損失なく渡す）
     pub seed: u32,
     /// テクセルサイズ (1/width, 1/height)
     pub texel_size: [f32; 2],

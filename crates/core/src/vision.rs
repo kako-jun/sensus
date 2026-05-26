@@ -2242,12 +2242,15 @@ pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// 歪視（Metamorphopsia）シミュレーション。
 ///
 /// 黄斑疾患（黄斑円孔・黄斑上膜・加齢黄斑変性など）で生じる格子状の歪み（Amsler grid
-/// 歪曲）を模擬する。LCG ベースのグリッドノイズで各ピクセルを変位座標からサンプリングする。
+/// 歪曲）を模擬する。グリッド頂点ごとの決定論的ノイズで各ピクセルを変位座標から
+/// サンプリングする。
 ///
 /// ## アルゴリズム
 ///
 /// 画像を `1/freq` ピクセル単位の仮想グリッドに分割し、各グリッド頂点に
-/// LCG 擬似ランダムな変位ベクトル `(dx, dy)` を割り当てる。
+/// 32bit 整数 spatial hash で擬似ランダムな変位ベクトル `(dx, dy)` を割り当てる。
+/// ノイズは seed と頂点座標だけの決定論的関数で、`metamorphopsia.frag` の `gridHash`
+/// と bit 単位に一致する（#99 で CPU/GLSL のノイズモデルを統一）。
 /// 各出力ピクセルについて、所属するグリッドセルの 4 頂点の変位を双線形補間し、
 /// その変位でサンプリング座標を移動して元画像をサンプリングする。
 /// エッジは clamp で処理する。
@@ -2283,32 +2286,38 @@ pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) ->
     let grid_w = (width as f32 / cell_size).ceil() as usize + 2;
     let grid_h = (height as f32 / cell_size).ceil() as usize + 2;
 
-    // LCG 定数（Knuth / Numerical Recipes）
-    let lcg_step = |state: u64| -> u64 {
-        state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407)
+    // グリッド頂点ごとの変位を 32bit 整数ハッシュで生成する。
+    //
+    // #99: GLSL ES 3.00 の `uint`（32bit）で bit 単位に再現できるよう、
+    // 旧 64bit Knuth LCG（`(state>>32)` の高位ビット抽出を含む）から、
+    // 純粋な 32bit 整数 spatial hash に変更した。各頂点の値は seed と頂点座標
+    // (gx, gy) だけの決定論的関数で、逐次状態を持たない（並列・GPU 再現可能）。
+    // `metamorphopsia.frag` の `gridHash` と完全に同一の系列を出す（u32 演算は
+    // GLSL の `uint` 同様 mod 2^32 で wrap する）。
+    //
+    // 唯一の乖離源はサンプリング段の f32 丸めのみで、変位場は CPU↔GLSL で一致する。
+    let seed32 = seed as u32;
+    // 1 頂点・1 軸ぶんの 32bit ハッシュ（axis: 0=dx, 1=dy）。0.0..=1.0 を返す。
+    let grid_hash = |gx: u32, gy: u32, axis: u32| -> f32 {
+        // 各入力を 32bit 黄金比定数で混合してから XOR-shift で雪崩効果を付ける。
+        let mut h = seed32
+            .wrapping_mul(0x9e3779b9)
+            .wrapping_add(gx.wrapping_mul(0x85ebca6b))
+            .wrapping_add(gy.wrapping_mul(0xc2b2ae35))
+            .wrapping_add(axis.wrapping_mul(0x27d4eb2f));
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2c1b3c6d);
+        h ^= h >> 12;
+        h = h.wrapping_mul(0x297a2d39);
+        h ^= h >> 15;
+        h as f32 / u32::MAX as f32 // 0.0..=1.0
     };
 
-    // 各グリッド頂点の変位 (dx, dy) を LCG で生成する。
-    // シードは頂点座標とグローバルシードを混合して決定する（空間的再現性を確保）。
     let grid_disp: Vec<(f32, f32)> = (0..grid_h)
         .flat_map(|gy| (0..grid_w).map(move |gx| (gx, gy)))
         .map(|(gx, gy)| {
-            // 頂点ごとに独立したシードを生成する。
-            // seed との混合で異なる grid_size でもシードが衝突しにくい。
-            let h0 = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            let h1 = h0
-                .wrapping_add((gx as u64).wrapping_mul(0x9e3779b97f4a7c15))
-                .wrapping_add((gy as u64).wrapping_mul(0x6c62272e07bb0142));
-            // dx
-            let s1 = lcg_step(h1);
-            let dx_norm = (s1 >> 32) as f32 / u32::MAX as f32; // 0.0..=1.0
-            // dy
-            let s2 = lcg_step(s1);
-            let dy_norm = (s2 >> 32) as f32 / u32::MAX as f32;
+            let dx_norm = grid_hash(gx as u32, gy as u32, 0);
+            let dy_norm = grid_hash(gx as u32, gy as u32, 1);
             // [-1, 1] に変換してから max_disp を掛ける
             let dx = (dx_norm * 2.0 - 1.0) * max_disp;
             let dy = (dy_norm * 2.0 - 1.0) * max_disp;
@@ -2367,13 +2376,18 @@ pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) ->
 
 /// ドライアイ（dry eye）シミュレーション。
 ///
-/// LCG（seed=42 固定）で生成したノイズマスクを基に、
-/// 32×32 タイルごとに異なる disk blur radius を適用する。
+/// 32bit 整数 spatial hash（seed=42 固定）で生成したタイルごとのノイズを基に、
+/// 32×32 ピクセルタイルごとに異なる等方 disk blur radius（`noise * strength * 3px`）を
+/// linear sRGB 空間で適用する。
 ///
 /// `strength = 0.0` は元画像と完全一致。
 ///
 /// シード値は内部で固定（42）のため、同一入力に対して毎回同一のノイズパターンになります。
 /// フレームごとに異なるパターンが必要な場合は将来の `dry_eye_with_seed(img, strength, seed)` を使用してください（未実装）。
+///
+/// #99: タイルノイズを行優先の逐次 64bit LCG から、タイル座標だけの決定論的 32bit
+/// spatial hash に変更した。これにより `dry_eye.frag` がフラグメント単位で同じノイズ場・
+/// 同じ disk blur を単一パスで再現でき、CPU↔GLSL が等価になった（PSNR で担保）。
 pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -2386,12 +2400,27 @@ pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let (linear, alpha) = rgba_to_linear_planes(&rgba);
 
     const TILE_SIZE: u32 = 32;
+    // ドライアイの seed（固定 42）。タイルごとのノイズ生成に使う。
+    const DRY_EYE_SEED: u32 = 42;
 
-    // LCG 定数（Numerical Recipes）
-    let lcg_next = |state: u64| -> u64 {
-        state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407)
+    // タイルごとの 32bit 整数 spatial hash（0.0..=1.0）。
+    //
+    // #99: 旧実装はタイルを行優先で走査しながら 64bit LCG 状態を逐次更新していた
+    // （各タイルのノイズが先行タイル数 = タイルグリッド寸法に依存していた）。これは
+    // フラグメントシェーダの並列実行では再現できない。各タイルのノイズを seed と
+    // タイル座標 (tx, ty) だけの決定論的関数に変更し、`dry_eye.frag` の `tileHash` と
+    // 完全に同一の系列を出す（u32 演算は GLSL の uint 同様 mod 2^32 で wrap）。
+    let tile_hash = |tx: u32, ty: u32| -> f32 {
+        let mut h = DRY_EYE_SEED
+            .wrapping_mul(0x9e3779b9)
+            .wrapping_add(tx.wrapping_mul(0x85ebca6b))
+            .wrapping_add(ty.wrapping_mul(0xc2b2ae35));
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2c1b3c6d);
+        h ^= h >> 12;
+        h = h.wrapping_mul(0x297a2d39);
+        h ^= h >> 15;
+        h as f32 / u32::MAX as f32 // 0.0..=1.0
     };
 
     // タイル数を計算
@@ -2402,12 +2431,10 @@ pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let mut out_linear = linear.clone();
 
     // タイルごとに disk blur を適用して出力バッファに書き込む
-    let mut state: u64 = 42u64.wrapping_mul(6364136223846793005).wrapping_add(1);
     for ty in 0..tile_rows {
         for tx in 0..tile_cols {
-            state = lcg_next(state);
-            // 0.0..=1.0 のノイズ値（nit-2: (state >> 33) as f32 / (1u64 << 31) as f32）
-            let noise = (state >> 33) as f32 / (1u64 << 31) as f32;
+            // 0.0..=1.0 のノイズ値（タイル座標の spatial hash）
+            let noise = tile_hash(tx, ty);
             let blur_radius = noise * s * 3.0;
             if blur_radius < MIN_BLUR_RADIUS_PX {
                 // blur なし: 元の値をそのままコピー（既に out_linear に入っている）
