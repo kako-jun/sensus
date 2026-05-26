@@ -1161,6 +1161,69 @@ fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32, 
     out
 }
 
+/// glaucoma.frag の弧状暗点モード（uMode=1/2/3）を Rust で再現する。
+///
+/// glaucoma.frag の `arcuateMul` を width 正規化座標で 1 対 1 にミラーする。
+/// `apply_superior` / `apply_inferior` は uMode に対応:
+///   ArcuateSuperior=(true,false), ArcuateInferior=(false,true), Biarcuate=(true,true)
+fn sim_glaucoma_arcuate(
+    img: &RgbaImage,
+    strength: f32,
+    aspect: f32,
+    apply_superior: bool,
+    apply_inferior: bool,
+) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            // UV 座標（pixel center）。GLSL の vTexCoord と同じ。
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+
+            let dx_n = u - 0.65;
+            let dy_n = (v - 0.5) / aspect;
+            let r_n = dx_n.hypot(dy_n);
+
+            let min_dim_n = (1.0_f32).min(1.0 / aspect);
+            let r_min = min_dim_n * 0.20;
+            let r_max = min_dim_n * 0.55 * strength.sqrt();
+
+            let mul = if r_n <= r_min || r_n >= r_max {
+                1.0
+            } else {
+                let t_r = (r_n - r_min) / (r_max - r_min);
+                let fade_r = t_r * t_r * (3.0 - 2.0 * t_r);
+                let fade_radial = 1.0 - (fade_r * 2.0 - 1.0).abs();
+
+                let in_superior = dy_n < 0.0;
+                let in_inferior = dy_n > 0.0;
+                let in_arc =
+                    (apply_superior && in_superior) || (apply_inferior && in_inferior);
+                if !in_arc {
+                    1.0
+                } else {
+                    let theta = dy_n.atan2(dx_n);
+                    let arc_fade = theta.sin().abs().sqrt().clamp(0.0, 1.0);
+                    1.0 - strength * fade_radial * arc_fade
+                }
+            };
+
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0);
+            let gl = srgb_to_linear(px[1] as f32 / 255.0);
+            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            out.put_pixel(x, y, image::Rgba([
+                (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                px[3],
+            ]));
+        }
+    }
+    out
+}
+
 /// macular_degeneration.frag の計算を Rust で再現する。
 fn sim_macular_degeneration(img: &RgbaImage, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
@@ -1292,7 +1355,7 @@ fn sim_hemianopia(img: &RgbaImage, strength: f32, side_glsl: f32) -> RgbaImage {
 #[test]
 fn shader_equiv_glaucoma_strength_1_0_psnr() {
     let img = gradient_32();
-    let u = glaucoma_uniforms(1.0, 32, 32);
+    let u = glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
@@ -1304,7 +1367,7 @@ fn shader_equiv_glaucoma_strength_1_0_psnr() {
 #[test]
 fn shader_equiv_glaucoma_strength_0_5_psnr() {
     let img = color_chart_32();
-    let u = glaucoma_uniforms(0.5, 32, 32);
+    let u = glaucoma_uniforms(0.5, 32, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 0.5, GlaucomaMode::Vignette).unwrap().to_rgba8();
@@ -1796,7 +1859,7 @@ fn gradient_64() -> DynamicImage {
 fn shader_equiv_glaucoma_non_square_64x32_psnr() {
     // 非正方形（width=64, height=32, aspect=2.0）で aspect 補正が機能することを確認
     let img = gradient_64x32();
-    let u = glaucoma_uniforms(1.0, 64, 32);
+    let u = glaucoma_uniforms(1.0, 64, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
     let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
@@ -3231,19 +3294,102 @@ fn cataract_yellowing_is_warm_shift_cpu() {
 }
 
 // ---------------------------------------------------------------------------
-// glaucoma 弧状暗点（ArcuateSuperior/Inferior/Biarcuate）— GLSL 未実装（移植漏れ）
+// glaucoma 弧状暗点（ArcuateSuperior/Inferior/Biarcuate）CPU↔GLSL 等価検証
 //
-// #100 調査結果: glaucoma.frag は Vignette モード（中心保存 + 周辺 smoothstep
-// 暗化）しか実装していない。極座標 Bjerrum 弧状暗点マスク（vision::glaucoma の
-// ArcuateSuperior/Inferior/Biarcuate）は .frag に一切存在せず、モード選択用の
-// uniform も無い。よって弧状モードの CPU↔GLSL 等価テストは作れない（移植漏れ）。
-//
-// → 別 Issue 化を提案: 「glaucoma.frag に弧状暗点（極座標マスク）モードを追加」。
-//   ここでは CPU 弧状モードの非クラッシュ・効果・恒等のみ検証する。
+// #123 で glaucoma.frag に極座標 Bjerrum 弧状暗点モード（uMode=1/2/3）を実装した。
+// sim_glaucoma_arcuate が .frag の arcuateMul を width 正規化座標で 1 対 1 にミラー
+// し、CPU vision::glaucoma の弧状モードと PSNR で等価検証する。
+// CPU は pixel 座標、GLSL/sim は pixel-center UV のため約 0.5px のサンプリング差が
+// 残るが、他フィルタ同様 PSNR しきい値で吸収される。
 // ---------------------------------------------------------------------------
 
+/// GlaucomaMode → (apply_superior, apply_inferior)。sim と CPU の対応。
+fn arcuate_flags(mode: GlaucomaMode) -> (bool, bool) {
+    match mode {
+        GlaucomaMode::ArcuateSuperior => (true, false),
+        GlaucomaMode::ArcuateInferior => (false, true),
+        GlaucomaMode::Biarcuate => (true, true),
+        GlaucomaMode::Vignette => (false, false),
+    }
+}
+
 #[test]
-fn glaucoma_arcuate_modes_run_without_crash_and_have_effect() {
+fn shader_equiv_glaucoma_arcuate_strength_1_0_psnr() {
+    let img = gradient_32();
+    for mode in [
+        GlaucomaMode::ArcuateSuperior,
+        GlaucomaMode::ArcuateInferior,
+        GlaucomaMode::Biarcuate,
+    ] {
+        let u = glaucoma_uniforms(1.0, 32, 32, mode);
+        let (sup, inf) = arcuate_flags(mode);
+        let cpu_out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
+        let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
+        let db = psnr(&cpu_out, &gpu_sim);
+        assert!(db >= 30.0, "glaucoma {mode:?} strength=1.0: PSNR {db:.1} dB < 30 dB");
+    }
+}
+
+#[test]
+fn shader_equiv_glaucoma_arcuate_strength_0_5_psnr() {
+    let img = color_chart_32();
+    for mode in [
+        GlaucomaMode::ArcuateSuperior,
+        GlaucomaMode::ArcuateInferior,
+        GlaucomaMode::Biarcuate,
+    ] {
+        let u = glaucoma_uniforms(0.5, 32, 32, mode);
+        let (sup, inf) = arcuate_flags(mode);
+        let cpu_out = glaucoma(img.clone(), 0.5, mode).unwrap().to_rgba8();
+        let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
+        let db = psnr(&cpu_out, &gpu_sim);
+        assert!(db >= 30.0, "glaucoma {mode:?} strength=0.5: PSNR {db:.1} dB < 30 dB");
+    }
+}
+
+#[test]
+fn shader_equiv_glaucoma_arcuate_strength_0_0_identity_psnr() {
+    // strength=0.0 は CPU が早期 return（恒等）。GLSL/sim も rMax=0 で全画素 mul=1。
+    let img = gradient_32();
+    for mode in [
+        GlaucomaMode::ArcuateSuperior,
+        GlaucomaMode::ArcuateInferior,
+        GlaucomaMode::Biarcuate,
+    ] {
+        let u = glaucoma_uniforms(0.0, 32, 32, mode);
+        let (sup, inf) = arcuate_flags(mode);
+        let cpu_out = glaucoma(img.clone(), 0.0, mode).unwrap().to_rgba8();
+        let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
+        // CPU は完全恒等、sim も完全恒等のはず → PSNR 無限大相当
+        assert_eq!(cpu_out.as_raw(), gpu_sim.as_raw(), "{mode:?} strength=0.0 は両者恒等");
+        assert_eq!(
+            cpu_out.as_raw(),
+            img.to_rgba8().as_raw(),
+            "{mode:?} strength=0.0 は入力と一致"
+        );
+    }
+}
+
+#[test]
+fn shader_equiv_glaucoma_arcuate_non_square_64x32_psnr() {
+    // 非正方形（aspect=2.0）で width 正規化の aspect 補正が CPU と一致することを確認。
+    let img = gradient_64x32();
+    for mode in [
+        GlaucomaMode::ArcuateSuperior,
+        GlaucomaMode::ArcuateInferior,
+        GlaucomaMode::Biarcuate,
+    ] {
+        let u = glaucoma_uniforms(1.0, 64, 32, mode);
+        let (sup, inf) = arcuate_flags(mode);
+        let cpu_out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
+        let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
+        let db = psnr(&cpu_out, &gpu_sim);
+        assert!(db >= 30.0, "glaucoma {mode:?} non-square 64×32: PSNR {db:.1} dB < 30 dB");
+    }
+}
+
+#[test]
+fn glaucoma_arcuate_modes_have_effect() {
     let img = solid_rgba(64, 64, [180, 180, 180, 255]);
     let input = img.to_rgba8();
     for mode in [
@@ -3263,6 +3409,7 @@ fn glaucoma_arcuate_modes_run_without_crash_and_have_effect() {
 #[test]
 fn glaucoma_arcuate_superior_inferior_differ() {
     // 上方弧状と下方弧状は異なる領域を暗化する（極座標マスクの上下非対称性）。
+    // CPU・sim 両方で上下が反転することを確認する。
     let img = solid_rgba(64, 64, [180, 180, 180, 255]);
     let sup = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateSuperior).unwrap().to_rgba8();
     let inf = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateInferior).unwrap().to_rgba8();
@@ -3271,6 +3418,21 @@ fn glaucoma_arcuate_superior_inferior_differ() {
         inf.as_raw(),
         "ArcuateSuperior と ArcuateInferior が同一出力（上下マスクが効いていない）"
     );
+
+    let raw = img.to_rgba8();
+    let sim_sup = sim_glaucoma_arcuate(&raw, 1.0, 1.0, true, false);
+    let sim_inf = sim_glaucoma_arcuate(&raw, 1.0, 1.0, false, true);
+    assert_ne!(
+        sim_sup.as_raw(),
+        sim_inf.as_raw(),
+        "sim でも上方/下方弧状が同一出力"
+    );
+    // superior は上半分（y<32）、inferior は下半分（y>32）が暗化されるはず。
+    // 中心列 x=32 で上下の代表点を比較する。
+    let top = sim_sup.get_pixel(32, 8)[0];
+    let bot = sim_inf.get_pixel(32, 56)[0];
+    assert!(top < 180, "superior は上方を暗化すべき (top={top})");
+    assert!(bot < 180, "inferior は下方を暗化すべき (bot={bot})");
 }
 
 #[test]
