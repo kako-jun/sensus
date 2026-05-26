@@ -687,6 +687,14 @@ pub struct VestibularNeuritisUniforms {
 pub struct VertigoUniforms {
     pub strength: f32,
     pub time: f32,
+    /// アスペクト比（width / height）。GLSL の `uAspect`。回転を
+    /// ピクセル比例空間で行い、非正方形でも CPU 実装と一致させる。
+    pub aspect: f32,
+    /// disk blur 半径（ピクセル単位）。GLSL の `uRadiusPx`。
+    /// `strength * 0.015 * min(width, height)`。
+    pub radius_px: f32,
+    /// テクセルサイズ vec2(1/width, 1/height)。GLSL の `uTexelSize`。
+    pub texel_size: [f32; 2],
 }
 
 /// bppv_rotation フィルタの uniform。
@@ -694,6 +702,9 @@ pub struct VertigoUniforms {
 pub struct BppvRotationUniforms {
     pub strength: f32,
     pub time: f32,
+    /// アスペクト比（width / height）。GLSL の `uAspect`。回転を
+    /// ピクセル比例空間で行い、非正方形でも CPU 実装と一致させる。
+    pub aspect: f32,
 }
 
 /// floaters フィルタの uniform。
@@ -721,13 +732,37 @@ pub fn vestibular_neuritis_uniforms(strength: f32, width: u32, height: u32) -> V
 }
 
 /// vertigo の uniform を計算する。
-pub fn vertigo_uniforms(strength: f32, time: f32) -> VertigoUniforms {
-    VertigoUniforms { strength, time }
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正と disk blur
+/// 半径（`strength * 0.015 * min(width, height)`）の算出に使う。
+pub fn vertigo_uniforms(strength: f32, time: f32, width: u32, height: u32) -> VertigoUniforms {
+    let min_dim = width.min(height) as f32;
+    // CPU 実装 (vision::normalize_strength) は NaN を 0 (identity) として扱う。
+    // clamp 単体は NaN を NaN のまま返すため、ここでも NaN→0 に正規化して
+    // radius_px が NaN にならないようにする。
+    let strength_norm = if strength.is_nan() {
+        0.0
+    } else {
+        strength.clamp(0.0, 1.0)
+    };
+    VertigoUniforms {
+        strength,
+        time,
+        aspect: width as f32 / height as f32,
+        radius_px: strength_norm * 0.015 * min_dim,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
 }
 
 /// bppv_rotation の uniform を計算する。
-pub fn bppv_rotation_uniforms(strength: f32, time: f32) -> BppvRotationUniforms {
-    BppvRotationUniforms { strength, time }
+///
+/// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使う。
+pub fn bppv_rotation_uniforms(strength: f32, time: f32, width: u32, height: u32) -> BppvRotationUniforms {
+    BppvRotationUniforms {
+        strength,
+        time,
+        aspect: width as f32 / height as f32,
+    }
 }
 
 /// floaters の uniform を計算する。
