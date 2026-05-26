@@ -2168,11 +2168,15 @@ pub fn starbursts(
 
 /// 眼精疲労（eye strain）シミュレーション。
 ///
-/// - コントラスト圧縮: `v' = 0.5 + (v - 0.5) * (1.0 - strength * 0.15)`
-/// - 微小 disk blur（radius = strength * 1.5 px）
-/// - 周辺 vignette（軽め）
+/// 処理順序（linear sRGB 空間）:
+/// 1. コントラスト圧縮: `v' = 0.5 + (v - 0.5) * (1.0 - strength * 0.15)`
+/// 2. 周辺 vignette（軽め）: `1.0 - strength * 0.3 * smoothstep(0.3, 1.2, d)`
+/// 3. 微小 disk（pillbox）blur（radius = strength * 1.5 px、厳密 pillbox）
 ///
 /// `strength = 0.0` は元画像と完全一致。
+///
+/// GLSL 版 `eye_strain.frag` は同一順序・同一式だが、単一パス制約のため手順 3 の
+/// 厳密 pillbox を Fibonacci lattice 16 tap で近似する（CPU が正本）。乖離は PSNR で担保。
 pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();

@@ -14,7 +14,7 @@
 use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
     achromatopsia_uniforms, astigmatism_uniforms, deuteranopia_uniforms,
-    glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
+    eye_strain_uniforms, glaucoma_uniforms, hemianopia_uniforms, hyperopia_uniforms,
     macular_degeneration_uniforms, myopia_uniforms, photophobia_uniforms, presbyopia_uniforms,
     protanopia_uniforms, tetrachromacy_uniforms, tritanopia_uniforms, tunnel_vision_uniforms,
     vestibular_neuritis_uniforms,
@@ -777,39 +777,98 @@ fn make_test_image() -> DynamicImage {
     gradient_32()
 }
 
-/// eye_strain の GLSL シェーダ処理を Rust で再現する。
-/// sRGB decode → contrast compression → vignette → sRGB encode
-fn simulate_eye_strain_glsl(img: &DynamicImage, strength: f32) -> RgbaImage {
+/// eye_strain.frag を Rust で再現する。
+///
+/// .frag と同一の式（処理順序も一致）:
+/// - processedAt(uv): contrast 圧縮 + vignette を済ませた linear sRGB
+///   - compressed = 0.5 + (lin - 0.5) * (1.0 - strength * 0.15)
+///   - vignette   = 1.0 - strength * 0.3 * smoothstep(0.3, 1.2, dot(nuv, nuv))
+/// - disk blur: 半径 < 0.5px なら center のみ、それ以外は Fibonacci lattice 16 tap で
+///   processedAt を円盤状に平均（CPU の厳密 pillbox を 16tap で近似）
+/// - out = sRGB encode
+///
+/// `radius_px`, `texel_size` は `eye_strain_uniforms()` の値を渡す（.frag の
+/// uRadiusPx / uTexelSize に対応）。
+fn simulate_eye_strain_glsl(
+    img: &DynamicImage,
+    strength: f32,
+    radius_px: f32,
+    texel_size: [f32; 2],
+) -> RgbaImage {
+    const N: usize = 16;
+    const PHI: f32 = 2.399_963_2; // 黄金角（.frag と同じ）
+    const MIN_RADIUS_PX: f32 = 0.5;
     let src = img.to_rgba8();
     let (w, h) = src.dimensions();
+    let texel_w = texel_size[0];
+    let texel_h = texel_size[1];
+
+    // texture(uTexture, uv) の clamp-to-edge サンプリング → contrast+vignette 済み linear sRGB
+    let processed_at = |u: f32, v: f32| -> [f32; 3] {
+        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
+        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+        let px = src.get_pixel(px_x, px_y);
+        let lin = [
+            srgb_to_linear(px[0] as f32 / 255.0),
+            srgb_to_linear(px[1] as f32 / 255.0),
+            srgb_to_linear(px[2] as f32 / 255.0),
+        ];
+        // contrast compression in linear space
+        let cf = 1.0 - strength * 0.15;
+        let c = [
+            0.5 + (lin[0] - 0.5) * cf,
+            0.5 + (lin[1] - 0.5) * cf,
+            0.5 + (lin[2] - 0.5) * cf,
+        ];
+        // vignette（uv = texcoord*2-1。texcoord は .frag と同じく u, v をそのまま使う）
+        let nx = u * 2.0 - 1.0;
+        let ny = v * 2.0 - 1.0;
+        let d = nx * nx + ny * ny;
+        let t = ((d - 0.3) / (1.2 - 0.3)).clamp(0.0, 1.0);
+        let sm = t * t * (3.0 - 2.0 * t);
+        let vignette = 1.0 - strength * 0.3 * sm;
+        [
+            (c[0] * vignette).clamp(0.0, 1.0),
+            (c[1] * vignette).clamp(0.0, 1.0),
+            (c[2] * vignette).clamp(0.0, 1.0),
+        ]
+    };
+
     let mut out = src.clone();
     for y in 0..h {
         for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+
+            let result = if radius_px < MIN_RADIUS_PX {
+                // blur なし（contrast+vignette のみ）
+                processed_at(u, v)
+            } else {
+                // disk blur 近似（Fibonacci lattice 16 tap）
+                let mut acc = [0f32; 3];
+                for i in 0..N {
+                    let ft = i as f32 / N as f32;
+                    let r = ft.sqrt() * radius_px;
+                    let theta = i as f32 * PHI;
+                    let s = processed_at(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
+                    acc[0] += s[0];
+                    acc[1] += s[1];
+                    acc[2] += s[2];
+                }
+                [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32]
+            };
+
             let px = src.get_pixel(x, y);
-            // decode to linear
-            let r = srgb_to_linear(px[0] as f32 / 255.0);
-            let g = srgb_to_linear(px[1] as f32 / 255.0);
-            let b = srgb_to_linear(px[2] as f32 / 255.0);
-            // contrast compression in linear space
-            let cr = 0.5 + (r - 0.5) * (1.0 - strength * 0.15);
-            let cg = 0.5 + (g - 0.5) * (1.0 - strength * 0.15);
-            let cb = 0.5 + (b - 0.5) * (1.0 - strength * 0.15);
-            // vignette: v_texcoord = (x+0.5)/w, (y+0.5)/h → uv = texcoord*2-1
-            let uv_x = (x as f32 + 0.5) / w as f32 * 2.0 - 1.0;
-            let uv_y = (y as f32 + 0.5) / h as f32 * 2.0 - 1.0;
-            let d = uv_x * uv_x + uv_y * uv_y;
-            let t = ((d - 0.3) / (1.2 - 0.3)).clamp(0.0, 1.0);
-            let sm = t * t * (3.0 - 2.0 * t);
-            let vignette = 1.0 - strength * 0.3 * sm;
-            let fr = (cr * vignette).clamp(0.0, 1.0);
-            let fg = (cg * vignette).clamp(0.0, 1.0);
-            let fb = (cb * vignette).clamp(0.0, 1.0);
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(fr) * 255.0).round() as u8,
-                (linear_to_srgb(fg) * 255.0).round() as u8,
-                (linear_to_srgb(fb) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(result[0]) * 255.0).round() as u8,
+                    (linear_to_srgb(result[1]) * 255.0).round() as u8,
+                    (linear_to_srgb(result[2]) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -825,12 +884,28 @@ fn simulate_eye_strain_glsl(img: &DynamicImage, strength: f32) -> RgbaImage {
 
 #[test]
 fn shader_equiv_eye_strain_strength_1_0_psnr() {
-    // CPU と GLSL シミュレータの一致を PSNR ≥ 30 dB で確認
+    // CPU（厳密 pillbox blur）と GLSL シミュレータ（16tap lattice 近似）の一致を
+    // PSNR ≥ 30 dB で確認。blur 半径 = 1.5px と小さいため近似誤差は小さい。
     let img = make_test_image();
+    let (w, h) = img.to_rgba8().dimensions();
+    let uni = eye_strain_uniforms(1.0, w, h);
     let cpu_out = eye_strain(img.clone(), 1.0).unwrap().to_rgba8();
-    let glsl_out = simulate_eye_strain_glsl(&img, 1.0);
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
     let db = psnr(&cpu_out, &glsl_out);
     assert!(db >= 30.0, "eye_strain PSNR {db:.1} dB < 30 dB");
+}
+
+#[test]
+fn shader_equiv_eye_strain_strength_0_5_psnr() {
+    // strength=0.5 では radius = 0.75px。MIN_BLUR_RADIUS_PX(0.5) を上回るため
+    // CPU・GLSL ともに blur 段が有効。
+    let img = make_test_image();
+    let (w, h) = img.to_rgba8().dimensions();
+    let uni = eye_strain_uniforms(0.5, w, h);
+    let cpu_out = eye_strain(img.clone(), 0.5).unwrap().to_rgba8();
+    let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
+    let db = psnr(&cpu_out, &glsl_out);
+    assert!(db >= 30.0, "eye_strain strength=0.5: PSNR {db:.1} dB < 30 dB");
 }
 
 // ---------------------------------------------------------------------------
