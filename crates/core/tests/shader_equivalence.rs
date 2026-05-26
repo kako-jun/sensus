@@ -3189,9 +3189,11 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
 }
 
 #[test]
-fn shader_equiv_cataract_noise_hash_diverges() {
-    // 黄変 + 白濁ノイズ込みで CPU と GLSL を比較。LCG ハッシュが異なるため、
-    // ノイズ項を持つ非単色画像では一致しないことを「明示的に」記録する。
+fn finding_cataract_noise_hash_diverges() {
+    // 黄変 + 白濁ノイズ込みで CPU と GLSL を比較。CPU は 64bit LCG の高位ビット抽出、
+    // GLSL/sim は 32bit ハッシュ切り詰めでノイズ系列が別物。加えて格子サンプリング規約も
+    // 食い違う（CPU は整数ピクセル index px/CELL、.frag は (x+0.5)/CELL の 0.5px オフセット）。
+    // どちらの要因でも非単色画像では一致しないことを「明示的に」記録する。
     // （仮の等価テストで誤魔化さず、乖離の存在自体をテストで固定する。）
     use sensus_core::vision::cataract;
     let img = gradient_32();
@@ -3209,14 +3211,11 @@ fn shader_equiv_cataract_noise_hash_diverges() {
 }
 
 #[test]
-fn shader_equiv_cataract_yellowing_matches_when_noise_disabled() {
-    // 黄変マトリクス成分だけを切り分けて CPU↔GLSL 一致を確認する。
-    // noise を 0 に固定した参照 sim を作り、CPU の「黄変のみ相当」と比較する…
-    // のは CPU 側の noise を消せないため不可。代わりに「白濁ノイズが乗らない
-    // 黒画像」を使う: 黒(0,0,0) では yr=yg=yb=0 かつ white_blend は
-    // (1-0)*wb=wb のぶんだけ全チャネルを持ち上げる。これも noise 依存なので、
-    // ここでは黄変が効く有彩色で「CPU の出力が GLSL noise-sim とは異なるが、
-    // 黄変方向（R/B 比が暖色側へ）は CPU 単体で正しい」ことを確認する。
+fn cataract_yellowing_is_warm_shift_cpu() {
+    // CPU 単体の検証: 黄変マトリクスが暖色シフト（R/B 比が暖色側へ）を起こすこと。
+    // GLSL との一致は主張しない（白濁ノイズ項が CPU と GLSL で別系列のため、
+    // 黄変成分だけを切り分けて CPU↔GLSL 比較するのは noise を消せず不可）。
+    // CPU↔GLSL の乖離自体は finding_cataract_noise_hash_diverges で記録済み。
     use sensus_core::vision::cataract;
     // strength を小さく取り white_blend(=s*noise*0.4) の寄与を抑える。
     let input = solid_rgba(32, 32, [200, 120, 200, 255]); // R=B のマゼンタ
