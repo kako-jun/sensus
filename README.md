@@ -1,17 +1,19 @@
 # sensus
 
-**Sensory perception simulation for images** — apply color blindness, low
-vision, visual field defects, and (soon) hearing loss filters to ordinary
-photos. Built as a Rust crate so it can power accessibility demos,
-educational tools, and apps like
+**Sensory perception simulation for images and audio** — apply color
+blindness, low vision, visual field defects, and hearing loss filters to
+ordinary photos and audio buffers. Built as a Rust crate so it can power
+accessibility demos, educational tools, and apps like
 [universal-experience](https://github.com/kako-jun/universal-experience).
 
 > *sensus* (Latin) — "sense, perception, feeling".
 
 ## Status
 
-**v0.1.0** — stable release on [crates.io](https://crates.io/crates/sensus).
-All Phase 1–3 vision filters are implemented. See
+**v0.4.0** — stable release on [crates.io](https://crates.io/crates/sensus).
+All vision filters through Phase 4 (color vision, refraction, visual field,
+light/transparency, balance/vertigo, eye fatigue, and more) are implemented,
+plus 11 hearing-loss filters in the library. See
 [`docs/roadmap.md`](docs/roadmap.md) for the full phase tracker.
 
 ## Filters
@@ -36,12 +38,36 @@ All Phase 1–3 vision filters are implemented. See
 | `cataract`              | ✅ implemented | 3 (#6) | Haze overlay |
 | `floaters`              | ✅ implemented | 3 (#6) | Translucent blob compositing |
 | `photophobia`           | ✅ implemented | 3 (#6) | Brightness boost and highlight halation |
-| `nyctalopia`            | ✅ implemented | 3 (#6) | Darkening and desaturation (night-blindness) |
+| `night-blindness`       | ✅ implemented | 3 (#6) | Darkening and desaturation (nyctalopia) |
+| `vertigo`               | ✅ implemented | 4 (#9) | Rotational displacement / dizziness |
+| `bppv-rotation`         | ✅ implemented | 4 (#9) | Positional vertigo rotation |
+| `vestibular-neuritis`   | ✅ implemented | 4 (#9) | Sustained spinning + blur |
+| `diplopia`              | ✅ implemented | 4 (#29) | Double vision (ghost image offset) |
+| `nystagmus`             | ✅ implemented | 4 (#29) | Involuntary directional motion blur |
+| `starbursts`            | ✅ implemented | 4 (#29) | Light starbursts / glare from highlights |
+| `eye-strain`            | ✅ implemented | 4 (#36) | Contrast loss, vignette, slight blur |
+| `dry-eye`               | ✅ implemented | 4 (#36) | Tear-film tile distortion |
 
-### Hearing (Phase 4)
+Additional vision filters available through the library `Filter` enum:
+`metamorphopsia` (#55), `contrast_sensitivity` (#56), `detail_loss` (#57),
+`teichopsia` (#58), and `flickering_stars`.
 
-- Hearing loss curves, pitch shift, balance / vertigo simulation applied
-  to audio buffers (#7, #8, #9).
+Depth-aware refraction is also available **CLI-side only** via
+`--filter myopia-depth` / `hyperopia-depth` / `depth-of-field` combined with
+`--depth`, `--mpo`, or `--portrait` (#19).
+
+### Hearing (library API)
+
+11 hearing filters operate on audio buffers (#7–#9): `hearing_loss`,
+`sudden_hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`,
+`hyperacusis`, `paracusis`, `amusia`, `dysmelodia`, `pitch_shift_semitones`,
+`diplacusis`, and `auditory_processing_disorder` (APD). Each takes a
+`sensus_core::hearing::AudioBuffer` (f32 interleaved PCM) and returns one.
+
+> **Note:** hearing filters are **library-only** — the `sensus` CLI has no
+> audio I/O and its `--filter` flag accepts vision filters only. Use
+> `sensus_core::apply_hearing` / `HearingFilter` from Rust. CLI support for
+> hearing is tracked in #105.
 
 Each filter ships with a short note on **when to see a doctor** — sensus is
 designed both as an empathy / education tool and as an early-warning primer
@@ -106,7 +132,7 @@ get a `DynamicImage` out.
 ```toml
 # Cargo.toml
 [dependencies]
-sensus-core = "0.1"
+sensus-core = "0.4"
 ```
 
 ```rust
@@ -143,7 +169,39 @@ cylindrical lens / line spread function), not an elliptical disk — see
 `docs/overview.md` for the full derivation.
 
 The same function signatures can be applied frame-by-frame for video, or
-chained together via `sensus_core::pipeline` (Phase 4).
+chained together via `sensus_core::pipeline`.
+
+### Hearing filters (library only)
+
+Hearing filters live in `sensus_core::hearing` and are dispatched via
+`apply_hearing`. They operate on audio buffers, not images, and are **not
+exposed through the CLI** (see the note in the Filters section; CLI support
+is tracked in #105).
+
+```rust
+use sensus_core::{apply_hearing, hearing::AudioBuffer, HearingFilter};
+
+fn deafen(buf: AudioBuffer) -> sensus_core::Result<AudioBuffer> {
+    let muffled = apply_hearing(HearingFilter::HearingLoss, buf, 1.0)?;
+    // Tinnitus and pitch shift carry their own parameters in the variant:
+    let ringing = apply_hearing(HearingFilter::Tinnitus { freq_hz: 4000.0 }, muffled, 0.5)?;
+    Ok(ringing)
+}
+```
+
+### GLSL shaders (host integration)
+
+`sensus_core::shaders` ships the same vision effects as GLSL fragment
+shaders for hosts that render on the GPU (Flutter `FragmentProgram`, WebGL,
+etc.). Some shaders need **resolution-dependent uniforms** — e.g.
+`photophobia`, `eye_strain`, `dry_eye`, `teichopsia`, `glaucoma`,
+`macular_degeneration`, `tunnel_vision`, and the disk-blur refraction
+filters consume values such as `uRadiusPx` and `uTexelSize`
+(`vec2(1.0/width, 1.0/height)`). When using these shaders in an external
+host you must set those uniforms from the matching `*_uniforms()` helper
+(e.g. `shaders::photophobia_uniforms(strength, width, height)`); passing only
+`strength` will produce incorrect (scale-dependent) results. This is the
+contract universal-experience relies on.
 
 ## Crates
 

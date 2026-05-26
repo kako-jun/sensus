@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- **docs: kako-jun/sensus#101 README を v0.4 に更新**: version 表記と `sensus-core` 依存 pin を `0.1` → `0.4` に更新。hearing を「(soon) / Phase 4」から「11 フィルタ実装済み（ライブラリ API 専用、CLI 非対応・#105 で追跡）」に修正。vision フィルタ表を実装済みの全フィルタ（balance/vertigo・eye fatigue 等を含む）に追従。GLSL シェーダの解像度依存 uniform（`uRadiusPx` / `uTexelSize`）を外部ホストで使う際は `*_uniforms()` ヘルパの値を設定する必要がある旨を consumer 向けに明記。
+
 ### Tests / Findings
 
 - **test: kako-jun/sensus#100 等価テスト皆無だったフィルタ群に CPU↔GLSL 等価テストを追加 + 乖離を調査記録**:
