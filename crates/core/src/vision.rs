@@ -741,6 +741,10 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let noise = grid_sample(x, y);
             let white_blend = strength * noise * WHITE_BLEND_MAX;
 
+            // nr∈[0,1]・white_blend∈[0,WHITE_BLEND_MAX(0.4)] より fr∈[0,1] が常に成り立つので
+            // ここでは clamp しない（pack_u8 が sRGB 空間で最終 clamp する）。GLSL/sim は linear 空間で
+            // clamp(0,1) するが入力域上は等価で bit 一致する。WHITE_BLEND_MAX を上げる/黄変係数を負に
+            // 振る等で fr が [0,1] を外れる変更を入れる場合は、CPU/GLSL の clamp 段を揃え直すこと。
             let fr = nr + (1.0 - nr) * white_blend;
             let fg = ng + (1.0 - ng) * white_blend;
             let fb = nb + (1.0 - nb) * white_blend;
