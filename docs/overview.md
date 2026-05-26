@@ -109,12 +109,15 @@ let result = Pipeline::new()
   `smoothstep(0.3, 1.2, d)` where `d = uv·uv` with `uv ∈ [-1, 1]²`. Both CPU
   and GLSL implementations operate in linear sRGB space and apply identical
   vignette math, verified by PSNR ≥ 30 dB equivalence test.
-- **`dry_eye`**: Applies random per-tile disk blur (tile = 32×32 px). Each
-  tile's blur radius is determined by a fixed-seed (42) LCG. Only the tile
-  region (with a blur-radius overlap) is blurred rather than the full image,
-  making processing O(tile_area × kernel_height) instead of O(W×H × kernel_height).
-  Because the blur radius varies spatially per tile with a fixed seed, this
-  filter is not amenable to a GLSL equivalence test.
+- **`dry_eye`**: Applies random per-tile disk blur (tile = 32×32 px) in linear
+  sRGB space. Each tile's blur radius is `noise × strength × 3 px`, where
+  `noise ∈ [0,1]` comes from a fixed-seed (42) 32-bit integer spatial hash of
+  the tile coordinates. (#99) The CPU and GLSL implementations now share the
+  identical hash and isotropic disk (pillbox) membership (`dx²+dy² ≤ r²`,
+  edge clamp), so the filter is verified by a CPU↔GLSL equivalence test
+  (PSNR ≥ 30 dB; byte-exact on the test fixtures). The earlier sequential-LCG
+  noise (which depended on tile-scan order and could not be reproduced by a
+  parallel fragment shader) was replaced by the per-tile spatial hash.
 
 ## Contrast Sensitivity filter (#56)
 

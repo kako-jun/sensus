@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix: kako-jun/sensus#99 `metamorphopsia` / `dry_eye` のノイズモデルを CPU と統一**:
+  - 両フィルタの `.frag` が CPU と別アルゴリズムのノイズモデルを使っており原理的に一致しなかった問題を解消。正本は CPU（医学的に正しく決定論的）。**option (a)** を採用し、両者を「GPU でも単一パスで bit 再現可能な 32bit 整数 spatial hash」に寄せて統一した。CPU 側の出力が変わるため CHANGELOG に明記する（下記）。
+  - **metamorphopsia**: 旧 `.frag` は `uSeed` を即 float 化し `hash2`/`smoothNoise`（`sin` ベース）で変位場を作っており、CPU の LCG グリッド変位と無関係だった。CPU・GLSL ともに「グリッド頂点ごとの決定論的変位場 + 双線形補間」に統一。変位ハッシュ `gridHash(seed, gx, gy, axis)` を CPU の `grid_hash` と完全に同じ 32bit 整数演算（黄金比定数混合 + XOR-shift finalizer、`uint` は CPU `u32` と同じく mod 2^32 で wrap）にし、`uSeed` は `uint` のまま整数演算に通す（float 化しない）。グリッド頂点インデックスは `uTexelSize` から解像度を復元して CPU と同じ整数ピクセル座標基準で算出。**CPU 変更**: 変位生成を 64bit Knuth LCG（`(state>>32)` の高位ビット抽出を含み GPU の `uint` で再現不可）から 32bit 整数 spatial hash に変更（strength=0 の identity・寸法・alpha 保持・seed 差分は不変。既存 CPU テストはバイト固定しておらず全て pass）。
+  - **dry_eye**: 旧 `.frag` は gamma sRGB サンプリング・画面 16 固定分割タイル・`hash()`・半径 `noise*s*2` で、CPU（linear sRGB・32px タイル・seed=42 LCG・半径 `*3`）と再現不可と宣言されていた。CPU・GLSL ともに「linear sRGB サンプリング・32px ピクセルタイル・seed=42 の 32bit spatial hash・半径 `noise*strength*3px`・等方 disk（pillbox）平均（メンバシップ `dx²+dy²≤r²`、edge clamp）」に統一。**CPU 変更**: タイルノイズを「行優先で走査しながら逐次更新する 64bit LCG 状態」（各タイルが先行タイル数 = グリッド寸法に依存し GPU の並列実行で再現不可）から、タイル座標だけの 32bit spatial hash に変更（strength=0 の identity は不変）。
+  - **一致根拠**: 両フィルタとも CPU と `.frag` を 1:1 でミラーする sim（`sim_metamorphopsia_glsl` / `sim_dry_eye_glsl`、実 `.frag` と同式・別アルゴリズムのインライン化なし）で検証し、テストフィクスチャ上 **PSNR = ∞（バイト完全一致）**。整数ハッシュ・補間/disk・linear sRGB が完全一致するため、残る乖離源は f32 丸めのみ（フィクスチャ上は丸め後も同一バイト）。
+  - **API 追加**: `dry_eye_uniforms(strength, width, height)` と `DryEyeUniforms`（`uTexelSize` 追加。タイル座標・disk 半径のテクスチャ座標変換に必要）。`MetamorphopsiaUniforms` は既存の `seed: u32` / `texel_size` をそのまま使用（struct 変更なし）。いずれも既存シグネチャ変更ではなく追加。
+  - CPU↔GLSL 等価テストを追加（metamorphopsia: strength 0.0/0.5/1.0・非正方形 64×32、dry_eye: strength 0.0/0.5/1.0・非正方形 64×32、いずれも PSNR ≥ 30 dB 判定で実測 ∞）。
 - **fix: kako-jun/sensus#98 `eye_strain` GLSL にブラー段を追加し等価テストの偽装を解消**:
   - `eye_strain.frag` を「contrast 圧縮 + vignette のみ」から、CPU `vision::eye_strain` と同じ処理順序（contrast → vignette → disk blur）に実装。CPU が最後に適用する半径 `strength*1.5px` の disk（pillbox）blur 段が `.frag` に欠落しており universal-experience の表示と CPU が乖離していた問題を解消
   - 単一パス制約のため厳密 pillbox を Fibonacci lattice 16 tap で近似（CPU=厳密 pillbox、これが唯一の乖離源）。各 tap で contrast+vignette を再計算してから円盤状に平均し、linear sRGB 空間で処理。PSNR で担保（32×32 で strength=0.5 → 40.0 dB、1.0 → 42.3 dB、いずれも下限 30 dB 超）
