@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **feat: kako-jun/sensus#102 ミソフォニア（misophonia）聴覚フィルタを追加**: 仕様リーフ（sensus.md）に挙がっていたが未実装だった移植漏れを解消。`HearingFilter::Misophonia { freq_hz }` + `hearing::misophonia()`。ハイパーアクーシス（[`hyperacusis`] = 全帯域一様増幅）と違い、`freq_hz` 中心のトリガー帯域（band-reject の補集合）だけを最大 6 倍ブースト + tanh 倍音歪みで耳障り化し、帯域外は残す。この帯域選択性を効果アサートテスト（`misophonia_is_band_selective`: トリガー帯域 2 kHz の RMS 変化 > 帯域外 200 Hz の RMS 変化）で固定。strength=0 恒等 / 空バッファ / ステレオ保持も検証。
+
 ### Docs
 
 - **docs: kako-jun/sensus#101 README を v0.4 に更新**: version 表記と `sensus-core` 依存 pin を `0.1` → `0.4` に更新。hearing を「(soon) / Phase 4」から「11 フィルタ実装済み（ライブラリ API 専用、CLI 非対応・#105 で追跡）」に修正。vision フィルタ表を実装済みの全フィルタ（balance/vertigo・eye fatigue 等を含む）に追従。GLSL シェーダの解像度依存 uniform（`uRadiusPx` / `uTexelSize`）を外部ホストで使う際は `*_uniforms()` ヘルパの値を設定する必要がある旨を consumer 向けに明記。
