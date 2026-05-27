@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **docs: kako-jun/sensus#115 CHANGELOG の架空 hearing 名 / overview APD 番号 / noise_induced 帯域幅の doc 不一致を修正**: (1) v0.2.0 節の hearing フィルタ一覧が架空名（`sudden_deafness`/`presbycusis`/`recruitment`/`temporary_threshold_shift`/`noise_induced_loss`）で「10」と誤記 → 実関数名 11 個に訂正。(2) overview.md の APD セクション見出しを Issue #38 → **#37**（#38 は floaters）。(3) `noise_induced_hearing_loss` の doc コメント「±1 kHz / 帯域幅 2000」を実装（`50 + s*950` Hz、最大 1000 Hz）に合わせて訂正。
+
 - **fix: kako-jun/sensus#117 sensus-core 単体テストが jpeg feature 不足でビルド不能だったのを修正**: `stereo.rs` のテストが `image::codecs::jpeg::JpegEncoder` を使うが core の依存は `png` feature のみで、`cargo test -p sensus-core` / `cargo clippy --all-targets`（core 単体）が pre-existing で落ちていた。workspace test は cli の image default-features による feature unification で隠れていた。core の **dev-dependencies に `image` の `jpeg` feature** を追加（本体依存は png のみ維持）。CI に `cargo test -p sensus-core` 単体ステップを追加して回帰防止。
 
 - **fix: kako-jun/sensus#134 floaters / flickering_stars のノイズを CPU↔GLSL で統一**:
@@ -417,10 +419,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normative reference; shaders are authored to reproduce the same math.
 
 - **hearing filters** (#7, #8, #9): `sensus_core::hearing` module with
-  `AudioBuffer` (f32 interleaved PCM), `BiquadFilter`, and 10 pure-function
-  hearing filters — `hearing_loss`, `sudden_deafness`, `noise_induced_loss`,
-  `tinnitus`, `diplacusis`, `hyperacusis`, `amusia`, `presbycusis`,
-  `recruitment`, `temporary_threshold_shift`. Three vestibular-visual filters
+  `AudioBuffer` (f32 interleaved PCM), `BiquadFilter`, and 11 pure-function
+  hearing filters — `hearing_loss`, `sudden_hearing_loss`,
+  `noise_induced_hearing_loss`, `tinnitus`, `hyperacusis`, `paracusis`,
+  `amusia`, `dysmelodia`, `pitch_shift_semitones`, `diplacusis`,
+  `auditory_processing_disorder`. Three vestibular-visual filters
   added to `vision`: `vertigo`, `bppv_rotation`, `vestibular_neuritis`.
   `HearingFilter` enum and `apply_hearing()` added to `lib.rs`. CLI gains
   `--filter vertigo / bppv-rotation / vestibular-neuritis`.

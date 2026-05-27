@@ -152,7 +152,7 @@ by additively blending random white blob points onto the image.
 
 > **医学的注記**: 急激な光点の増加・カーテン状の視野欠損を伴う場合は網膜剥離の前兆。即受診。
 
-## Auditory Processing Disorder (APD) (Issue #38)
+## Auditory Processing Disorder (APD) (Issue #37)
 
 APD simulation is implemented in `sensus_core::hearing` as
 `auditory_processing_disorder(buf, strength)`. It approximates the
