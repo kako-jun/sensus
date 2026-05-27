@@ -40,6 +40,12 @@ jobs:
       - name: Run tests
         run: cargo test --verbose --all-targets --locked
 
+      # sensus-core 単体ビルド回帰ガード（#117）: workspace test は cli の
+      # image default-features による feature unification で core 単体の破綻を隠す。
+      # crates.io publish の verification build / per-crate CI で顕在化するため単体でも回す。
+      - name: Run sensus-core tests in isolation
+        run: cargo test -p sensus-core --locked
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

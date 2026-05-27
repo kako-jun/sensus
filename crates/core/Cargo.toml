@@ -18,6 +18,9 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+# stereo.rs のテストが JpegEncoder を使うため、テスト時のみ jpeg feature を有効化する（#117）。
+# 本体依存（[dependencies]）は png のみに保ち、ライブラリの最小フットプリントは変えない。
+image = { workspace = true, features = ["png", "jpeg"] }
 
 [[bench]]
 name = "filters"
