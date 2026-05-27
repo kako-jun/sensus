@@ -682,6 +682,26 @@ pub fn meniere(buf: AudioBuffer, strength: f32) -> AudioBuffer {
     tinnitus(stage1, s, 200.0)
 }
 
+/// 迷路炎（labyrinthitis）の聴覚側シミュレーション。
+///
+/// 前庭神経炎（[`crate::Experience::VESTIBULAR_NEURITIS`]）が前庭神経のみの炎症で
+/// **聴力は保たれる**のに対し、迷路炎は内耳（蝸牛を含む）の炎症で、回転性めまいに
+/// **感音難聴と耳鳴りを伴う**。この聴覚症状の有無が両者の臨床的鑑別点であり、
+/// 「めまいの聴覚側複合」を医学的に正しく表せるのは迷路炎（やメニエール病）の側。
+///
+/// 1. 感音難聴: 高音域カット（[`hearing_loss`] と同系の広めの感音難聴を近似）
+/// 2. 高音の耳鳴り: ~4 kHz（メニエールの低い唸りとは音色が異なる）
+///
+/// `strength = 0.0` は元音声と同一。
+pub fn labyrinthitis(buf: AudioBuffer, strength: f32) -> AudioBuffer {
+    let s = strength.clamp(0.0, 1.0);
+    if s == 0.0 {
+        return buf;
+    }
+    let stage1 = hearing_loss(buf, s);
+    tinnitus(stage1, s, 4000.0)
+}
+
 // ---------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------
@@ -1022,6 +1042,56 @@ mod tests {
         let out_rms = rms(&out.samples);
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
         assert!(rel_diff > 0.05, "misophonia strength=1 must alter the trigger-band signal (rel_diff={rel_diff})");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #104: labyrinthitis（前庭性めまいの聴覚側複合）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn labyrinthitis_strength_zero_is_identity() {
+        let buf = sine_wave(440.0, 1000, 44100);
+        let orig = buf.samples.clone();
+        let out = labyrinthitis(buf, 0.0);
+        assert_eq!(out.samples, orig, "labyrinthitis strength=0 should be byte-exact identity");
+    }
+
+    #[test]
+    fn labyrinthitis_empty_buffer_does_not_panic() {
+        let buf = AudioBuffer { samples: vec![], sample_rate: 44100, channels: 1 };
+        let out = labyrinthitis(buf, 1.0);
+        assert!(out.samples.is_empty());
+    }
+
+    #[test]
+    fn labyrinthitis_stereo_preserves_channel_count() {
+        let buf = AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 2 };
+        let out = labyrinthitis(buf, 1.0);
+        assert_eq!(out.channels, 2);
+        assert_eq!(out.samples.len(), 2000);
+    }
+
+    #[test]
+    fn labyrinthitis_adds_tinnitus_to_silence() {
+        let buf = silence(44100, 44100, 1);
+        let out = labyrinthitis(buf, 1.0);
+        assert!(rms(&out.samples) > 0.0, "labyrinthitis should add tinnitus to silence");
+    }
+
+    #[test]
+    fn labyrinthitis_attenuates_high_more_than_low() {
+        // 感音難聴は高音域カット: 高音(8 kHz)は低音(200 Hz)より強く減衰する。
+        // メニエール（低音側が落ちる）とは逆向きであることを検証する。
+        let high = sine_wave(8000.0, 44100, 44100);
+        let high_ratio = rms(&labyrinthitis(high.clone(), 1.0).samples) / rms(&high.samples).max(1e-6);
+
+        let low = sine_wave(200.0, 44100, 44100);
+        let low_ratio = rms(&labyrinthitis(low.clone(), 1.0).samples) / rms(&low.samples).max(1e-6);
+
+        assert!(
+            high_ratio < low_ratio,
+            "labyrinthitis must attenuate high freq more than low: high_ratio={high_ratio}, low_ratio={low_ratio}"
+        );
     }
 
     // ---------------------------------------------------------------

@@ -169,6 +169,10 @@ pub enum HearingFilter {
     /// メニエール病の聴覚側: 低音域難聴 + 低い唸る耳鳴り（複合）。
     /// 回転性めまい（視覚）と組で [`Experience::MENIERE`] として正準化される。
     Meniere,
+    /// 迷路炎の聴覚側: 高音域感音難聴 + 高音の耳鳴り（複合）。
+    /// 回転性めまい（視覚）と組で [`Experience::LABYRINTHITIS`] として正準化される。
+    /// 前庭神経炎（聴力温存）との鑑別点となる聴覚症状を表す。
+    Labyrinthitis,
 }
 
 /// 聴覚フィルタを音声バッファに適用する。
@@ -201,6 +205,7 @@ pub fn apply_hearing(
             hearing::auditory_processing_disorder(buf, strength)
         }
         HearingFilter::Meniere => hearing::meniere(buf, strength),
+        HearingFilter::Labyrinthitis => hearing::labyrinthitis(buf, strength),
     };
     Ok(out)
 }
@@ -245,6 +250,41 @@ impl Experience {
         id: "meniere",
         vision: Some(Filter::Vertigo),
         hearing: Some(HearingFilter::Meniere),
+        urgency: Urgency::EarlyConsultation,
+    };
+
+    /// 良性発作性頭位めまい症（BPPV）: 頭位変化で生じる回転性めまい。
+    ///
+    /// **聴覚症状は無い**（耳石が三半規管に入り込む純粋な前庭性めまいで、蝸牛＝聴覚は
+    /// 障害されない）。したがって `hearing: None` が医学的に正しい。良性で緊急性も低い。
+    pub const BPPV: Experience = Experience {
+        id: "bppv",
+        vision: Some(Filter::BppvRotation),
+        hearing: None,
+        urgency: Urgency::None,
+    };
+
+    /// 前庭神経炎（vestibular neuritis）: 突然の激しい回転性めまい。
+    ///
+    /// 前庭神経のみの炎症で**聴力は保たれる**（難聴・耳鳴りを伴えばそれは迷路炎＝
+    /// [`Experience::LABYRINTHITIS`]）。この聴覚温存が両者の鑑別点なので `hearing: None`。
+    /// 突然発症のめまいは脳卒中との鑑別が必要なため緊急。
+    pub const VESTIBULAR_NEURITIS: Experience = Experience {
+        id: "vestibular_neuritis",
+        vision: Some(Filter::VestibularNeuritis),
+        hearing: None,
+        urgency: Urgency::Emergency,
+    };
+
+    /// 迷路炎（labyrinthitis）: 回転性めまい（視覚）＋ 高音域感音難聴・高音の耳鳴り（聴覚）。
+    ///
+    /// 内耳（蝸牛を含む）の炎症で、前庭神経炎と違い**聴覚症状を伴う**。
+    /// 「めまいの聴覚側複合」を医学的に正しく表せる前庭性疾患（メニエール病と並ぶ）。
+    /// 突発的な感音難聴は早期治療が予後を左右するため早期受診が望ましい。
+    pub const LABYRINTHITIS: Experience = Experience {
+        id: "labyrinthitis",
+        vision: Some(Filter::Vertigo),
+        hearing: Some(HearingFilter::Labyrinthitis),
         urgency: Urgency::EarlyConsultation,
     };
 
@@ -296,6 +336,29 @@ mod tests {
         assert_eq!(e.vision, Some(Filter::Vertigo));
         assert_eq!(e.hearing, Some(HearingFilter::Meniere));
         assert_eq!(e.urgency, Urgency::EarlyConsultation);
+    }
+
+    #[test]
+    fn experience_vestibular_pairings_are_medically_correct() {
+        // BPPV と前庭神経炎は聴力温存 = hearing None。迷路炎のみ聴覚を伴う。
+        assert_eq!(Experience::BPPV.vision, Some(Filter::BppvRotation));
+        assert_eq!(Experience::BPPV.hearing, None);
+        assert_eq!(Experience::BPPV.urgency, Urgency::None);
+
+        assert_eq!(Experience::VESTIBULAR_NEURITIS.vision, Some(Filter::VestibularNeuritis));
+        assert_eq!(Experience::VESTIBULAR_NEURITIS.hearing, None);
+        assert_eq!(Experience::VESTIBULAR_NEURITIS.urgency, Urgency::Emergency);
+
+        assert_eq!(Experience::LABYRINTHITIS.hearing, Some(HearingFilter::Labyrinthitis));
+        assert!(Experience::LABYRINTHITIS.vision.is_some());
+    }
+
+    #[test]
+    fn experience_vision_only_returns_none_audio() {
+        // BPPV は視覚のみ → 音声適用は Ok(None)
+        let bppv = Experience::BPPV;
+        assert!(bppv.apply_audio(test_audio(), 1.0).unwrap().is_none());
+        assert!(bppv.apply_vision(test_image(), 1.0).unwrap().is_some());
     }
 
     #[test]
