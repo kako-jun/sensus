@@ -414,4 +414,27 @@ mod tests {
         assert_eq!(out.sample_rate, 48000);
         assert_eq!(out.channels, 2);
     }
+
+    #[test]
+    fn audio_pipeline_matches_sequential_apply_hearing() {
+        // #114: AudioPipeline は apply_hearing を順に適用したものと bit 一致する。
+        let buf = AudioBuffer {
+            samples: (0..44100).map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin()).collect(),
+            sample_rate: 44100,
+            channels: 1,
+        };
+
+        let pipelined = AudioPipeline::new()
+            .push(HearingFilter::HearingLoss, 0.7)
+            .push(HearingFilter::Tinnitus { freq_hz: 4000.0 }, 0.3)
+            .apply(&buf)
+            .unwrap();
+
+        let s1 = crate::apply_hearing(HearingFilter::HearingLoss, buf.clone(), 0.7).unwrap();
+        let manual = crate::apply_hearing(HearingFilter::Tinnitus { freq_hz: 4000.0 }, s1, 0.3).unwrap();
+
+        assert_eq!(pipelined.samples, manual.samples, "pipeline must equal sequential apply_hearing");
+        assert_eq!(pipelined.sample_rate, manual.sample_rate);
+        assert_eq!(pipelined.channels, manual.channels);
+    }
 }
