@@ -257,7 +257,8 @@ pub fn sudden_hearing_loss(buf: AudioBuffer, strength: f32, freq_hz: f32) -> Aud
 ///
 /// 4 kHz 付近のバンドリジェクトフィルタ。強い騒音への曝露で生じる典型的難聴パターン。
 pub fn noise_induced_hearing_loss(buf: AudioBuffer, strength: f32) -> AudioBuffer {
-    // 4 kHz ± 1 kHz（中心 4000 Hz, 帯域幅 2000 Hz）
+    // 中心 4 kHz。帯域幅は strength 比例で、sudden_hearing_loss と同じ `50 + s*950` Hz
+    // （最大 1000 Hz ≒ ±500 Hz）。
     sudden_hearing_loss(buf, strength, 4000.0)
 }
 
