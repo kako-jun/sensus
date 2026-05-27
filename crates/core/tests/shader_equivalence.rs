@@ -4339,8 +4339,8 @@ fn sim_floaters_glsl(img: &RgbaImage, mask: &image::GrayImage, strength: f32) ->
 fn shader_equiv_floaters_mask_blend_strength_1_0() {
     use sensus_core::vision::{floaters, floaters_mask};
     let img = gradient_32();
-    let mask = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5);
-    let cpu = floaters(img.clone(), 1.0, 0.8, 42, 0.5, 0.5).unwrap().to_rgba8();
+    let mask = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5, 1.0);
+    let cpu = floaters(img.clone(), 1.0, 0.8, 42, 0.5, 0.5, 1.0).unwrap().to_rgba8();
     let gpu = sim_floaters_glsl(&img.to_rgba8(), &mask, 1.0);
     let db = psnr(&cpu, &gpu);
     // 同一 u8 マスク・同一ブレンドなので bit 一致（PSNR=∞）。安全側で 50 dB。
@@ -4352,8 +4352,8 @@ fn shader_equiv_floaters_mask_blend_strength_0_5_non_square() {
     use sensus_core::vision::{floaters, floaters_mask};
     let img = gradient_64x32();
     let (w, h) = (img.width(), img.height());
-    let mask = floaters_mask(w, h, 0.6, 7, 0.5, 0.5);
-    let cpu = floaters(img.clone(), 0.5, 0.6, 7, 0.5, 0.5).unwrap().to_rgba8();
+    let mask = floaters_mask(w, h, 0.6, 7, 0.5, 0.5, 1.0);
+    let cpu = floaters(img.clone(), 0.5, 0.6, 7, 0.5, 0.5, 1.0).unwrap().to_rgba8();
     let gpu = sim_floaters_glsl(&img.to_rgba8(), &mask, 0.5);
     let db = psnr(&cpu, &gpu);
     assert!(db >= 50.0, "floaters 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 50 dB");
@@ -4363,11 +4363,11 @@ fn shader_equiv_floaters_mask_blend_strength_0_5_non_square() {
 fn floaters_mask_is_strength_independent() {
     // マスクは density/seed/gaze だけで決まり strength に依存しない（方針 B の前提）。
     use sensus_core::vision::floaters_mask;
-    let a = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5);
-    let b = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5);
+    let a = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5, 1.0);
+    let b = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5, 1.0);
     assert_eq!(a.as_raw(), b.as_raw(), "floaters_mask must be deterministic");
     // density 0 は全面透明（255）
-    let empty = floaters_mask(32, 32, 0.0, 42, 0.5, 0.5);
+    let empty = floaters_mask(32, 32, 0.0, 42, 0.5, 0.5, 1.0);
     assert!(empty.as_raw().iter().all(|&v| v == 255), "density 0 → all transparent");
     // フローターがあれば 255 未満の画素が存在する
     assert!(a.as_raw().iter().any(|&v| v < 255), "mask must contain floater pixels");

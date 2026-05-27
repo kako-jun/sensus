@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **fix: kako-jun/sensus#110 `Filter::Floaters.size` の死にフィールドを配線（受け取って捨てていた）**: `apply()` が `let _ = size` で無視し「現在は無視（0.0 を渡すこと）」と doc されていた死にフィールドを、blob 半径・糸くず幅の相対倍率として機能させた。`vision::floaters` / `floaters_mask` に `size` 引数を追加（0.1..=5.0 に clamp、0/NaN は 1.0 フォールバック）、`blob_radius` と strand `half_w` に乗じる。`apply()` / `Pipeline::FilterStep` から enum の `size` を渡すよう配線。マスクは CPU 生成（#134 方針 B）なので GLSL 側変更は不要。効果アサート `floaters_size_scales_coverage`（size 大 → 被覆面積増＝平均マスク低下、NaN→1.0 フォールバック）。
+
 ### Tests / Findings
 
 - **test: kako-jun/sensus#114 hearing 効果アサートテストを網羅追加**: 従来は strength=0 恒等 / 空 / パニック耐性のみで「実際に効いているか」の効果検証が薄かった。6 件追加 — `diplacusis_left_and_right_differ`（L≠R = 左右別音程）/ `sudden_hearing_loss_attenuates_notch_band`（ノッチ帯域の RMS 低下）/ `noise_induced_hearing_loss_attenuates_4khz_more_than_low`（4 kHz を 500 Hz より強く減衰）/ `pitch_shift_changes_signal_but_keeps_length`（波形変化＋長さ保持）/ `tinnitus_adds_tone_on_nonsilent_signal`（無音だけでなく信号入りにもトーン重畳）/ `audio_pipeline_matches_sequential_apply_hearing`（AudioPipeline = 逐次 apply_hearing と bit 一致）。

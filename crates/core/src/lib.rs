@@ -55,9 +55,9 @@ pub enum Filter {
     TunnelVision,
     // vision (Phase 3: light / transparency)
     Cataract,
-    /// 飛蚊症。`seed`: ランダムシード, `density`: blob 密度, `size`: blob 相対サイズ係数
+    /// 飛蚊症。`seed`: ランダムシード, `density`: blob 密度, `size`: blob 半径・糸くず幅の相対倍率
     ///
-    /// `size`: 将来の blob_radius_ratio に使用予定。現在は無視される（0.0 を渡すこと）。
+    /// `size`: 1.0 = 既定。`vision::floaters` の blob 半径・糸くず幅に乗じる（0.1..=5.0 に clamp、#110）。
     Floaters { seed: u64, density: f32, size: f32 },
     Photophobia,
     NightBlindness,
@@ -110,9 +110,7 @@ pub fn apply(
         Filter::Photophobia => vision::photophobia(img, strength),
         Filter::NightBlindness => vision::nyctalopia(img, strength),
         Filter::Floaters { seed, density, size } => {
-            // size は blob サイズ係数として gaze_x/gaze_y の中央値と組み合わせる
-            let _ = size; // size フィールドは将来の blob_radius_ratio に使用予定; 現在は無視
-            vision::floaters(img, strength, density, seed, 0.5, 0.5)
+            vision::floaters(img, strength, density, seed, 0.5, 0.5, size)
         }
         Filter::Glaucoma { mode } => vision::glaucoma(img, strength, mode),
         Filter::MacularDegeneration => vision::macular_degeneration(img, strength),

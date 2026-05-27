@@ -938,6 +938,7 @@ pub fn floaters_mask(
     seed: u64,
     gaze_x: f32,
     gaze_y: f32,
+    size: f32,
 ) -> image::GrayImage {
     let w_f = width as f32;
     let h_f = height as f32;
@@ -945,6 +946,8 @@ pub fn floaters_mask(
     let density = density.clamp(0.0, 1.0);
     let gaze_x = gaze_x.clamp(0.0, 1.0);
     let gaze_y = gaze_y.clamp(0.0, 1.0);
+    // size は blob 半径・糸くず幅の相対倍率（#110）。1.0 = 既定。0 や NaN は 1.0 にフォールバック。
+    let size = if size.is_finite() && size > 0.0 { size.clamp(0.1, 5.0) } else { 1.0 };
 
     // 視線オフセット（フローターは視線に追随）
     let offset_x = (gaze_x - 0.5) * 0.3 * w_f;
@@ -960,7 +963,7 @@ pub fn floaters_mask(
     let blob_count = (total_count as f32 * 0.3).ceil() as usize; // 30% 円形
     let strand_count = total_count - blob_count;                  // 70% 糸くず
 
-    let blob_radius = (w_f.min(h_f) * 0.04).max(2.0);
+    let blob_radius = (w_f.min(h_f) * 0.04 * size).max(2.0);
     let blob_radius_sq = blob_radius * blob_radius;
 
     // ── LCG ヘルパー ──────────────────────────────────────────────
@@ -1028,7 +1031,7 @@ pub fn floaters_mask(
         let sx = fx * w_f + offset_x;
         let sy = fy * h_f + offset_y;
         let n_seg = (fn_seg * 4.0) as usize + 2; // 2..=5
-        let half_w = (f_width * 3.0 + 1.0) * 0.5; // 0.5..=2.0
+        let half_w = (f_width * 3.0 + 1.0) * 0.5 * size; // 0.5..=2.0（size 倍率、#110）
 
         let mut cur_x = sx;
         let mut cur_y = sy;
@@ -1131,6 +1134,7 @@ pub fn floaters_mask(
 /// - `seed`: blob 配置のランダムシード（実際に使用される）
 /// - `gaze_x`: 視線 X 位置 (0.0 = 左, 1.0 = 右)
 /// - `gaze_y`: 視線 Y 位置 (0.0 = 上, 1.0 = 下)
+/// - `size`: blob 半径・糸くず幅の相対倍率（#110、1.0 = 既定、0.1..=5.0 に clamp）
 pub fn floaters(
     img: DynamicImage,
     strength: f32,
@@ -1138,6 +1142,7 @@ pub fn floaters(
     seed: u64,
     gaze_x: f32,
     gaze_y: f32,
+    size: f32,
 ) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let mut rgba = img.to_rgba8();
@@ -1148,7 +1153,7 @@ pub fn floaters(
 
     let width = rgba.width();
     let height = rgba.height();
-    let mask = floaters_mask(width, height, density, seed, gaze_x, gaze_y);
+    let mask = floaters_mask(width, height, density, seed, gaze_x, gaze_y, size);
 
     for y in 0..height {
         for x in 0..width {
@@ -4090,11 +4095,32 @@ mod tests {
     }
 
     #[test]
+    fn floaters_size_scales_coverage() {
+        // #110: size を大きくすると blob/糸くずが太くなり、マスクの被覆面積が増える
+        // （= 平均マスク値が下がる）。同一 seed/density で比較する。
+        let mean = |m: &image::GrayImage| {
+            m.as_raw().iter().map(|&v| v as u32).sum::<u32>() as f32 / m.as_raw().len() as f32
+        };
+        let small = floaters_mask(64, 64, 0.5, 42, 0.5, 0.5, 0.5);
+        let large = floaters_mask(64, 64, 0.5, 42, 0.5, 0.5, 2.0);
+        assert!(
+            mean(&large) < mean(&small),
+            "larger size must increase floater coverage: mean(large)={}, mean(small)={}",
+            mean(&large),
+            mean(&small)
+        );
+        // size は 1.0 が既定（恒等的に効かないわけではないが、0/NaN は 1.0 フォールバック）
+        let nan = floaters_mask(64, 64, 0.5, 42, 0.5, 0.5, f32::NAN);
+        let one = floaters_mask(64, 64, 0.5, 42, 0.5, 0.5, 1.0);
+        assert_eq!(nan.as_raw(), one.as_raw(), "NaN size must fall back to 1.0");
+    }
+
+    #[test]
     fn floaters_strength_zero_is_identity() {
         let input = solid_rgba(16, 16, [200, 100, 50, 255]);
         let original = raw_rgba_vec(&input);
         assert_eq!(
-            raw_rgba_vec(&floaters(input, 0.0, 0.5, 42, 0.5, 0.5).unwrap()),
+            raw_rgba_vec(&floaters(input, 0.0, 0.5, 42, 0.5, 0.5, 1.0).unwrap()),
             original
         );
     }
@@ -4154,7 +4180,7 @@ mod tests {
         let original = raw_rgba_vec(&input);
         // density=0.0 なので blob_count=0 → early return で identity
         assert_eq!(
-            raw_rgba_vec(&floaters(input, 1.0, 0.0, 42, 0.5, 0.5).unwrap()),
+            raw_rgba_vec(&floaters(input, 1.0, 0.0, 42, 0.5, 0.5, 1.0).unwrap()),
             original
         );
     }
@@ -4174,7 +4200,7 @@ mod tests {
         check_alpha(&cataract(input.clone(), 1.0, 42).unwrap());
         check_alpha(&photophobia(input.clone(), 1.0).unwrap());
         check_alpha(&nyctalopia(input.clone(), 1.0).unwrap());
-        check_alpha(&floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap());
+        check_alpha(&floaters(input, 1.0, 0.5, 42, 0.5, 0.5, 1.0).unwrap());
     }
 
     // ---------------------------------------------------------------
@@ -4190,7 +4216,7 @@ mod tests {
         check_dims(&cataract(input.clone(), 1.0, 42).unwrap());
         check_dims(&photophobia(input.clone(), 1.0).unwrap());
         check_dims(&nyctalopia(input.clone(), 1.0).unwrap());
-        check_dims(&floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap());
+        check_dims(&floaters(input, 1.0, 0.5, 42, 0.5, 0.5, 1.0).unwrap());
     }
 
     // ---------------------------------------------------------------
@@ -4251,8 +4277,8 @@ mod tests {
     #[test]
     fn floaters_same_seed_is_reproducible() {
         let input = solid_rgba(32, 32, [200, 150, 100, 255]);
-        let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.3, 12345, 0.5, 0.5).unwrap());
-        let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.3, 12345, 0.5, 0.5).unwrap());
+        let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.3, 12345, 0.5, 0.5, 1.0).unwrap());
+        let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.3, 12345, 0.5, 0.5, 1.0).unwrap());
         assert_eq!(out1, out2, "same seed must produce byte-exact identical output");
     }
 
@@ -4263,8 +4289,8 @@ mod tests {
     #[test]
     fn floaters_different_seed_differs() {
         let input = solid_rgba(32, 32, [200, 150, 100, 255]);
-        let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.5, 111, 0.5, 0.5).unwrap());
-        let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.5, 999, 0.5, 0.5).unwrap());
+        let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.5, 111, 0.5, 0.5, 1.0).unwrap());
+        let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.5, 999, 0.5, 0.5, 1.0).unwrap());
         assert_ne!(out1, out2, "different seeds must produce different output");
     }
 
@@ -4293,7 +4319,7 @@ mod tests {
     #[test]
     fn floaters_1x1_does_not_panic() {
         let input = pixel(128, 64, 32, 255);
-        let _ = floaters(input, 1.0, 0.5, 42, 0.5, 0.5).unwrap();
+        let _ = floaters(input, 1.0, 0.5, 42, 0.5, 0.5, 1.0).unwrap();
     }
 
     // ---------------------------------------------------------------
@@ -4419,8 +4445,8 @@ mod tests {
     #[test]
     fn floaters_seed_0_ne_seed_1() {
         let input = solid_rgba(32, 32, [200, 150, 100, 255]);
-        let out0 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.5, 0, 0.5, 0.5).unwrap());
-        let out1 = raw_rgba_vec(&floaters(input, 0.8, 0.5, 1, 0.5, 0.5).unwrap());
+        let out0 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.5, 0, 0.5, 0.5, 1.0).unwrap());
+        let out1 = raw_rgba_vec(&floaters(input, 0.8, 0.5, 1, 0.5, 0.5, 1.0).unwrap());
         assert_ne!(out0, out1, "seed=0 and seed=1 must produce different output");
     }
 
