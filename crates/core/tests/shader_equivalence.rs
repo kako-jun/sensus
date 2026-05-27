@@ -4199,3 +4199,93 @@ fn depth_aware_blur_glsl_larger_distance_blurs_more() {
         "farther-from-focus depth must blur at least as much"
     );
 }
+
+// ===========================================================================
+// #134: flickering_stars CPU↔GLSL 等価（32bit spatial hash 統一）
+// ===========================================================================
+
+/// CPU vision::star_hash32 と同一の 32bit hash（flickering_stars.frag と bit 一致）。
+fn star_hash32(seed: u32, k: u32) -> u32 {
+    let mut h = seed
+        .wrapping_mul(0x9e3779b9)
+        .wrapping_add(k.wrapping_mul(0x85ebca6b));
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a2d39);
+    h ^= h >> 15;
+    h
+}
+
+/// flickering_stars.frag の忠実ミラー。
+fn sim_flickering_stars_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let count = (strength.clamp(0.0, 1.0) * 200.0) as usize;
+    let hash01 = |k: u32| -> f32 { star_hash32(seed, k) as f32 / u32::MAX as f32 };
+    const BLOB_RADIUS: i32 = 2;
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let px = img.get_pixel(x, y);
+            let mut lin = [
+                srgb_to_linear(px[0] as f32 / 255.0),
+                srgb_to_linear(px[1] as f32 / 255.0),
+                srgb_to_linear(px[2] as f32 / 255.0),
+            ];
+            for i in 0..count as u32 {
+                let fx = hash01(3 * i);
+                let fy = hash01(3 * i + 1);
+                let fb = hash01(3 * i + 2);
+                let cx = (fx * w as f32) as i32;
+                let cy = (fy * h as f32) as i32;
+                let brightness = 0.5 + fb * 0.5;
+                if (x as i32 - cx).abs() <= BLOB_RADIUS && (y as i32 - cy).abs() <= BLOB_RADIUS {
+                    lin[0] = (lin[0] + brightness).min(1.0);
+                    lin[1] = (lin[1] + brightness).min(1.0);
+                    lin[2] = (lin[2] + brightness).min(1.0);
+                }
+            }
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(lin[0]) * 255.0).round() as u8,
+                    (linear_to_srgb(lin[1]) * 255.0).round() as u8,
+                    (linear_to_srgb(lin[2]) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_flickering_stars_strength_1_0() {
+    use sensus_core::vision::flickering_stars;
+    let img = gradient_32();
+    let cpu = flickering_stars(img.clone(), 1.0, 42).unwrap().to_rgba8();
+    let gpu = sim_flickering_stars_glsl(&img.to_rgba8(), 1.0, 42);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 40.0, "flickering_stars strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 40 dB");
+}
+
+#[test]
+fn shader_equiv_flickering_stars_strength_0_5_non_square() {
+    use sensus_core::vision::flickering_stars;
+    let img = gradient_64x32();
+    let cpu = flickering_stars(img.clone(), 0.5, 7).unwrap().to_rgba8();
+    let gpu = sim_flickering_stars_glsl(&img.to_rgba8(), 0.5, 7);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 40.0, "flickering_stars 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 40 dB");
+}
+
+#[test]
+fn shader_equiv_flickering_stars_seed_differs() {
+    use sensus_core::vision::flickering_stars;
+    let img = gradient_32();
+    let a = flickering_stars(img.clone(), 1.0, 1).unwrap().to_rgba8();
+    let b = flickering_stars(img.clone(), 1.0, 999).unwrap().to_rgba8();
+    assert!(psnr(&a, &b) < 60.0, "flickering_stars: 異なる seed で同一出力（seed 不使用の疑い）");
+}

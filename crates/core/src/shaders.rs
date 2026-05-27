@@ -213,6 +213,8 @@ pub fn flickering_stars_uniforms(strength: f32, seed: u64) -> FlickeringStarsUni
     FlickeringStarsUniforms {
         strength,
         seed: seed as u32,
+        // CPU vision::flickering_stars と同じ点数算出（strength*200 の切り捨て）。
+        count: (strength.clamp(0.0, 1.0) * 200.0) as i32,
     }
 }
 
@@ -255,6 +257,9 @@ pub struct FlickeringStarsUniforms {
     pub strength: f32,
     /// ランダムシード（CPU u64 の下位 32bit、M-3）
     pub seed: u32,
+    /// 光点数 = `(strength * 200) as usize`（#134）。
+    /// CPU の点数と完全に一致させるため float から再計算せず int として渡す。
+    pub count: i32,
 }
 
 /// photophobia フィルタの uniform。
