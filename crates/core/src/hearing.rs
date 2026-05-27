@@ -652,6 +652,36 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
     }
 }
 
+/// メニエール病（Ménière's disease）の聴覚側シミュレーション。
+///
+/// メニエール病の三徴候は「変動性の低音域感音難聴 + 低い唸るような耳鳴り + 回転性めまい」。
+/// めまい（視覚側）は [`crate::Filter::Vertigo`] が担当し、[`crate::Experience::MENIERE`]
+/// で視覚と組として正準化される。本関数は聴覚側の二要素を合成する:
+///
+/// 1. 低音域感音難聴: ハイパスで低域を部分的に減衰させる。メニエールは高音ではなく
+///    **低音**が落ちるのが特徴で、加齢性難聴（[`hearing_loss`] = 高音カット）とは逆。
+/// 2. 低い唸る耳鳴り: ~200 Hz の正弦波をミックス（高音の `tinnitus` とは音色が異なる）。
+///
+/// `strength = 0.0` は元音声と同一。
+pub fn meniere(buf: AudioBuffer, strength: f32) -> AudioBuffer {
+    let s = strength.clamp(0.0, 1.0);
+    if s == 0.0 {
+        return buf;
+    }
+    let sr = buf.sample_rate;
+    // 1) 低音域感音難聴: 100→800 Hz のハイパスを部分ブレンド（完全除去はしない）。
+    let hp_cut = 100.0 + s * 700.0;
+    let hp = apply_biquad_all_channels(&buf, || high_pass_biquad(hp_cut, sr));
+    let low_loss = blend(&buf.samples, &hp, s * 0.7);
+    let stage1 = AudioBuffer {
+        samples: low_loss,
+        sample_rate: buf.sample_rate,
+        channels: buf.channels,
+    };
+    // 2) 低音の唸る耳鳴り（~200 Hz）。
+    tinnitus(stage1, s, 200.0)
+}
+
 // ---------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------
@@ -992,6 +1022,57 @@ mod tests {
         let out_rms = rms(&out.samples);
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
         assert!(rel_diff > 0.05, "misophonia strength=1 must alter the trigger-band signal (rel_diff={rel_diff})");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #103: meniere
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn meniere_strength_zero_is_identity() {
+        let buf = sine_wave(440.0, 1000, 44100);
+        let orig = buf.samples.clone();
+        let out = meniere(buf, 0.0);
+        assert_eq!(out.samples, orig, "meniere strength=0 should be byte-exact identity");
+    }
+
+    #[test]
+    fn meniere_empty_buffer_does_not_panic() {
+        let buf = AudioBuffer { samples: vec![], sample_rate: 44100, channels: 1 };
+        let out = meniere(buf, 1.0);
+        assert!(out.samples.is_empty());
+    }
+
+    #[test]
+    fn meniere_stereo_preserves_channel_count() {
+        let buf = AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 2 };
+        let out = meniere(buf, 1.0);
+        assert_eq!(out.channels, 2);
+        assert_eq!(out.samples.len(), 2000);
+    }
+
+    #[test]
+    fn meniere_adds_low_tinnitus_to_silence() {
+        // 無音に低音の唸る耳鳴りが加わるので RMS > 0
+        let buf = silence(44100, 44100, 1);
+        let out = meniere(buf, 1.0);
+        assert!(rms(&out.samples) > 0.0, "meniere should add roaring tinnitus to silence");
+    }
+
+    #[test]
+    fn meniere_attenuates_low_more_than_high() {
+        // 低音域感音難聴: 低音(60 Hz)は減衰するが高音(2 kHz)はハイパスを通過する。
+        // tinnitus が一律に低音を加えても、低音入力の方が RMS 保持率が低くなることで検証する。
+        let low = sine_wave(60.0, 44100, 44100);
+        let low_ratio = rms(&meniere(low.clone(), 1.0).samples) / rms(&low.samples).max(1e-6);
+
+        let high = sine_wave(2000.0, 44100, 44100);
+        let high_ratio = rms(&meniere(high.clone(), 1.0).samples) / rms(&high.samples).max(1e-6);
+
+        assert!(
+            low_ratio < high_ratio,
+            "meniere must attenuate low freq more than high: low_ratio={low_ratio}, high_ratio={high_ratio}"
+        );
     }
 
     #[test]

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat: kako-jun/sensus#103 メニエール病フィルタ + `Experience` 複合記述子を追加**: 仕様の三徴候「回転性めまい + 低音域難聴 + 低い唸る耳鳴り」のうち、フィルタ自体が存在しなかった移植漏れを解消。
+  - `hearing::meniere()` + `HearingFilter::Meniere`: 聴覚側を合成。**低音域**感音難聴（メニエールの特徴。加齢性 = 高音カットの `hearing_loss` とは逆向き。100→800 Hz ハイパスの部分ブレンド）+ ~200 Hz の低い唸る耳鳴り。低音(60 Hz)が高音(2 kHz)より強く減衰することを効果アサート（`meniere_attenuates_low_more_than_high`）。
+  - `Experience { id, vision: Option<Filter>, hearing: Option<HearingFilter>, urgency: Urgency }`: 視覚と聴覚にまたがる複合体験の正準記述子。sensus は pure・別バッファ（画像/音声）アーキテクチャで単一バッファに複合症状を持てないため、「どの視覚フィルタとどの聴覚フィルタを組にすれば仕様どおりか」をライブラリ側で正準化し、consumer（universal-experience GUI 等）が組み合わせをハードコードせず取得できるようにした。`Experience::MENIERE`（Vertigo + Meniere + 早期受診）。`apply_vision()` / `apply_audio()` は欠けた modality で `Ok(None)`。
+  - `Urgency { None, EarlyConsultation, Emergency }`: 受診喚起の緊急度分類。局所化文字列を core に埋めず分類のみ保持し、consumer 側で i18n メッセージを出し分けられる設計。
 - **feat: kako-jun/sensus#102 ミソフォニア（misophonia）聴覚フィルタを追加**: 仕様リーフ（sensus.md）に挙がっていたが未実装だった移植漏れを解消。`HearingFilter::Misophonia { freq_hz }` + `hearing::misophonia()`。ハイパーアクーシス（[`hyperacusis`] = 全帯域一様増幅）と違い、`freq_hz` 中心のトリガー帯域（band-reject の補集合）だけを最大 6 倍ブースト + tanh 倍音歪みで耳障り化し、帯域外は残す。この帯域選択性を効果アサートテスト（`misophonia_is_band_selective`: トリガー帯域 2 kHz の RMS 変化 > 帯域外 200 Hz の RMS 変化）で固定。strength=0 恒等 / 空バッファ / ステレオ保持も検証。
 
 ### Docs
