@@ -1783,12 +1783,13 @@ pub enum DepthBlurKind {
 ///
 /// 深度ブラーは深度マップという第 2 入力を要するため、単一入力契約の
 /// [`crate::Filter`] / [`crate::apply`] には載せていない（`Filter` は `Copy` で、
-/// 画像を抱える深度マップを variant に入れられない）。consumer は次の 2 経路で到達する:
-/// - Rust ライブラリ: 本関数 `depth_aware_blur` を直接呼ぶ（既に `pub`）。
-/// - GLSL（universal-experience の Flutter 経路）: [`crate::shaders::depth_aware_blur_glsl`]
-///   + [`crate::shaders::depth_aware_blur_uniforms`]。深度マップを `uDepth` テクスチャで渡す。
-///   CPU は 8 ビン box blur の多パス、GLSL は per-fragment Fibonacci 16 tap disk と算法が
-///   異なるため bit/PSNR 等価ではなく、効果（ピント面鮮明・離れるほどぼける・kind 選択）で担保。
+/// 画像を抱える深度マップを variant に入れられない）。consumer の到達経路は 2 つ:
+/// Rust ライブラリは本関数 `depth_aware_blur` を直接呼ぶ（既に `pub`）。
+/// GLSL（universal-experience の Flutter 経路）は [`crate::shaders::depth_aware_blur_glsl`]
+/// + [`crate::shaders::depth_aware_blur_uniforms`] を使い、深度マップを `uDepth` テクスチャで渡す。
+///
+/// CPU は 8 ビン box blur の多パス、GLSL は per-fragment Fibonacci 16 tap disk と算法が
+/// 異なるため bit/PSNR 等価ではなく、効果（ピント面鮮明・離れるほどぼける・kind 選択）で担保する。
 pub fn depth_aware_blur(
     img: DynamicImage,
     depth_map: &DynamicImage,
@@ -2780,6 +2781,23 @@ pub fn teichopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 // Issue #59: Flickering Stars フィルタ
 // ---------------------------------------------------------------
 
+/// 点群（flickering_stars / floaters）用の 32bit spatial hash（#134）。
+///
+/// draw index `k` と `seed` から決定論的に 0..=u32::MAX を返す。#99/#125 の
+/// cataract grid_hash と同じ黄金比定数混合 + XOR-shift finalizer 系列で、GLSL の
+/// `uint` 演算（mod 2^32 wrap）と bit 一致する。64bit LCG と違い 32bit GPU で再現可能。
+pub(crate) fn star_hash32(seed: u32, k: u32) -> u32 {
+    let mut h = seed
+        .wrapping_mul(0x9e3779b9)
+        .wrapping_add(k.wrapping_mul(0x85ebca6b));
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2c1b3c6d);
+    h ^= h >> 12;
+    h = h.wrapping_mul(0x297a2d39);
+    h ^= h >> 15;
+    h
+}
+
 /// 閃光光点（Flickering Stars）シミュレーション。
 ///
 /// LCG でランダムな光点を生成して additive blend する。
@@ -2803,28 +2821,24 @@ pub fn flickering_stars(img: DynamicImage, strength: f32, seed: u64) -> Result<D
     let w_f = width as f32;
     let h_f = height as f32;
 
-    // LCG ヘルパー
-    let lcg_next = |state: u64| -> (u64, f32) {
-        let next = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let fval = (next >> 32) as f32 / u32::MAX as f32;
-        (next, fval)
-    };
-
-    let mut state = seed.wrapping_mul(0x9e3779b97f4a7c15).wrapping_add(1);
+    // #134: 32bit spatial hash で点ごとの位置・輝度を生成する。
+    // 旧 64bit LCG（`(state>>32)` 抽出）は GLSL の 32bit uint で再現できず CPU↔GLSL が
+    // 乖離していた。点 i は draw index 3i, 3i+1, 3i+2 を引く（順序固定）。
+    // `flickering_stars.frag` / sim_flickering_stars_glsl と bit 一致する。
+    let seed32 = seed as u32;
+    let hash01 = |k: u32| -> f32 { star_hash32(seed32, k) as f32 / u32::MAX as f32 };
 
     // linear sRGB に変換して作業
     let (mut linear, alpha) = rgba_to_linear_planes(&rgba);
 
     const BLOB_RADIUS: i32 = 2;
 
-    for _ in 0..count {
-        let (s1, fx) = lcg_next(state);
-        let (s2, fy) = lcg_next(s1);
+    for i in 0..count {
+        let i = i as u32;
+        let fx = hash01(3 * i);
+        let fy = hash01(3 * i + 1);
         // 輝度 0.5..1.0（白っぽい光点）
-        let (s3, fb) = lcg_next(s2);
-        state = s3;
+        let fb = hash01(3 * i + 2);
 
         let cx = (fx * w_f) as i32;
         let cy = (fy * h_f) as i32;

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix: kako-jun/sensus#134 flickering_stars のノイズを CPU↔GLSL で統一（floaters は parity 不能を明文化）**:
+  - **flickering_stars**: CPU の 64bit LCG（`(state>>32)` 抽出・32bit GPU で再現不能）を、点 index ベースの 32bit spatial hash（`vision::star_hash32`、#99/#125 cataract と同系列の黄金比混合 + XOR-shift）に統一。`flickering_stars.frag` も旧 Wang hash + 円形 distance + 合計後クランプから、同一 hash + 整数ピクセル中心の 5×5 正方ボックス + **点ごとの min(1.0) クランプ**（CPU と同順・同演算）に書き換え。点数は float 再計算による不一致を避けるため `FlickeringStarsUniforms.count`（= `(strength*200) as i32`）として渡す。`sim_flickering_stars_glsl` 忠実ミラーで CPU↔GLSL **PSNR ≥ 40 dB**（strength 1.0 / 0.5 非正方形 / seed 差）を検証。
+  - **floaters**: 単一パス GLSL での CPU 忠実再現は不能と判断・明文化。理由は (1) 乱歩ストランドがデータ依存の RNG ストリームを逐次消費し、(2) 最終マスクに 3×3 box blur を掛けるため、200 点ぶんのストランドを毎フラグメントで replay しつつ 9 近傍マスクを再計算する必要があり実機描画として非現実的。`floaters.frag` を意図的近似のまま据え置き、真の parity に必要な設計判断（blob-only モデルへの統一 or CPU 生成マスクのテクスチャ受け渡し）を follow-up として分離。
+
 ### Added
 
 - **feat: kako-jun/sensus#107 depth_aware_blur の GLSL シェーダを追加（移植の残り半分）**: `vision::depth_aware_blur` は CPU 実装・ユニットテスト済みだったが GLSL シェーダが無く、universal-experience の Flutter FragmentProgram 経路から到達できなかった。`depth_aware_blur.frag` + `shaders::depth_aware_blur_glsl()` + `depth_aware_blur_uniforms()` を追加。深度マップを `uDepth` テクスチャで渡す単一パスシェーダで、per-fragment に深度から半径を求め Fibonacci lattice 16 tap disk（eye_strain/photophobia と同方式）で円盤近似ブラー。CPU は 8 ビン box blur の多パスと算法が異なるため bit/PSNR 等価は取らず、`.frag` 忠実ミラー sim で効果（ピント面鮮明 / 離れるほどぼける / kind による前後選択 / DoF 両側）を検証（5 件）。**`Filter` enum/apply() には載せない判断**: 深度ブラーは深度マップという第 2 入力を要し、`Copy` な単一入力 `Filter`/`apply(filter,img,strength)` 契約に収まらないため。consumer は Rust=`vision::depth_aware_blur`（既に pub）/ GLSL=`*_glsl()` + `uDepth` で到達する（doc に明記）。

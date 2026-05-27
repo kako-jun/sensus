@@ -1,63 +1,69 @@
 #version 300 es
-precision mediump float;
+precision highp float;
+precision highp int;
+
+// 閃輝暗点・光の星（Flickering stars）シミュレーション。
+// CPU 実装 vision::flickering_stars と同一のモデル（#134 で CPU↔GLSL を統一）。
+//
+// 点 i ごとに 32bit spatial hash（star_hash32）で位置(fx,fy)と輝度を生成し、
+// 整数ピクセル中心の 5×5 正方ボックス（|dx|<=2 && |dy|<=2）内の画素に
+// linear sRGB 空間で輝度を加算する。加算は点ごとに min(1.0) でクランプする
+// （= CPU の per-star clamp と同順・同演算）。
+//
+// 旧実装は Wang hash + 円形 distance + 合計後クランプで、CPU の 64bit LCG +
+// 正方ボックス + per-star clamp と乖離していた（#134）。
+
 uniform sampler2D uTexture;
 uniform float uStrength;
-uniform uint uSeed;
+uniform uint uSeed;       // u64 シードの下位 32bit
+uniform int uCount;       // 点数 = (strength * 200) as usize（CPU 側で算出して渡す）
 uniform vec2 uResolution;
+
 in vec2 vTexCoord;
 out vec4 fragColor;
 
-// uint ベースのハッシュ（精度劣化なし）
-// Wang hash
-uint hash_uint(uint n) {
-    n = (n ^ 61u) ^ (n >> 16u);
-    n *= 9u;
-    n = n ^ (n >> 4u);
-    n *= 0x27d4eb2du;
-    n = n ^ (n >> 15u);
-    return n;
+// #134: CPU vision::star_hash32 と同一の 32bit hash（cataract gridNoise と同系列）。
+uint starHash(uint seed, uint k) {
+    uint h = seed * 0x9e3779b9u + k * 0x85ebca6bu;
+    h ^= h >> 15;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12;
+    h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return h;
+}
+float hash01(uint k) {
+    return float(starHash(uSeed, k)) / float(0xFFFFFFFFu); // 0.0..=1.0
 }
 
-// [0, 1) の float に変換
-float hash_to_float(uint h) {
-    return float(h & 0x00ffffffu) / float(0x01000000u);
-}
-
-// sRGB -> linear
-float srgb_to_linear(float c) {
+float srgbToLinear(float c) {
     return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
 }
-// linear -> sRGB
-float linear_to_srgb(float c) {
+float linearToSrgb(float c) {
     return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
 void main() {
     vec4 c = texture(uTexture, vTexCoord);
-    vec3 lin = vec3(srgb_to_linear(c.r), srgb_to_linear(c.g), srgb_to_linear(c.b));
+    vec3 lin = vec3(srgbToLinear(c.r), srgbToLinear(c.g), srgbToLinear(c.b));
 
-    float count = uStrength * 200.0;
-    float blob_radius = 2.0;
-    float brightness_add = 0.0;
+    // 現フラグメントの整数ピクセル座標（CPU の px, py に対応）
+    ivec2 p = ivec2(floor(vTexCoord * uResolution));
 
-    vec2 px = vTexCoord * uResolution;
-
-    for (int i = 0; i < 200; i++) {
-        if (float(i) >= count) break;
+    const int BLOB_RADIUS = 2;
+    for (int i = 0; i < uCount; i++) {
         uint ui = uint(i);
-        // uSeed * 1000u: 各光点のハッシュ入力を seed でシフトする定数倍。
-        // uint 演算なのでラップアラウンド（オーバーフロー）は意図的な動作。
-        uint h1 = hash_uint(ui + uSeed * 1000u);
-        uint h2 = hash_uint(ui + uSeed * 1000u + 7654u);
-        uint h3 = hash_uint(ui + uSeed * 1000u + 9876u);
-        float fx = hash_to_float(h1) * uResolution.x;
-        float fy = hash_to_float(h2) * uResolution.y;
-        float dist = length(px - vec2(fx, fy));
-        if (dist <= blob_radius) {
-            brightness_add += 0.5 + hash_to_float(h3) * 0.5;
+        float fx = hash01(3u * ui);
+        float fy = hash01(3u * ui + 1u);
+        float fb = hash01(3u * ui + 2u);
+        int cx = int(fx * uResolution.x);
+        int cy = int(fy * uResolution.y);
+        float brightness = 0.5 + fb * 0.5;
+        if (abs(p.x - cx) <= BLOB_RADIUS && abs(p.y - cy) <= BLOB_RADIUS) {
+            // CPU と同じく点ごとに min(1.0) でクランプ
+            lin = min(lin + vec3(brightness), 1.0);
         }
     }
 
-    vec3 result = clamp(lin + vec3(brightness_add), 0.0, 1.0);
-    fragColor = vec4(linear_to_srgb(result.r), linear_to_srgb(result.g), linear_to_srgb(result.b), c.a);
+    fragColor = vec4(linearToSrgb(lin.r), linearToSrgb(lin.g), linearToSrgb(lin.b), c.a);
 }
