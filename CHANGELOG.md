@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat: kako-jun/sensus#104 前庭性めまいの聴覚側を医学的に正しく移植（BPPV/前庭神経炎は聴力温存、迷路炎を追加）**: 監査は「vertigo/BPPV/前庭神経炎は視覚半分のみ配線、聴覚側未移植」と疑ったが、調査の結果 **BPPV と前庭神経炎は定義上 聴力が保たれる**（前庭神経炎で難聴を伴えばそれは迷路炎）。難聴・耳鳴りを捏造せず、医学的に正しい配線にした。
+  - `Experience::BPPV`（BppvRotation + `hearing: None` + 緊急性なし）/ `Experience::VESTIBULAR_NEURITIS`（VestibularNeuritis + `hearing: None` + Emergency〔脳卒中鑑別〕）: 聴力温存を doc で明記。
+  - `Experience::LABYRINTHITIS` + `HearingFilter::Labyrinthitis` + `hearing::labyrinthitis()`: 「めまい＋難聴＋耳鳴り」の前庭性複合を医学的に正しく表せる迷路炎を追加。内耳（蝸牛含む）炎症で**高音域感音難聴 + 高音(4 kHz)耳鳴り**。前庭神経炎との鑑別点（聴覚症状の有無）を体験で示す。高音が低音より強く減衰（メニエールの低音減衰と逆向き）を効果アサート。
 - **feat: kako-jun/sensus#103 メニエール病フィルタ + `Experience` 複合記述子を追加**: 仕様の三徴候「回転性めまい + 低音域難聴 + 低い唸る耳鳴り」のうち、フィルタ自体が存在しなかった移植漏れを解消。
   - `hearing::meniere()` + `HearingFilter::Meniere`: 聴覚側を合成。**低音域**感音難聴（メニエールの特徴。加齢性 = 高音カットの `hearing_loss` とは逆向き。100→800 Hz ハイパスの部分ブレンド）+ ~200 Hz の低い唸る耳鳴り。低音(60 Hz)が高音(2 kHz)より強く減衰することを効果アサート（`meniere_attenuates_low_more_than_high`）。
   - `Experience { id, vision: Option<Filter>, hearing: Option<HearingFilter>, urgency: Urgency }`: 視覚と聴覚にまたがる複合体験の正準記述子。sensus は pure・別バッファ（画像/音声）アーキテクチャで単一バッファに複合症状を持てないため、「どの視覚フィルタとどの聴覚フィルタを組にすれば仕様どおりか」をライブラリ側で正準化し、consumer（universal-experience GUI 等）が組み合わせをハードコードせず取得できるようにした。`Experience::MENIERE`（Vertigo + Meniere + 早期受診）。`apply_vision()` / `apply_audio()` は欠けた modality で `Ok(None)`。
