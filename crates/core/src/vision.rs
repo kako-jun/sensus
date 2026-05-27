@@ -657,6 +657,9 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     const WHITE_BLEND_MAX: f32 = 0.4;
     // 格子セルサイズ（旧 BLOCK_SIZE=8 より大きい 32px で空間相関を確保）
     const CELL_SIZE: f32 = 32.0;
+    // VIP-Sim 二段モデルのコントラスト/輝度低下（#106）。
+    const CATARACT_PIVOT: f32 = 0.5;
+    const CATARACT_BRIGHTNESS_DROP: f32 = 0.1;
 
     // 格子頂点ごとの白濁ノイズ値を 32bit 整数 spatial hash で生成する。
     //
@@ -736,6 +739,23 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let nr = r + (yr - r) * strength;
             let ng = g + (yg - g) * strength;
             let nb = b + (yb - b) * strength;
+
+            // VIP-Sim 二段モデルの未移植分（#106）: severity 比例の輝度・コントラスト低下。
+            // 白内障の霞み感の核。pivot 0.5 を中心にコントラストを per-channel 収縮させ
+            // （ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）、全体輝度を僅かに下げる。
+            // c_ch = 1 - s*(1 - coeff_ch) で strength=0 のとき恒等。CPU/GLSL/sim で同一演算。
+            let nr = ((nr - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7))
+                + CATARACT_PIVOT
+                - strength * CATARACT_BRIGHTNESS_DROP)
+                .clamp(0.0, 1.0);
+            let ng = ((ng - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7))
+                + CATARACT_PIVOT
+                - strength * CATARACT_BRIGHTNESS_DROP)
+                .clamp(0.0, 1.0);
+            let nb = ((nb - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.4))
+                + CATARACT_PIVOT
+                - strength * CATARACT_BRIGHTNESS_DROP)
+                .clamp(0.0, 1.0);
 
             // Simplex-like ノイズによる白濁（空間相関あり）
             let noise = grid_sample(x, y);
@@ -4024,6 +4044,27 @@ mod tests {
         assert_eq!(
             raw_rgba_vec(&cataract(input, f32::NAN, 42).unwrap()),
             original
+        );
+    }
+
+    #[test]
+    fn cataract_reduces_brightness_and_contrast() {
+        // #106: VIP-Sim 二段モデルの輝度・コントラスト低下。
+        // 1x1 の白と黒（同一座標なので白濁ノイズは共通）で輝度差が縮むことを確認する。
+        let white = cataract(solid_rgba(1, 1, [255, 255, 255, 255]), 1.0, 42).unwrap();
+        let black = cataract(solid_rgba(1, 1, [0, 0, 0, 255]), 1.0, 42).unwrap();
+        let w = raw_rgba_vec(&white);
+        let b = raw_rgba_vec(&black);
+        let w_sum: i32 = w[0..3].iter().map(|&v| v as i32).sum();
+        let b_sum: i32 = b[0..3].iter().map(|&v| v as i32).sum();
+        // 白は最大未満まで下がる（コントラスト収縮 + 輝度低下）
+        assert!(w_sum < 255 * 3, "cataract should dim pure white: sum={w_sum}");
+        // 黒は白濁ヴェールで持ち上がる
+        assert!(b_sum > 0, "cataract veil should lift pure black: sum={b_sum}");
+        // 白黒の輝度差（コントラスト）が元の最大 (255*3) より縮む
+        assert!(
+            (w_sum - b_sum) < 255 * 3,
+            "cataract should compress contrast: white_sum={w_sum}, black_sum={b_sum}"
         );
     }
 

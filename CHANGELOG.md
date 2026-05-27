@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat: kako-jun/sensus#106 cataract に輝度・コントラスト低下を追加（VIP-Sim 二段モデルの未移植分）**: これまで黄変マトリクス + 白濁ノイズのみで、白内障の霞み感の核である輝度・コントラスト低下が移植されていなかった。VIP-Sim の BrightnessContrast 段に倣い、linear sRGB 空間で pivot 0.5 中心の per-channel コントラスト収縮（ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）+ severity 比例の輝度低下を追加。`c_ch = 1 - s*(1 - coeff_ch)` で strength=0 のとき恒等。**CPU `vision::cataract` / `cataract.frag` / `sim_cataract_glsl` の 3 箇所に同一演算で実装し、既存の CPU↔GLSL 等価テスト（PSNR ≥ 30 dB）を維持**。効果アサート `cataract_reduces_brightness_and_contrast`（白黒 1×1 の輝度差が圧縮されることを検証）。
+
 - **feat: kako-jun/sensus#105 聴覚フィルタ + AudioPipeline を CLI から利用可能に（`--audio` / WAV）**: 聴覚モジュール全体（15 フィルタ）と `AudioPipeline` が CLI から一切叩けず、Cargo.toml の description が "hearing loss" を宣伝しながら binary では到達不可だった矛盾を解消。
   - `--audio <in.wav> --hearing <filter>... -o <out.wav>`: WAV を読み、`--hearing` の聴覚フィルタを `AudioPipeline` で順に適用して WAV 出力。`--hearing` は複数指定でチェーン可。パラメータ付きフィルタ用に `--freq`（tinnitus/sudden-hearing-loss/misophonia）と `--semitones`（pitch-shift）を追加。
   - WAV I/O は `hound` で実装（`crates/cli/src/audio.rs`）。整数/浮動小数 PCM を正規化 f32 で読み、出力時に入力の bit 深度・形式へ戻す。チャンネル数は適用後バッファに追従（diplacusis の mono→stereo を保つ）。**mp3/flac 等の広域デコードは非対象**。

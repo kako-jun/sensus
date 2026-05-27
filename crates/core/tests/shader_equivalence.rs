@@ -3764,6 +3764,16 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
             let ng = g + (yg - g) * strength;
             let nb = b + (yb - b) * strength;
 
+            // #106: VIP-Sim 二段モデルの輝度・コントラスト低下（.frag / CPU と同一）
+            const PIVOT: f32 = 0.5;
+            const BRIGHTNESS_DROP: f32 = 0.1;
+            let nr = ((nr - PIVOT) * (1.0 - strength * (1.0 - 0.7)) + PIVOT - strength * BRIGHTNESS_DROP)
+                .clamp(0.0, 1.0);
+            let ng = ((ng - PIVOT) * (1.0 - strength * (1.0 - 0.7)) + PIVOT - strength * BRIGHTNESS_DROP)
+                .clamp(0.0, 1.0);
+            let nb = ((nb - PIVOT) * (1.0 - strength * (1.0 - 0.4)) + PIVOT - strength * BRIGHTNESS_DROP)
+                .clamp(0.0, 1.0);
+
             // pixelPos = vTexCoord * uResolution - 0.5 = (x, y)（整数ピクセル座標）
             let noise = smooth_noise(x as f32, y as f32);
             const WHITE_BLEND_MAX: f32 = 0.4;
