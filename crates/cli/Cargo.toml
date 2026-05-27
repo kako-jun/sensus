@@ -23,7 +23,10 @@ sensus-core = { workspace = true }
 clap = { workspace = true }
 image = { workspace = true, default-features = true }
 thiserror = { workspace = true }
+# WAV 入出力のみ（#105）。mp3/flac 等は対象外。
+hound = "3"
 
 [dev-dependencies]
 image = { workspace = true, default-features = true }
 tempfile = { workspace = true }
+hound = "3"

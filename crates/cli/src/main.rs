@@ -3,12 +3,14 @@
 //! Phase 1 (Issue #2) 以降で各フィルタを実装する。本 scaffold (#1) では
 //! 引数を受け取り、未実装フィルタの場合は stderr に通知して exit(2) する。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sensus_core::{pipeline::{FilterStep, Pipeline}, stereo::{split_mpo, stereo_to_depth, read_xmp_depth}, vision::{depth_aware_blur, DepthBlurKind}, Error as CoreError, Filter as CoreFilter};
+use sensus_core::{pipeline::{FilterStep, Pipeline}, stereo::{split_mpo, stereo_to_depth, read_xmp_depth}, vision::{depth_aware_blur, DepthBlurKind}, AudioPipeline, Error as CoreError, Filter as CoreFilter, HearingFilter};
 use thiserror::Error;
+
+mod audio;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Filter {
@@ -97,6 +99,65 @@ impl Filter {
                 // depth フィルタは pipeline を通さないため、ここには来ない
                 unreachable!("depth filters must be handled separately")
             }
+        }
+    }
+}
+
+/// CLI-facing hearing filter enum (clap derive). Maps to core [`HearingFilter`].
+/// `--audio` モードで `--hearing` に指定する（#105）。
+//
+// `HearingLoss` は疾患名（難聴）であって enum 名の重複ではないため allow する。
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Hearing {
+    /// 難聴（高音域カット）
+    HearingLoss,
+    /// 突発性難聴（--freq の帯域を削る）
+    SuddenHearingLoss,
+    /// 騒音性難聴（4 kHz 付近の損失）
+    NoiseInducedHearingLoss,
+    /// 耳鳴り（--freq の正弦波を常時ミックス）
+    Tinnitus,
+    /// 音響過敏（全体を異常増幅）
+    Hyperacusis,
+    /// ミソフォニア（--freq 中心のトリガー帯域だけ過剰増幅 + 歪み）
+    Misophonia,
+    /// 変音（金属的な歪み）
+    Paracusis,
+    /// 音楽音痴（音程差を識別しにくくする）
+    Amusia,
+    /// ジスメロディア（不快・歪んだ音）
+    Dysmelodia,
+    /// 音程シフト（--semitones 半音）
+    PitchShift,
+    /// ダイプラクシス（左右耳で異なる音程）
+    Diplacusis,
+    /// APD（聴覚情報処理障害）
+    AuditoryProcessingDisorder,
+    /// メニエール病の聴覚側（低音域難聴 + 低い唸る耳鳴り）
+    Meniere,
+    /// 迷路炎の聴覚側（高音域感音難聴 + 高音の耳鳴り）
+    Labyrinthitis,
+}
+
+impl Hearing {
+    /// Map the CLI-facing enum to the core enum, pulling parameters from `cli`.
+    fn to_core(self, cli: &Cli) -> HearingFilter {
+        match self {
+            Hearing::HearingLoss => HearingFilter::HearingLoss,
+            Hearing::SuddenHearingLoss => HearingFilter::SuddenHearingLoss { freq_hz: cli.freq },
+            Hearing::NoiseInducedHearingLoss => HearingFilter::NoiseInducedHearingLoss,
+            Hearing::Tinnitus => HearingFilter::Tinnitus { freq_hz: cli.freq },
+            Hearing::Hyperacusis => HearingFilter::Hyperacusis,
+            Hearing::Misophonia => HearingFilter::Misophonia { freq_hz: cli.freq },
+            Hearing::Paracusis => HearingFilter::Paracusis,
+            Hearing::Amusia => HearingFilter::Amusia,
+            Hearing::Dysmelodia => HearingFilter::Dysmelodia,
+            Hearing::PitchShift => HearingFilter::PitchShift { semitones: cli.semitones },
+            Hearing::Diplacusis => HearingFilter::Diplacusis,
+            Hearing::AuditoryProcessingDisorder => HearingFilter::AuditoryProcessingDisorder,
+            Hearing::Meniere => HearingFilter::Meniere,
+            Hearing::Labyrinthitis => HearingFilter::Labyrinthitis,
         }
     }
 }
@@ -203,6 +264,23 @@ struct Cli {
     /// Cannot be combined with --input.
     #[arg(long, conflicts_with = "input")]
     pipe: bool,
+
+    /// Input audio path (WAV). Routes to hearing-filter mode; requires --hearing and --output.
+    /// Cannot be combined with image filters (--filter) or --pipe.
+    #[arg(long, conflicts_with_all = ["input", "pipe", "mpo", "portrait"])]
+    audio: Option<PathBuf>,
+
+    /// Hearing filter(s) to apply to --audio. Specify multiple times to chain.
+    #[arg(long, value_enum, num_args = 1..)]
+    hearing: Vec<Hearing>,
+
+    /// Frequency (Hz) for --hearing tinnitus / sudden-hearing-loss / misophonia. Default: 4000.
+    #[arg(long, default_value_t = 4000.0, value_parser = parse_freq)]
+    freq: f32,
+
+    /// Semitones for --hearing pitch-shift (negative = lower, positive = higher). Default: 0.0
+    #[arg(long, default_value_t = 0.0, value_parser = parse_semitones)]
+    semitones: f32,
 }
 
 /// Parse the `--strength` argument and reject values outside `0.0..=1.0`
@@ -259,6 +337,28 @@ fn parse_axis(s: &str) -> Result<f32, String> {
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if v.is_nan() || !(0.0..=180.0).contains(&v) {
         return Err(format!("axis must be in 0.0..=180.0 degrees, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse `--freq` (Hz) for hearing filters. 正の有限値 0 < f <= 20000 のみ許容する。
+fn parse_freq(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if !v.is_finite() || v <= 0.0 || v > 20000.0 {
+        return Err(format!("freq must be in 0.0 (exclusive)..=20000.0 Hz, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse `--semitones` for pitch-shift. 有限値かつ ±48 半音（±4 オクターブ）以内。
+fn parse_semitones(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if !v.is_finite() || !(-48.0..=48.0).contains(&v) {
+        return Err(format!("semitones must be finite and in -48.0..=48.0, got {v}"));
     }
     Ok(v)
 }
@@ -324,6 +424,10 @@ enum RunError {
     #[error("{0}")]
     InputRequired(String),
 
+    /// --audio モードのバリデーション失敗 / WAV 読み書き失敗
+    #[error("{0}")]
+    AudioError(String),
+
     #[error("sensus: I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -356,6 +460,10 @@ fn main() -> ExitCode {
             eprintln!("{msg}");
             ExitCode::FAILURE
         }
+        Err(RunError::AudioError(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::FAILURE
+        }
         Err(RunError::NotImplemented(msg)) => {
             eprintln!("{msg}");
             ExitCode::from(2)
@@ -368,6 +476,11 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), RunError> {
+    // --audio モード: WAV を読み、聴覚フィルタチェーンを適用して WAV に書き出す
+    if let Some(audio_path) = cli.audio.clone() {
+        return run_audio(&cli, &audio_path);
+    }
+
     // --pipe モード: stdin から JPEG フレームを読み stdout に出力する
     if cli.pipe {
         return run_pipe(&cli);
@@ -577,6 +690,36 @@ fn run(cli: Cli) -> Result<(), RunError> {
         }),
         Err(e) => Err(RunError::Pipeline(format!("sensus: {e}"))),
     }
+}
+
+/// --audio モード: WAV を読み、`--hearing` の聴覚フィルタを [`AudioPipeline`] で
+/// 順番に適用し、WAV に書き出す。
+fn run_audio(cli: &Cli, audio_path: &Path) -> Result<(), RunError> {
+    if cli.hearing.is_empty() {
+        return Err(RunError::AudioError(
+            "sensus: --audio requires at least one --hearing filter".to_string(),
+        ));
+    }
+    if !cli.filter.is_empty() {
+        return Err(RunError::AudioError(
+            "sensus: --audio (hearing) cannot be combined with --filter (image filters)".to_string(),
+        ));
+    }
+    let out_path = cli.output.as_ref().ok_or_else(|| {
+        RunError::AudioError("sensus: --output <PATH> is required with --audio".to_string())
+    })?;
+
+    let (buf, spec) = audio::read_wav(audio_path).map_err(RunError::AudioError)?;
+
+    let mut pipeline = AudioPipeline::new();
+    for h in &cli.hearing {
+        pipeline = pipeline.push(h.to_core(cli), cli.strength);
+    }
+    let out = pipeline
+        .apply(&buf)
+        .map_err(|e| RunError::AudioError(format!("sensus: {e}")))?;
+
+    audio::write_wav(out_path, &out, spec).map_err(RunError::AudioError)
 }
 
 /// 画像にフィルタパイプラインを適用する（--pipe モードと通常モードの共通処理）。
