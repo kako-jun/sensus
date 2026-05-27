@@ -13,7 +13,7 @@ accessibility demos, educational tools, and apps like
 **v0.4.0** — stable release on [crates.io](https://crates.io/crates/sensus).
 All vision filters through Phase 4 (color vision, refraction, visual field,
 light/transparency, balance/vertigo, eye fatigue, and more) are implemented,
-plus 11 hearing-loss filters in the library. See
+plus 15 hearing filters (usable from the CLI via `--audio`). See
 [`docs/roadmap.md`](docs/roadmap.md) for the full phase tracker.
 
 ## Filters
@@ -56,18 +56,28 @@ Depth-aware refraction is also available **CLI-side only** via
 `--filter myopia-depth` / `hyperopia-depth` / `depth-of-field` combined with
 `--depth`, `--mpo`, or `--portrait` (#19).
 
-### Hearing (library API)
+### Hearing (library + CLI)
 
-11 hearing filters operate on audio buffers (#7–#9): `hearing_loss`,
+15 hearing filters operate on audio buffers (#7–#9, #102–#104): `hearing_loss`,
 `sudden_hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`,
-`hyperacusis`, `paracusis`, `amusia`, `dysmelodia`, `pitch_shift_semitones`,
-`diplacusis`, and `auditory_processing_disorder` (APD). Each takes a
+`hyperacusis`, `misophonia`, `paracusis`, `amusia`, `dysmelodia`,
+`pitch_shift_semitones`, `diplacusis`, `auditory_processing_disorder` (APD),
+`meniere`, and `labyrinthitis`. Each takes a
 `sensus_core::hearing::AudioBuffer` (f32 interleaved PCM) and returns one.
 
-> **Note:** hearing filters are **library-only** — the `sensus` CLI has no
-> audio I/O and its `--filter` flag accepts vision filters only. Use
-> `sensus_core::apply_hearing` / `HearingFilter` from Rust. CLI support for
-> hearing is tracked in #105.
+From the CLI, use `--audio <in.wav> --hearing <filter> -o <out.wav>` (WAV only).
+See [CLI usage](#cli-usage). From Rust, use `sensus_core::apply_hearing` /
+`HearingFilter`, or chain via `AudioPipeline`.
+
+### Composite experiences (`Experience`)
+
+Some conditions span both vision and hearing (e.g. Ménière's disease =
+spinning vertigo + low-frequency hearing loss + low-pitched tinnitus). Because
+sensus is a pure, separate-buffer (image vs audio) library, `Experience`
+canonicalises which vision filter pairs with which hearing filter, so consumers
+(e.g. the universal-experience GUI) don't hard-code the combination:
+`Experience::MENIERE`, `BPPV`, `VESTIBULAR_NEURITIS`, `LABYRINTHITIS`. Each
+carries an `Urgency` classification for "see a doctor" prompts.
 
 Each filter ships with a short note on **when to see a doctor** — sensus is
 designed both as an empathy / education tool and as an early-warning primer
@@ -110,6 +120,13 @@ sensus -i photo.png -o out.png --filter glaucoma --filter cataract --strength 0.
 ffmpeg -i video.mp4 -f image2pipe -vcodec mjpeg - | \
     sensus --filter deuteranopia --pipe | \
     ffmpeg -f mjpeg -i - -c:v libx264 out.mp4
+
+# Hearing: apply hearing filters to a WAV file (#105). WAV in / WAV out only.
+sensus --audio voice.wav -o voice-hearing-loss.wav --hearing hearing-loss -s 1.0
+sensus --audio voice.wav -o voice-tinnitus.wav     --hearing tinnitus     --freq 6000 -s 0.7
+# Chain hearing filters and use the composite Ménière hearing side
+sensus --audio voice.wav -o voice-meniere.wav      --hearing meniere      -s 0.8
+sensus --audio voice.wav -o voice-chain.wav        --hearing hearing-loss tinnitus --freq 4000
 ```
 
 Flags:
@@ -117,8 +134,12 @@ Flags:
 | Flag | Description |
 |---|---|
 | `-i`, `--input`    | Input image path (PNG / JPEG / WebP, etc.). |
-| `-o`, `--output`   | Output image path. Format is inferred from the extension. |
-| `-f`, `--filter`   | Filter to apply (e.g. `deuteranopia`, `cataract`, `glaucoma`). |
+| `-o`, `--output`   | Output path (image, or WAV with `--audio`). Format is inferred from the extension. |
+| `-f`, `--filter`   | Vision filter to apply (e.g. `deuteranopia`, `cataract`, `glaucoma`). |
+| `--audio`          | Input audio path (WAV). Routes to hearing-filter mode; requires `--hearing` and `-o`. Cannot be combined with `--filter` / `--pipe`. |
+| `--hearing`        | Hearing filter(s) for `--audio` (e.g. `hearing-loss`, `tinnitus`, `meniere`, `labyrinthitis`). Repeatable to chain. |
+| `--freq`           | Frequency (Hz) for `--hearing tinnitus` / `sudden-hearing-loss` / `misophonia`. Default `4000`. |
+| `--semitones`      | Semitones for `--hearing pitch-shift` (negative = lower). Default `0.0`. |
 | `-s`, `--strength` | Strength `0.0 – 1.0`. `0.0` keeps the original; `1.0` is full effect. Default `1.0`. |
 | `--axis`           | Astigmatism cylinder axis in degrees `0.0 – 180.0`. Only used with `--filter astigmatism`. Default `90.0` (with-the-rule: vertical lines sharp, horizontal blurred). |
 
@@ -171,12 +192,12 @@ cylindrical lens / line spread function), not an elliptical disk — see
 The same function signatures can be applied frame-by-frame for video, or
 chained together via `sensus_core::pipeline`.
 
-### Hearing filters (library only)
+### Hearing filters
 
 Hearing filters live in `sensus_core::hearing` and are dispatched via
-`apply_hearing`. They operate on audio buffers, not images, and are **not
-exposed through the CLI** (see the note in the Filters section; CLI support
-is tracked in #105).
+`apply_hearing`. They operate on audio buffers, not images. From the CLI they
+are reachable via `--audio <in.wav> --hearing <filter> -o <out.wav>` (WAV only);
+from Rust use the API below or chain them via `AudioPipeline`.
 
 ```rust
 use sensus_core::{apply_hearing, hearing::AudioBuffer, HearingFilter};

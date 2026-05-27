@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat: kako-jun/sensus#105 聴覚フィルタ + AudioPipeline を CLI から利用可能に（`--audio` / WAV）**: 聴覚モジュール全体（15 フィルタ）と `AudioPipeline` が CLI から一切叩けず、Cargo.toml の description が "hearing loss" を宣伝しながら binary では到達不可だった矛盾を解消。
+  - `--audio <in.wav> --hearing <filter>... -o <out.wav>`: WAV を読み、`--hearing` の聴覚フィルタを `AudioPipeline` で順に適用して WAV 出力。`--hearing` は複数指定でチェーン可。パラメータ付きフィルタ用に `--freq`（tinnitus/sudden-hearing-loss/misophonia）と `--semitones`（pitch-shift）を追加。
+  - WAV I/O は `hound` で実装（`crates/cli/src/audio.rs`）。整数/浮動小数 PCM を正規化 f32 で読み、出力時に入力の bit 深度・形式へ戻す。チャンネル数は適用後バッファに追従（diplacusis の mono→stereo を保つ）。**mp3/flac 等の広域デコードは非対象**。
+  - `--audio` は `--input`/`--filter`/`--pipe`/`--mpo`/`--portrait` と排他。`--hearing` 無し・`-o` 無しは明示エラー。
+  - 統合テスト `crates/cli/tests/audio_integration.rs` 5 件（hearing-loss が 8 kHz を減衰 / チェーン / --hearing 無しで失敗 / diplacusis mono→stereo / --filter 併用で失敗）。README の CLI usage・フラグ表・hearing/Experience セクションを更新。
 - **feat: kako-jun/sensus#104 前庭性めまいの聴覚側を医学的に正しく移植（BPPV/前庭神経炎は聴力温存、迷路炎を追加）**: 監査は「vertigo/BPPV/前庭神経炎は視覚半分のみ配線、聴覚側未移植」と疑ったが、調査の結果 **BPPV と前庭神経炎は定義上 聴力が保たれる**（前庭神経炎で難聴を伴えばそれは迷路炎）。難聴・耳鳴りを捏造せず、医学的に正しい配線にした。
   - `Experience::BPPV`（BppvRotation + `hearing: None` + 緊急性なし）/ `Experience::VESTIBULAR_NEURITIS`（VestibularNeuritis + `hearing: None` + Emergency〔脳卒中鑑別〕）: 聴力温存を doc で明記。
   - `Experience::LABYRINTHITIS` + `HearingFilter::Labyrinthitis` + `hearing::labyrinthitis()`: 「めまい＋難聴＋耳鳴り」の前庭性複合を医学的に正しく表せる迷路炎を追加。内耳（蝸牛含む）炎症で**高音域感音難聴 + 高音(4 kHz)耳鳴り**。前庭神経炎との鑑別点（聴覚症状の有無）を体験で示す。高音が低音より強く減衰（メニエールの低音減衰と逆向き）を効果アサート。
