@@ -310,6 +310,51 @@ pub fn hyperacusis(buf: AudioBuffer, strength: f32) -> AudioBuffer {
     }
 }
 
+/// 聴覚過敏・ミソフォニア（misophonia）シミュレーション。
+///
+/// ハイパーアクーシス（[`hyperacusis`]）が音量全体への耐性低下なのに対し、
+/// ミソフォニアは**特定のトリガー音への強い不快感**であり、全体ではなく
+/// 特定周波数帯だけが過剰に大きく・耳障りに知覚される。
+///
+/// そこで `freq_hz` を中心とするトリガー帯域だけを抜き出して
+/// 強調（最大 6 倍ブースト）＋ tanh 倍音歪みで耳障り化し、帯域外はそのまま残す。
+/// この帯域選択性が hyperacusis（全帯域一様増幅）との違い。
+///
+/// `freq_hz`: 不快に感じるトリガー音の中心周波数（咀嚼音・打鍵音などは概ね 1–4 kHz）。
+/// `strength = 0.0` は元音声と同一。
+pub fn misophonia(buf: AudioBuffer, strength: f32, freq_hz: f32) -> AudioBuffer {
+    let s = strength.clamp(0.0, 1.0);
+    if s == 0.0 {
+        return buf;
+    }
+    let sr = buf.sample_rate;
+    // トリガー帯域幅。中心周波数の半分（最低 500 Hz）を採り、低中音の咀嚼音も拾えるようにする。
+    let bandwidth = (freq_hz.abs() * 0.5).clamp(500.0, 2000.0);
+    // band-reject でトリガー帯域を除いた成分（帯域外）を得る。
+    let rejected = apply_biquad_all_channels(&buf, || band_reject_biquad(freq_hz, bandwidth, sr));
+
+    // トリガー帯域成分 = 元信号 − 帯域外成分。これをブーストし tanh で耳障りに歪ませる。
+    let boost = 1.0 + s * 5.0; // 1.0 → 6.0
+    let drive = 1.0 + s * 3.0;
+    let reconstructed: Vec<f32> = buf
+        .samples
+        .iter()
+        .zip(rejected.iter())
+        .map(|(&orig, &rest)| {
+            let band = orig - rest; // トリガー帯域成分
+            let harsh = (band * drive).tanh(); // 倍音歪みで耳障り化
+            let aversive = harsh * boost; // 過剰増幅
+            (rest + aversive).clamp(-1.0, 1.0)
+        })
+        .collect();
+
+    AudioBuffer {
+        samples: blend(&buf.samples, &reconstructed, s),
+        sample_rate: buf.sample_rate,
+        channels: buf.channels,
+    }
+}
+
 /// 変音（paracusis）シミュレーション。
 ///
 /// ソフトクリッピング（3次倍音歪み）で金属的・歪んだ質感を付加する。
@@ -909,5 +954,63 @@ mod tests {
         let out_rms = rms(&out.samples);
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
         assert!(rel_diff > 0.1, "amusia strength=1 must significantly attenuate 4 kHz signal (rel_diff={rel_diff})");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #102: misophonia
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn misophonia_strength_zero_is_identity() {
+        let buf = sine_wave(2000.0, 1000, 44100);
+        let orig = buf.samples.clone();
+        let out = misophonia(buf, 0.0, 2000.0);
+        assert_eq!(out.samples, orig, "misophonia strength=0 should be byte-exact identity");
+    }
+
+    #[test]
+    fn misophonia_empty_buffer_does_not_panic() {
+        let buf = AudioBuffer { samples: vec![], sample_rate: 44100, channels: 1 };
+        let out = misophonia(buf, 1.0, 2000.0);
+        assert!(out.samples.is_empty());
+    }
+
+    #[test]
+    fn misophonia_stereo_preserves_channel_count() {
+        let buf = AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 2 };
+        let out = misophonia(buf, 1.0, 2000.0);
+        assert_eq!(out.channels, 2);
+        assert_eq!(out.samples.len(), 2000);
+    }
+
+    #[test]
+    fn misophonia_strength_one_differs_from_input() {
+        // トリガー周波数のサイン波は強調・歪みで RMS が変化する
+        let buf = sine_wave(2000.0, 44100, 44100);
+        let orig_rms = rms(&buf.samples);
+        let out = misophonia(buf, 1.0, 2000.0);
+        let out_rms = rms(&out.samples);
+        let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
+        assert!(rel_diff > 0.05, "misophonia strength=1 must alter the trigger-band signal (rel_diff={rel_diff})");
+    }
+
+    #[test]
+    fn misophonia_is_band_selective() {
+        // トリガー帯域内（2000 Hz）の方が帯域外（200 Hz）より強く影響を受ける
+        // ＝ hyperacusis（全帯域一様）との違いを検証する
+        let in_band = sine_wave(2000.0, 44100, 44100);
+        let in_orig = rms(&in_band.samples);
+        let in_out = rms(&misophonia(in_band, 1.0, 2000.0).samples);
+        let delta_in = (in_out - in_orig).abs() / in_orig.max(1e-6);
+
+        let out_band = sine_wave(200.0, 44100, 44100);
+        let out_orig = rms(&out_band.samples);
+        let out_out = rms(&misophonia(out_band, 1.0, 2000.0).samples);
+        let delta_out = (out_out - out_orig).abs() / out_orig.max(1e-6);
+
+        assert!(
+            delta_in > delta_out,
+            "trigger-band (2 kHz) must be affected more than out-of-band (200 Hz): delta_in={delta_in}, delta_out={delta_out}"
+        );
     }
 }

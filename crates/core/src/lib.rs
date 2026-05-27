@@ -152,6 +152,8 @@ pub enum HearingFilter {
     Tinnitus { freq_hz: f32 },
     /// 音響過敏: 音量を異常に増幅
     Hyperacusis,
+    /// ミソフォニア（聴覚過敏 / 特定音への強い不快）: `freq_hz` 中心のトリガー帯域だけを過剰増幅 + 歪み
+    Misophonia { freq_hz: f32 },
     /// 変音: 音を歪んだ・金属的な質感に加工
     Paracusis,
     /// 音楽音痴: 音程の違いを識別しにくくする
@@ -186,6 +188,7 @@ pub fn apply_hearing(
         }
         HearingFilter::Tinnitus { freq_hz } => hearing::tinnitus(buf, strength, freq_hz),
         HearingFilter::Hyperacusis => hearing::hyperacusis(buf, strength),
+        HearingFilter::Misophonia { freq_hz } => hearing::misophonia(buf, strength, freq_hz),
         HearingFilter::Paracusis => hearing::paracusis(buf, strength),
         HearingFilter::Amusia => hearing::amusia(buf, strength),
         HearingFilter::Dysmelodia => hearing::dysmelodia(buf, strength),
