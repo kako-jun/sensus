@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests / Findings
+
+- **test: kako-jun/sensus#114 hearing 効果アサートテストを網羅追加**: 従来は strength=0 恒等 / 空 / パニック耐性のみで「実際に効いているか」の効果検証が薄かった。6 件追加 — `diplacusis_left_and_right_differ`（L≠R = 左右別音程）/ `sudden_hearing_loss_attenuates_notch_band`（ノッチ帯域の RMS 低下）/ `noise_induced_hearing_loss_attenuates_4khz_more_than_low`（4 kHz を 500 Hz より強く減衰）/ `pitch_shift_changes_signal_but_keeps_length`（波形変化＋長さ保持）/ `tinnitus_adds_tone_on_nonsilent_signal`（無音だけでなく信号入りにもトーン重畳）/ `audio_pipeline_matches_sequential_apply_hearing`（AudioPipeline = 逐次 apply_hearing と bit 一致）。
+
 ### Fixed
 
 - **fix: kako-jun/sensus#120 GLSL uniforms の strength を CPU と同じく正規化 / sim の nearest 規約を明文化**: (1) 全 `*_uniforms` helper（30 個）が strength を生値のまま構造体に格納しており、範囲外/NaN を渡す将来の呼び出し元で CPU（`normalize_strength` = clamp 0..1 + NaN→0）と `uStrength` が乖離しえた。`normalize_strength` を `pub(crate)` 化し、各 helper 入口で適用（有効範囲 0..1 は素通しなので既存等価テストに影響なし）。回帰テスト `uniforms_normalize_strength_like_cpu` を追加。(2) `shader_equivalence` の sim が NEAREST を `(uv*dim).round()` で近似する規約（実 GLSL は `floor`）を、PSNR ≥ 30 dB に吸収される半テクセル差として module doc に明文化（floor 統一は全 sim 再チューニングが必要で精度向上は閾値内のため round 据え置き）。

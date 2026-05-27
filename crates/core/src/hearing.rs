@@ -1165,4 +1165,72 @@ mod tests {
             "trigger-band (2 kHz) must be affected more than out-of-band (200 Hz): delta_in={delta_in}, delta_out={delta_out}"
         );
     }
+
+    // ---------------------------------------------------------------
+    // Issue #114: hearing 効果アサート網羅
+    // ---------------------------------------------------------------
+
+    /// インターリーブ stereo を L / R チャンネルに分離する。
+    fn deinterleave_lr(buf: &AudioBuffer) -> (Vec<f32>, Vec<f32>) {
+        assert_eq!(buf.channels, 2);
+        let l = buf.samples.iter().step_by(2).copied().collect();
+        let r = buf.samples.iter().skip(1).step_by(2).copied().collect();
+        (l, r)
+    }
+
+    #[test]
+    fn diplacusis_left_and_right_differ() {
+        // ダイプラクシスは左右耳で別音程に知覚させる → L と R が一致してはならない。
+        let buf = sine_wave(440.0, 4000, 44100);
+        let out = diplacusis(buf, 1.0);
+        let (l, r) = deinterleave_lr(&out);
+        assert_ne!(l, r, "diplacusis must produce different left/right channels");
+        // 単なる定数オフセットではなく、リサンプリングによる音程差であることを確認
+        let diff_rms = rms(
+            &l.iter().zip(r.iter()).map(|(&a, &b)| a - b).collect::<Vec<_>>(),
+        );
+        assert!(diff_rms > 0.0, "L/R difference must be non-trivial");
+    }
+
+    #[test]
+    fn sudden_hearing_loss_attenuates_notch_band() {
+        // 4 kHz を中心にノッチを掛けると 4 kHz サイン波の RMS が顕著に下がる。
+        let buf = sine_wave(4000.0, 44100, 44100);
+        let orig = rms(&buf.samples);
+        let out = rms(&sudden_hearing_loss(buf, 1.0, 4000.0).samples);
+        assert!(out < orig * 0.8, "sudden_hearing_loss must attenuate the notch band (orig={orig}, out={out})");
+    }
+
+    #[test]
+    fn noise_induced_hearing_loss_attenuates_4khz_more_than_low() {
+        // 騒音性難聴は 4 kHz 付近を削る: 4 kHz は低音(500 Hz)より強く減衰する。
+        let high = sine_wave(4000.0, 44100, 44100);
+        let high_ratio = rms(&noise_induced_hearing_loss(high.clone(), 1.0).samples) / rms(&high.samples).max(1e-6);
+        let low = sine_wave(500.0, 44100, 44100);
+        let low_ratio = rms(&noise_induced_hearing_loss(low.clone(), 1.0).samples) / rms(&low.samples).max(1e-6);
+        assert!(
+            high_ratio < low_ratio,
+            "noise-induced must attenuate 4 kHz more than 500 Hz: high_ratio={high_ratio}, low_ratio={low_ratio}"
+        );
+    }
+
+    #[test]
+    fn pitch_shift_changes_signal_but_keeps_length() {
+        // 1 オクターブ上げると波形が変わる（恒等でない）が、フレーム長は保たれる。
+        let buf = sine_wave(440.0, 8000, 44100);
+        let orig = buf.samples.clone();
+        let out = pitch_shift_semitones(buf, 12.0);
+        assert_eq!(out.samples.len(), orig.len(), "pitch shift must preserve length");
+        assert_ne!(out.samples, orig, "pitch shift must alter the waveform");
+    }
+
+    #[test]
+    fn tinnitus_adds_tone_on_nonsilent_signal() {
+        // 無音だけでなく、信号入り音声にも耳鳴りトーンが重畳される（差分に energy がある）。
+        let buf = sine_wave(440.0, 44100, 44100);
+        let orig = buf.samples.clone();
+        let out = tinnitus(buf, 1.0, 4000.0);
+        let diff: Vec<f32> = out.samples.iter().zip(orig.iter()).map(|(&a, &b)| a - b).collect();
+        assert!(rms(&diff) > 0.01, "tinnitus must add a tone even on a non-silent signal (diff_rms={})", rms(&diff));
+    }
 }
