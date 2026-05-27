@@ -80,8 +80,8 @@ impl FilterStep {
         match self.filter {
             Filter::Astigmatism { axis_deg } => vision::astigmatism(img, self.strength, axis_deg),
             Filter::Cataract => vision::cataract(img, self.strength, self.seed),
-            Filter::Floaters { seed, density, .. } => {
-                vision::floaters(img, self.strength, density, seed, self.gaze_x, self.gaze_y)
+            Filter::Floaters { seed, density, size } => {
+                vision::floaters(img, self.strength, density, seed, self.gaze_x, self.gaze_y, size)
             }
             Filter::Photophobia => vision::photophobia(img, self.strength),
             Filter::NightBlindness => vision::nyctalopia(img, self.strength),

@@ -42,7 +42,7 @@ fn bench_filters(c: &mut Criterion) {
 
     // floaters
     c.bench_function("floaters_512", |b| {
-        b.iter(|| vision::floaters(img_512.clone(), 1.0, 0.5, 0, 0.5, 0.5).unwrap())
+        b.iter(|| vision::floaters(img_512.clone(), 1.0, 0.5, 0, 0.5, 0.5, 1.0).unwrap())
     });
 
     // eye_strain / dry_eye
