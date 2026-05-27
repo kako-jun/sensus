@@ -307,8 +307,11 @@ const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
 const MIN_BLUR_RADIUS_PX: f32 = 0.5;
 
 /// strength を 0.0..=1.0 に正規化する。NaN は 0 (identity) として扱う。
+///
+/// CPU フィルタ全段で適用される正規化。`shaders` の `*_uniforms` も同じ正規化を
+/// 適用して `uStrength` を CPU と一致させる（#120）。
 #[inline]
-fn normalize_strength(strength: f32) -> f32 {
+pub(crate) fn normalize_strength(strength: f32) -> f32 {
     if strength.is_nan() {
         0.0
     } else {

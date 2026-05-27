@@ -128,6 +128,7 @@ pub struct EyeStrainUniforms {
 /// blur 半径は画像サイズ非依存（`strength * 1.5 px`）だが、シェーダ内で
 /// テクスチャ座標へ変換するため texel size が必要。
 pub fn eye_strain_uniforms(strength: f32, width: u32, height: u32) -> EyeStrainUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH;
     EyeStrainUniforms {
         strength,
@@ -160,6 +161,7 @@ pub struct DryEyeUniforms {
 /// `width`, `height`: 画像の幅・高さ（ピクセル）。タイル座標・disk 半径の
 /// テクスチャ座標変換に使う texel size を算出する。
 pub fn dry_eye_uniforms(strength: f32, width: u32, height: u32) -> DryEyeUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     DryEyeUniforms {
         strength,
         texel_size: [1.0 / width as f32, 1.0 / height as f32],
@@ -173,6 +175,7 @@ pub fn contrast_sensitivity_glsl() -> &'static str {
 
 /// contrast_sensitivity の uniform を返す。
 pub fn contrast_sensitivity_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     SimpleStrengthUniforms { strength }
 }
 
@@ -183,6 +186,7 @@ pub fn detail_loss_glsl() -> &'static str {
 
 /// detail_loss の uniform を返す。
 pub fn detail_loss_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     SimpleStrengthUniforms { strength }
 }
 
@@ -195,6 +199,7 @@ pub fn teichopsia_glsl() -> &'static str {
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用（S-3: 楕円化防止）。
 pub fn teichopsia_uniforms(strength: f32, width: u32, height: u32) -> TeichopsiaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     TeichopsiaUniforms {
         strength,
         aspect: width as f32 / height as f32,
@@ -210,6 +215,7 @@ pub fn flickering_stars_glsl() -> &'static str {
 ///
 /// `seed`: CPU 実装の u64 seed の下位 32bit を u32 として渡す（M-3）。
 pub fn flickering_stars_uniforms(strength: f32, seed: u64) -> FlickeringStarsUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     FlickeringStarsUniforms {
         strength,
         seed: seed as u32,
@@ -282,6 +288,7 @@ pub struct PhotophobiaUniforms {
 ///
 /// `width`, `height`: 画像の幅・高さ（ピクセル）。bloom 半径と texel size の算出に使う。
 pub fn photophobia_uniforms(strength: f32, width: u32, height: u32) -> PhotophobiaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let min_dim = width.min(height) as f32;
     let radius_px = strength.clamp(0.0, 1.0) * PHOTOPHOBIA_BLOOM_RADIUS_RATIO * min_dim;
     PhotophobiaUniforms {
@@ -293,6 +300,7 @@ pub fn photophobia_uniforms(strength: f32, width: u32, height: u32) -> Photophob
 
 /// nyctalopia の uniform を返す。
 pub fn nyctalopia_uniforms(strength: f32) -> SimpleStrengthUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     SimpleStrengthUniforms { strength }
 }
 
@@ -310,6 +318,7 @@ pub struct CataractUniforms {
 ///
 /// `seed`: CPU 実装 `vision::cataract` に渡す u64 シードと同じ値を渡すこと。
 pub fn cataract_uniforms(strength: f32, seed: u64) -> CataractUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     CataractUniforms {
         strength,
         seed: seed as u32,
@@ -390,6 +399,7 @@ pub struct AstigmatismUniforms {
 
 /// protanopia の uniform を計算する。
 pub fn protanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     ColorMatrixUniforms {
         strength,
         matrix: PROTANOPIA_MATRIX,
@@ -398,6 +408,7 @@ pub fn protanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
 
 /// deuteranopia の uniform を計算する。
 pub fn deuteranopia_uniforms(strength: f32) -> ColorMatrixUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     ColorMatrixUniforms {
         strength,
         matrix: DEUTERANOPIA_MATRIX,
@@ -406,6 +417,7 @@ pub fn deuteranopia_uniforms(strength: f32) -> ColorMatrixUniforms {
 
 /// tritanopia の uniform を計算する。
 pub fn tritanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     ColorMatrixUniforms {
         strength,
         matrix: TRITANOPIA_MATRIX,
@@ -414,6 +426,7 @@ pub fn tritanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
 
 /// achromatopsia の uniform を計算する。
 pub fn achromatopsia_uniforms(strength: f32) -> LumaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     LumaUniforms {
         strength,
         r_weight: 0.2126,
@@ -426,6 +439,7 @@ pub fn achromatopsia_uniforms(strength: f32) -> LumaUniforms {
 ///
 /// `image_min_dim`: 画像の `min(width, height)`（ピクセル）。
 pub fn myopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * MYOPIA_MAX_RADIUS_RATIO * image_min_dim as f32;
     BlurUniforms { strength, radius_px }
 }
@@ -434,6 +448,7 @@ pub fn myopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 ///
 /// `image_min_dim`: 画像の `min(width, height)`（ピクセル）。
 pub fn hyperopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * HYPEROPIA_MAX_RADIUS_RATIO * image_min_dim as f32;
     BlurUniforms { strength, radius_px }
 }
@@ -442,6 +457,7 @@ pub fn hyperopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 ///
 /// `image_min_dim`: 画像の `min(width, height)`（ピクセル）。
 pub fn presbyopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * PRESBYOPIA_MAX_RADIUS_RATIO * image_min_dim as f32;
     BlurUniforms { strength, radius_px }
 }
@@ -454,6 +470,7 @@ pub fn presbyopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 ///   シェーダ (`astigmatism.frag`) の `uAxisDeg` uniform にはぼかし方向を渡す。
 ///   呼び出し元は vision.rs と同じ「シャープ方向」で渡せばよい。
 pub fn astigmatism_uniforms(strength: f32, image_min_dim: u32, axis_deg: f32) -> AstigmatismUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px =
         strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
     // vision.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
@@ -507,6 +524,7 @@ pub fn diplopia_uniforms(
     width: u32,
     height: u32,
 ) -> DiplopiaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     DiplopiaUniforms {
         strength,
         offset_x_texel: offset_x_px / width as f32,
@@ -522,6 +540,7 @@ pub fn nystagmus_uniforms(
     direction_deg: f32,
     image_min_dim: u32,
 ) -> NystagmusUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px = amplitude.clamp(0.0, 1.0) * strength.clamp(0.0, 1.0) * image_min_dim as f32;
     NystagmusUniforms {
         strength,
@@ -545,6 +564,7 @@ pub fn starbursts_uniforms(
     width: u32,
     height: u32,
 ) -> StarburstsUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let min_dim = width.min(height) as f32;
     let ray_length_px = (ray_length_ratio.clamp(0.0, 1.0) * min_dim) as u32;
     StarburstsUniforms {
@@ -598,6 +618,7 @@ pub fn glaucoma_uniforms(
     height: u32,
     mode: crate::vision::GlaucomaMode,
 ) -> GlaucomaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     GlaucomaUniforms {
         strength,
         aspect: width as f32 / height as f32,
@@ -609,6 +630,7 @@ pub fn glaucoma_uniforms(
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
 pub fn macular_degeneration_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     FieldOfVisionUniforms {
         strength,
         aspect: width as f32 / height as f32,
@@ -619,6 +641,7 @@ pub fn macular_degeneration_uniforms(strength: f32, width: u32, height: u32) -> 
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
 pub fn tunnel_vision_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     FieldOfVisionUniforms {
         strength,
         aspect: width as f32 / height as f32,
@@ -631,6 +654,7 @@ pub fn tunnel_vision_uniforms(strength: f32, width: u32, height: u32) -> FieldOf
 /// 公開 API (`vision::hemianopia`) の side とは規約が異なる:
 /// 公開 API は 0.0=左欠損, 1.0=右欠損 で渡し、シェーダ内で変換する。
 pub fn hemianopia_uniforms(strength: f32, side: f32) -> HemianopiaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     HemianopiaUniforms { strength, side }
 }
 
@@ -723,11 +747,13 @@ pub struct FloatersUniforms {
 
 /// tetrachromacy の uniform を計算する。
 pub fn tetrachromacy_uniforms(strength: f32) -> TetrachromacyUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     TetrachromacyUniforms { strength }
 }
 
 /// vestibular_neuritis の uniform を計算する。
 pub fn vestibular_neuritis_uniforms(strength: f32, width: u32, height: u32) -> VestibularNeuritisUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * 0.04 * width as f32;
     let shift_texel = strength.clamp(0.0, 1.0) * 0.05;
     VestibularNeuritisUniforms {
@@ -743,6 +769,7 @@ pub fn vestibular_neuritis_uniforms(strength: f32, width: u32, height: u32) -> V
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正と disk blur
 /// 半径（`strength * 0.015 * min(width, height)`）の算出に使う。
 pub fn vertigo_uniforms(strength: f32, time: f32, width: u32, height: u32) -> VertigoUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     let min_dim = width.min(height) as f32;
     // CPU 実装 (vision::normalize_strength) は NaN を 0 (identity) として扱う。
     // clamp 単体は NaN を NaN のまま返すため、ここでも NaN→0 に正規化して
@@ -765,6 +792,7 @@ pub fn vertigo_uniforms(strength: f32, time: f32, width: u32, height: u32) -> Ve
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使う。
 pub fn bppv_rotation_uniforms(strength: f32, time: f32, width: u32, height: u32) -> BppvRotationUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     BppvRotationUniforms {
         strength,
         time,
@@ -776,6 +804,7 @@ pub fn bppv_rotation_uniforms(strength: f32, time: f32, width: u32, height: u32)
 ///
 /// マスクは [`crate::vision::floaters_mask`] で別途生成し `uMask` テクスチャで渡すこと。
 pub fn floaters_uniforms(strength: f32) -> FloatersUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     FloatersUniforms { strength }
 }
 
@@ -818,6 +847,7 @@ pub fn metamorphopsia_uniforms(
     width: u32,
     height: u32,
 ) -> MetamorphopsiaUniforms {
+    let strength = crate::vision::normalize_strength(strength);
     MetamorphopsiaUniforms {
         strength,
         freq,
@@ -1085,6 +1115,21 @@ mod tests {
         // #134 方針 B: floaters.frag は uMask テクスチャを参照する
         assert!(floaters_glsl().contains("uMask"));
         assert_eq!(floaters_uniforms(0.7).strength, 0.7);
+    }
+
+    #[test]
+    fn uniforms_normalize_strength_like_cpu() {
+        // #120: uniforms は CPU と同じく strength を 0..1 clamp / NaN→0 する。
+        // 範囲外・NaN を渡す将来の呼び出し元で CPU(uStrength) と乖離しないこと。
+        assert_eq!(eye_strain_uniforms(2.0, 32, 32).strength, 1.0);
+        assert_eq!(eye_strain_uniforms(-1.0, 32, 32).strength, 0.0);
+        assert_eq!(eye_strain_uniforms(f32::NAN, 32, 32).strength, 0.0);
+        assert_eq!(photophobia_uniforms(5.0, 32, 32).strength, 1.0);
+        assert_eq!(cataract_uniforms(f32::NAN, 0).strength, 0.0);
+        assert_eq!(protanopia_uniforms(1.5).strength, 1.0);
+        assert_eq!(flickering_stars_uniforms(2.0, 0).strength, 1.0);
+        // 有効範囲は素通し
+        assert_eq!(eye_strain_uniforms(0.5, 32, 32).strength, 0.5);
     }
 
     #[test]
