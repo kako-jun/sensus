@@ -820,6 +820,58 @@ pub fn metamorphopsia_uniforms(
     }
 }
 
+/// depth_aware_blur.frag の GLSL ES 3.00 ソースを返す（#107）。
+///
+/// 深度マップを第 2 テクスチャ（`uDepth`）として渡す単一パスシェーダ。
+/// `uDepth` の `.r` を深度（明=近、暗=遠）として読む（CPU の `to_luma8` 相当の
+/// grayscale 深度を host 側で渡すこと）。CPU 実装 `vision::depth_aware_blur` は
+/// 8 段階ビン box blur の多パス方式なので、本シェーダ（Fibonacci 16 tap disk）とは
+/// アルゴリズムが異なり bit/PSNR 等価ではない。効果（ピント面鮮明・離れるほどぼける）で担保する。
+pub fn depth_aware_blur_glsl() -> &'static str {
+    include_str!("shaders/depth_aware_blur.frag")
+}
+
+/// depth_aware_blur フィルタの uniform（#107）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DepthAwareBlurUniforms {
+    /// ピント深度（0.0..=1.0）。depth_aware_blur.frag の `uFocusDepth`。
+    pub focus_depth: f32,
+    /// 最大ぼけ半径（ピクセル単位）= `max_radius_ratio * min(width, height)`。`uMaxRadiusPx`。
+    pub max_radius_px: f32,
+    /// ぼけ種別。0=Myopia(遠方ボケ), 1=Hyperopia(近方ボケ), 2=DepthOfField(両側)。`uKind`。
+    pub kind: i32,
+    /// テクセルサイズ vec2(1.0/width, 1.0/height)。`uTexelSize`。
+    pub texel_size: [f32; 2],
+}
+
+/// depth_aware_blur の uniform を返す。
+///
+/// `focus_depth`: ピント深度（0.0..=1.0）。
+/// `max_radius_ratio`: 最大ぼけ半径（min(W,H) 比）。CPU `vision::depth_aware_blur` に
+///   渡す値と同じものを渡すこと（CLI は `strength * 0.023`）。
+/// `kind`: [`crate::vision::DepthBlurKind`]。
+pub fn depth_aware_blur_uniforms(
+    focus_depth: f32,
+    max_radius_ratio: f32,
+    kind: crate::vision::DepthBlurKind,
+    width: u32,
+    height: u32,
+) -> DepthAwareBlurUniforms {
+    use crate::vision::DepthBlurKind;
+    let min_dim = width.min(height) as f32;
+    let kind_i = match kind {
+        DepthBlurKind::Myopia => 0,
+        DepthBlurKind::Hyperopia => 1,
+        DepthBlurKind::DepthOfField => 2,
+    };
+    DepthAwareBlurUniforms {
+        focus_depth,
+        max_radius_px: max_radius_ratio * min_dim,
+        kind: kind_i,
+        texel_size: [1.0 / width as f32, 1.0 / height as f32],
+    }
+}
+
 // ---------------------------------------------------------------------------
 // テスト
 // ---------------------------------------------------------------------------
@@ -1014,5 +1066,24 @@ mod tests {
         assert_eq!(u.side, 1.0);
         let u2 = hemianopia_uniforms(1.0, -1.0);
         assert_eq!(u2.side, -1.0);
+    }
+
+    #[test]
+    fn depth_aware_blur_glsl_is_not_empty() {
+        assert!(depth_aware_blur_glsl().contains("uDepth"));
+        assert!(depth_aware_blur_glsl().contains("void main"));
+    }
+
+    #[test]
+    fn depth_aware_blur_uniforms_kind_and_radius() {
+        use crate::vision::DepthBlurKind;
+        let u = depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::Myopia, 100, 200);
+        assert_eq!(u.kind, 0);
+        assert_eq!(u.focus_depth, 0.5);
+        // max_radius_px = ratio * min(w,h) = 0.023 * 100
+        assert!((u.max_radius_px - 2.3).abs() < 1e-5);
+        assert!((u.texel_size[0] - 0.01).abs() < 1e-6);
+        assert_eq!(depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::Hyperopia, 100, 200).kind, 1);
+        assert_eq!(depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::DepthOfField, 100, 200).kind, 2);
     }
 }

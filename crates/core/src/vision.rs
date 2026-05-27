@@ -1778,6 +1778,17 @@ pub enum DepthBlurKind {
 /// ```
 ///
 /// メモリは 8 枚同時保持から 2 枚逐次処理に変更し、アーティファクトを除去する。
+///
+/// # consumer からの到達経路（#107）
+///
+/// 深度ブラーは深度マップという第 2 入力を要するため、単一入力契約の
+/// [`crate::Filter`] / [`crate::apply`] には載せていない（`Filter` は `Copy` で、
+/// 画像を抱える深度マップを variant に入れられない）。consumer は次の 2 経路で到達する:
+/// - Rust ライブラリ: 本関数 `depth_aware_blur` を直接呼ぶ（既に `pub`）。
+/// - GLSL（universal-experience の Flutter 経路）: [`crate::shaders::depth_aware_blur_glsl`]
+///   + [`crate::shaders::depth_aware_blur_uniforms`]。深度マップを `uDepth` テクスチャで渡す。
+///   CPU は 8 ビン box blur の多パス、GLSL は per-fragment Fibonacci 16 tap disk と算法が
+///   異なるため bit/PSNR 等価ではなく、効果（ピント面鮮明・離れるほどぼける・kind 選択）で担保。
 pub fn depth_aware_blur(
     img: DynamicImage,
     depth_map: &DynamicImage,
