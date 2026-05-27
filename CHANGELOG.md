@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix: kako-jun/sensus#120 GLSL uniforms の strength を CPU と同じく正規化 / sim の nearest 規約を明文化**: (1) 全 `*_uniforms` helper（30 個）が strength を生値のまま構造体に格納しており、範囲外/NaN を渡す将来の呼び出し元で CPU（`normalize_strength` = clamp 0..1 + NaN→0）と `uStrength` が乖離しえた。`normalize_strength` を `pub(crate)` 化し、各 helper 入口で適用（有効範囲 0..1 は素通しなので既存等価テストに影響なし）。回帰テスト `uniforms_normalize_strength_like_cpu` を追加。(2) `shader_equivalence` の sim が NEAREST を `(uv*dim).round()` で近似する規約（実 GLSL は `floor`）を、PSNR ≥ 30 dB に吸収される半テクセル差として module doc に明文化（floor 統一は全 sim 再チューニングが必要で精度向上は閾値内のため round 据え置き）。
+
 - **fix: kako-jun/sensus#109 depth-blur のマジック定数 0.023 を名前付き定数化して文書化**: depth フィルタ（myopia-depth / hyperopia-depth / depth-of-field）の CLI が `cli.strength * 0.023` という未文書化のマジック数で半径を算出していた。`DEPTH_BLUR_MAX_RADIUS_RATIO`（= 0.023、非深度の近視ディスクブラー `MYOPIA_MAX_RADIUS_RATIO` と同値・Smith–Helmholtz の近視最大相当）として名前付き定数化し、`--strength 1.0` がこの比＝**全効果（上限）**であることを doc で明記（縮小ではない）。3 箇所（mpo / portrait / depth）を定数参照に統一。
 
 - **docs: kako-jun/sensus#115 CHANGELOG の架空 hearing 名 / overview APD 番号 / noise_induced 帯域幅の doc 不一致を修正**: (1) v0.2.0 節の hearing フィルタ一覧が架空名（`sudden_deafness`/`presbycusis`/`recruitment`/`temporary_threshold_shift`/`noise_induced_loss`）で「10」と誤記 → 実関数名 11 個に訂正。(2) overview.md の APD セクション見出しを Issue #38 → **#37**（#38 は floaters）。(3) `noise_induced_hearing_loss` の doc コメント「±1 kHz / 帯域幅 2000」を実装（`50 + s*950` Hz、最大 1000 Hz）に合わせて訂正。

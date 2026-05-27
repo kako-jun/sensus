@@ -10,6 +10,16 @@
 //! - 色覚フィルタ（行列演算）: max per-channel 絶対誤差 ≤ 2/255
 //! - ぼかしフィルタ（disk blur）: PSNR ≥ 30 dB（見た目が同等なら OK）
 //! - 乱視フィルタ（directional blur）: PSNR ≥ 30 dB
+//!
+//! ## nearest サンプリングの規約（#120）
+//! 本ファイルの sim は texture() の NEAREST フェッチを `(uv * dim).round()` で近似する。
+//! 実 GLSL の NEAREST はテクセル中心規約で `floor(uv * dim)`（uv=(x+0.5)/dim のとき texel x）に
+//! なるため、両者は exact なフラグメント中心では最大 半テクセルずれうる。本コードベースは
+//! ぼかし系を **PSNR ≥ 30 dB** で評価しており、この半テクセル差は PSNR に吸収される
+//! （恒等・bit 一致を要求するフィルタは round/floor が一致する整数座標でのみ比較している）。
+//! round 規約はオフセットサンプリング（blur tap）で対称な丸めになり経験的に PSNR が安定するため
+//! 採用している。floor へ統一すると全ぼかし sim の再チューニングが必要になり、得られる
+//! 精度向上は PSNR 閾値内に収まるため、round 規約のまま明文化する方針とする。
 
 use image::{DynamicImage, RgbaImage};
 use sensus_core::shaders::{
