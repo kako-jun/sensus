@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix: kako-jun/sensus#109 depth-blur のマジック定数 0.023 を名前付き定数化して文書化**: depth フィルタ（myopia-depth / hyperopia-depth / depth-of-field）の CLI が `cli.strength * 0.023` という未文書化のマジック数で半径を算出していた。`DEPTH_BLUR_MAX_RADIUS_RATIO`（= 0.023、非深度の近視ディスクブラー `MYOPIA_MAX_RADIUS_RATIO` と同値・Smith–Helmholtz の近視最大相当）として名前付き定数化し、`--strength 1.0` がこの比＝**全効果（上限）**であることを doc で明記（縮小ではない）。3 箇所（mpo / portrait / depth）を定数参照に統一。
+
 - **docs: kako-jun/sensus#115 CHANGELOG の架空 hearing 名 / overview APD 番号 / noise_induced 帯域幅の doc 不一致を修正**: (1) v0.2.0 節の hearing フィルタ一覧が架空名（`sudden_deafness`/`presbycusis`/`recruitment`/`temporary_threshold_shift`/`noise_induced_loss`）で「10」と誤記 → 実関数名 11 個に訂正。(2) overview.md の APD セクション見出しを Issue #38 → **#37**（#38 は floaters）。(3) `noise_induced_hearing_loss` の doc コメント「±1 kHz / 帯域幅 2000」を実装（`50 + s*950` Hz、最大 1000 Hz）に合わせて訂正。
 
 - **fix: kako-jun/sensus#117 sensus-core 単体テストが jpeg feature 不足でビルド不能だったのを修正**: `stereo.rs` のテストが `image::codecs::jpeg::JpegEncoder` を使うが core の依存は `png` feature のみで、`cargo test -p sensus-core` / `cargo clippy --all-targets`（core 単体）が pre-existing で落ちていた。workspace test は cli の image default-features による feature unification で隠れていた。core の **dev-dependencies に `image` の `jpeg` feature** を追加（本体依存は png のみ維持）。CI に `cargo test -p sensus-core` 単体ステップを追加して回帰防止。
