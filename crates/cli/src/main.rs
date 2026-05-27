@@ -12,6 +12,15 @@ use thiserror::Error;
 
 mod audio;
 
+/// depth フィルタ（myopia-depth / hyperopia-depth / depth-of-field）の `--strength 1.0`
+/// に対応する最大ぼけ半径（min(W,H) 比）。
+///
+/// この値は非深度の近視ディスクブラー（`vision::myopia` の `MYOPIA_MAX_RADIUS_RATIO`）と
+/// 同じ 0.023 で、Smith–Helmholtz の `0.5 × pupil_diameter × |D|` から導かれる「近視最大相当」。
+/// `depth_aware_blur` は各画素のぼけ半径を `depth との差 × この比 × min(W,H)` で算出するため、
+/// `--strength 1.0` がこの比＝**全効果**になる（縮小ではなく、これが上限）。
+const DEPTH_BLUR_MAX_RADIUS_RATIO: f32 = 0.023;
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Filter {
     // Phase 1: 色覚特性 (Issue #2)
@@ -516,7 +525,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
             .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
         let depth_img = stereo_to_depth(&left, &right)
             .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
-        let out = depth_aware_blur(left, &depth_img, cli.focus, cli.strength * 0.023, kind)
+        let out = depth_aware_blur(left, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
             .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
@@ -564,7 +573,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
         };
 
         let kind = cli.filter[0].depth_kind().unwrap();
-        let out = depth_aware_blur(source_img, &depth_map, cli.focus, cli.strength * 0.023, kind)
+        let out = depth_aware_blur(source_img, &depth_map, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
             .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
@@ -606,7 +615,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
             path: depth_path.clone(),
             source,
         })?;
-        let out = depth_aware_blur(img, &depth_img, cli.focus, cli.strength * 0.023, kind)
+        let out = depth_aware_blur(img, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
             .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
