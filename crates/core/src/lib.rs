@@ -166,6 +166,9 @@ pub enum HearingFilter {
     Diplacusis,
     /// APD（聴覚情報処理障害）: 時間分解能低下 + 雑音付加
     AuditoryProcessingDisorder,
+    /// メニエール病の聴覚側: 低音域難聴 + 低い唸る耳鳴り（複合）。
+    /// 回転性めまい（視覚）と組で [`Experience::MENIERE`] として正準化される。
+    Meniere,
 }
 
 /// 聴覚フィルタを音声バッファに適用する。
@@ -197,6 +200,132 @@ pub fn apply_hearing(
         HearingFilter::AuditoryProcessingDisorder => {
             hearing::auditory_processing_disorder(buf, strength)
         }
+        HearingFilter::Meniere => hearing::meniere(buf, strength),
     };
     Ok(out)
+}
+
+/// 受診喚起の緊急度分類（仕様リーフの「緊急度分類」に対応）。
+///
+/// 局所的な i18n 文字列を core に埋め込まず、consumer 側で適切な言語のメッセージを
+/// 出し分けられるよう、分類だけを表す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Urgency {
+    /// 緊急性の注記なし
+    None,
+    /// ⚠️ 早期受診が望ましい
+    EarlyConsultation,
+    /// 🚨 即救急（脳卒中等のサインの可能性）
+    Emergency,
+}
+
+/// 視覚と聴覚にまたがる「複合体験」の正準記述子。
+///
+/// sensus は pure・別バッファ（画像 / 音声）アーキテクチャのため、メニエール病のような
+/// 「回転性めまい（視覚）＋ 難聴・耳鳴り（聴覚）」の複合症状を 1 つのバッファでは表せない。
+/// `Experience` は「どの視覚フィルタとどの聴覚フィルタを組にすれば仕様どおりの複合体験になるか」を
+/// ライブラリ側で正準化する。consumer（universal-experience の GUI 等）は三徴候の組み合わせを
+/// ハードコードせず、`Experience` から視覚・聴覚それぞれのフィルタと緊急度を取得できる。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Experience {
+    /// 安定した識別子（i18n キー等に使う英語 ID）
+    pub id: &'static str,
+    /// 視覚側フィルタ（視覚要素が無い体験では `None`）
+    pub vision: Option<Filter>,
+    /// 聴覚側フィルタ（聴覚要素が無い体験では `None`）
+    pub hearing: Option<HearingFilter>,
+    /// 受診喚起の緊急度
+    pub urgency: Urgency,
+}
+
+impl Experience {
+    /// メニエール病: 回転性めまい（視覚）＋ 低音域難聴・低い唸る耳鳴り（聴覚）の三徴候。
+    /// ⚠️ 早期受診が望ましい。
+    pub const MENIERE: Experience = Experience {
+        id: "meniere",
+        vision: Some(Filter::Vertigo),
+        hearing: Some(HearingFilter::Meniere),
+        urgency: Urgency::EarlyConsultation,
+    };
+
+    /// 視覚側フィルタを画像に適用する。視覚要素が無い体験では `Ok(None)`。
+    pub fn apply_vision(
+        &self,
+        img: image::DynamicImage,
+        strength: f32,
+    ) -> Result<Option<image::DynamicImage>> {
+        match self.vision {
+            Some(f) => Ok(Some(apply(f, img, strength)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 聴覚側フィルタを音声バッファに適用する。聴覚要素が無い体験では `Ok(None)`。
+    pub fn apply_audio(
+        &self,
+        buf: hearing::AudioBuffer,
+        strength: f32,
+    ) -> Result<Option<hearing::AudioBuffer>> {
+        match self.hearing.clone() {
+            Some(f) => Ok(Some(apply_hearing(f, buf, strength)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hearing::AudioBuffer;
+    use image::{DynamicImage, RgbImage};
+
+    fn test_image() -> DynamicImage {
+        DynamicImage::ImageRgb8(RgbImage::from_fn(16, 16, |x, y| {
+            image::Rgb([(x * 8) as u8, (y * 8) as u8, 128])
+        }))
+    }
+
+    fn test_audio() -> AudioBuffer {
+        AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 1 }
+    }
+
+    #[test]
+    fn experience_meniere_canonical_pairing() {
+        let e = Experience::MENIERE;
+        assert_eq!(e.id, "meniere");
+        assert_eq!(e.vision, Some(Filter::Vertigo));
+        assert_eq!(e.hearing, Some(HearingFilter::Meniere));
+        assert_eq!(e.urgency, Urgency::EarlyConsultation);
+    }
+
+    #[test]
+    fn experience_meniere_applies_both_modalities() {
+        let e = Experience::MENIERE;
+        let img = e.apply_vision(test_image(), 0.8).unwrap();
+        assert!(img.is_some(), "MENIERE has a vision component");
+        let audio = e.apply_audio(test_audio(), 0.8).unwrap();
+        assert!(audio.is_some(), "MENIERE has a hearing component");
+    }
+
+    #[test]
+    fn experience_missing_modality_returns_none() {
+        // 聴覚のみ / 視覚のみの体験では欠けている側が None を返すことを確認する。
+        let vision_only = Experience {
+            id: "vision_only",
+            vision: Some(Filter::Cataract),
+            hearing: None,
+            urgency: Urgency::None,
+        };
+        assert!(vision_only.apply_audio(test_audio(), 1.0).unwrap().is_none());
+        assert!(vision_only.apply_vision(test_image(), 1.0).unwrap().is_some());
+
+        let hearing_only = Experience {
+            id: "hearing_only",
+            vision: None,
+            hearing: Some(HearingFilter::Tinnitus { freq_hz: 4000.0 }),
+            urgency: Urgency::None,
+        };
+        assert!(hearing_only.apply_vision(test_image(), 1.0).unwrap().is_none());
+        assert!(hearing_only.apply_audio(test_audio(), 1.0).unwrap().is_some());
+    }
 }
