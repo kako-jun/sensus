@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat: kako-jun/sensus#107 depth_aware_blur の GLSL シェーダを追加（移植の残り半分）**: `vision::depth_aware_blur` は CPU 実装・ユニットテスト済みだったが GLSL シェーダが無く、universal-experience の Flutter FragmentProgram 経路から到達できなかった。`depth_aware_blur.frag` + `shaders::depth_aware_blur_glsl()` + `depth_aware_blur_uniforms()` を追加。深度マップを `uDepth` テクスチャで渡す単一パスシェーダで、per-fragment に深度から半径を求め Fibonacci lattice 16 tap disk（eye_strain/photophobia と同方式）で円盤近似ブラー。CPU は 8 ビン box blur の多パスと算法が異なるため bit/PSNR 等価は取らず、`.frag` 忠実ミラー sim で効果（ピント面鮮明 / 離れるほどぼける / kind による前後選択 / DoF 両側）を検証（5 件）。**`Filter` enum/apply() には載せない判断**: 深度ブラーは深度マップという第 2 入力を要し、`Copy` な単一入力 `Filter`/`apply(filter,img,strength)` 契約に収まらないため。consumer は Rust=`vision::depth_aware_blur`（既に pub）/ GLSL=`*_glsl()` + `uDepth` で到達する（doc に明記）。
+
 - **feat: kako-jun/sensus#106 cataract に輝度・コントラスト低下を追加（VIP-Sim 二段モデルの未移植分）**: これまで黄変マトリクス + 白濁ノイズのみで、白内障の霞み感の核である輝度・コントラスト低下が移植されていなかった。VIP-Sim の BrightnessContrast 段に倣い、linear sRGB 空間で pivot 0.5 中心の per-channel コントラスト収縮（ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）+ severity 比例の輝度低下を追加。`c_ch = 1 - s*(1 - coeff_ch)` で strength=0 のとき恒等。**CPU `vision::cataract` / `cataract.frag` / `sim_cataract_glsl` の 3 箇所に同一演算で実装し、既存の CPU↔GLSL 等価テスト（PSNR ≥ 30 dB）を維持**。効果アサート `cataract_reduces_brightness_and_contrast`（白黒 1×1 の輝度差が圧縮されることを検証）。
 
 - **feat: kako-jun/sensus#105 聴覚フィルタ + AudioPipeline を CLI から利用可能に（`--audio` / WAV）**: 聴覚モジュール全体（15 フィルタ）と `AudioPipeline` が CLI から一切叩けず、Cargo.toml の description が "hearing loss" を宣伝しながら binary では到達不可だった矛盾を解消。

@@ -4030,3 +4030,172 @@ fn glaucoma_arcuate_strength_0_0_is_identity() {
         "glaucoma 弧状 strength=0.0 は恒等でなければならない"
     );
 }
+
+// ===========================================================================
+// #107: depth_aware_blur GLSL（効果検証）
+//
+// CPU vision::depth_aware_blur は 8 ビン box blur の多パス、GLSL は per-fragment
+// Fibonacci 16 tap disk と算法が異なるため CPU との PSNR 等価は取らない。
+// .frag を忠実ミラーする sim を作り「ピント面は鮮明・離れるほどぼける・kind 選択」を検証する。
+// ===========================================================================
+
+/// depth_aware_blur.frag の忠実ミラー。
+/// `depth` は grayscale RGBA（.r を深度として読む）。`kind`: 0=Myopia,1=Hyperopia,2=DoF。
+fn sim_depth_aware_blur_glsl(
+    img: &RgbaImage,
+    depth: &RgbaImage,
+    focus_depth: f32,
+    max_radius_px: f32,
+    kind: i32,
+) -> RgbaImage {
+    const N: usize = 16;
+    const PHI: f32 = 2.399_963_2;
+    const MIN_RADIUS_PX: f32 = 0.5;
+    let (w, h) = img.dimensions();
+    let texel_w = 1.0 / w as f32;
+    let texel_h = 1.0 / h as f32;
+
+    // texture() の nearest + clamp-to-edge サンプリング（linear sRGB を返す）
+    let sample_lin = |u: f32, v: f32| -> [f32; 3] {
+        let px_x = ((u * w as f32).round() as i32).clamp(0, w as i32 - 1) as u32;
+        let px_y = ((v * h as f32).round() as i32).clamp(0, h as i32 - 1) as u32;
+        let px = img.get_pixel(px_x, px_y);
+        [
+            srgb_to_linear(px[0] as f32 / 255.0),
+            srgb_to_linear(px[1] as f32 / 255.0),
+            srgb_to_linear(px[2] as f32 / 255.0),
+        ]
+    };
+
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let u = (x as f32 + 0.5) / w as f32;
+            let v = (y as f32 + 0.5) / h as f32;
+            let d = depth.get_pixel(x, y)[0] as f32 / 255.0;
+            let delta = d - focus_depth;
+            let radius_px = match kind {
+                0 => if delta < 0.0 { -delta * max_radius_px } else { 0.0 },
+                1 => if delta > 0.0 { delta * max_radius_px } else { 0.0 },
+                _ => delta.abs() * max_radius_px,
+            };
+
+            let px = img.get_pixel(x, y);
+            if radius_px < MIN_RADIUS_PX {
+                out.put_pixel(x, y, *px);
+                continue;
+            }
+            let mut acc = [0f32; 3];
+            for i in 0..N {
+                let ft = i as f32 / N as f32;
+                let r = ft.sqrt() * radius_px;
+                let theta = i as f32 * PHI;
+                let s = sample_lin(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
+                acc[0] += s[0];
+                acc[1] += s[1];
+                acc[2] += s[2];
+            }
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(acc[0] / N as f32) * 255.0).round() as u8,
+                    (linear_to_srgb(acc[1] / N as f32) * 255.0).round() as u8,
+                    (linear_to_srgb(acc[2] / N as f32) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+/// 高周波チェッカーボード（blur が検出しやすい）。
+fn checkerboard_32() -> RgbaImage {
+    let mut img = RgbaImage::new(32, 32);
+    for y in 0..32u32 {
+        for x in 0..32u32 {
+            let v = if (x + y) % 2 == 0 { 255 } else { 0 };
+            img.put_pixel(x, y, image::Rgba([v, v, v, 255]));
+        }
+    }
+    img
+}
+
+/// 一様深度の grayscale RGBA を作る。
+fn solid_depth_32(depth: f32) -> RgbaImage {
+    let d = (depth.clamp(0.0, 1.0) * 255.0).round() as u8;
+    RgbaImage::from_pixel(32, 32, image::Rgba([d, d, d, 255]))
+}
+
+fn abs_diff_sum(a: &RgbaImage, b: &RgbaImage) -> u64 {
+    a.as_raw()
+        .iter()
+        .zip(b.as_raw().iter())
+        .map(|(&x, &y)| (x as i32 - y as i32).unsigned_abs() as u64)
+        .sum()
+}
+
+#[test]
+fn depth_aware_blur_glsl_focus_plane_is_sharp() {
+    // depth == focus → 全画素 radius 0 → 恒等（ピント面は鮮明）
+    let img = checkerboard_32();
+    let depth = solid_depth_32(0.5);
+    let out = sim_depth_aware_blur_glsl(&img, &depth, 0.5, 8.0, 0);
+    assert_eq!(abs_diff_sum(&img, &out), 0, "focus plane must stay sharp (identity)");
+}
+
+#[test]
+fn depth_aware_blur_glsl_myopia_blurs_far_not_near() {
+    let img = checkerboard_32();
+    // Myopia(kind=0): 遠方(depth<focus)がボケる。
+    let far = solid_depth_32(0.0); // delta = -1 → blur
+    let blurred = sim_depth_aware_blur_glsl(&img, &far, 1.0, 8.0, 0);
+    assert!(
+        abs_diff_sum(&img, &blurred) > 0,
+        "myopia must blur the far plane (depth<focus)"
+    );
+
+    // 近方(depth>focus)は鮮明のまま
+    let near = solid_depth_32(1.0); // focus 0.0 → delta = +1, Myopia は前方ボケなし
+    let sharp = sim_depth_aware_blur_glsl(&img, &near, 0.0, 8.0, 0);
+    assert_eq!(abs_diff_sum(&img, &sharp), 0, "myopia must keep the near plane sharp");
+}
+
+#[test]
+fn depth_aware_blur_glsl_hyperopia_blurs_near_not_far() {
+    let img = checkerboard_32();
+    // Hyperopia(kind=1): 近方(depth>focus)がボケる。
+    let near = solid_depth_32(1.0); // focus 0.0 → delta = +1 → blur
+    let blurred = sim_depth_aware_blur_glsl(&img, &near, 0.0, 8.0, 1);
+    assert!(
+        abs_diff_sum(&img, &blurred) > 0,
+        "hyperopia must blur the near plane (depth>focus)"
+    );
+    // 遠方は鮮明
+    let far = solid_depth_32(0.0); // focus 1.0 → delta = -1, Hyperopia は後方ボケなし
+    let sharp = sim_depth_aware_blur_glsl(&img, &far, 1.0, 8.0, 1);
+    assert_eq!(abs_diff_sum(&img, &sharp), 0, "hyperopia must keep the far plane sharp");
+}
+
+#[test]
+fn depth_aware_blur_glsl_dof_blurs_both_sides() {
+    let img = checkerboard_32();
+    // DoF(kind=2): focus から離れた両側がボケる。
+    let far = sim_depth_aware_blur_glsl(&img, &solid_depth_32(0.0), 0.5, 8.0, 2);
+    let near = sim_depth_aware_blur_glsl(&img, &solid_depth_32(1.0), 0.5, 8.0, 2);
+    assert!(abs_diff_sum(&img, &far) > 0, "DoF must blur far side");
+    assert!(abs_diff_sum(&img, &near) > 0, "DoF must blur near side");
+}
+
+#[test]
+fn depth_aware_blur_glsl_larger_distance_blurs_more() {
+    // ピントから遠いほど（delta 大）ぼけが強い（blur 差分が単調増加）
+    let img = checkerboard_32();
+    let mild = sim_depth_aware_blur_glsl(&img, &solid_depth_32(0.4), 1.0, 8.0, 0); // delta -0.6
+    let strong = sim_depth_aware_blur_glsl(&img, &solid_depth_32(0.0), 1.0, 8.0, 0); // delta -1.0
+    assert!(
+        abs_diff_sum(&img, &strong) >= abs_diff_sum(&img, &mild),
+        "farther-from-focus depth must blur at least as much"
+    );
+}
