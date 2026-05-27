@@ -90,6 +90,15 @@ void main() {
     float ng = g + (yg - g) * uStrength;
     float nb = b + (yb - b) * uStrength;
 
+    // VIP-Sim 二段モデルの輝度・コントラスト低下（#106）。
+    // pivot 0.5 中心の per-channel コントラスト収縮（ContrastCoeff = 0.7, 0.7, 0.4）
+    // + 輝度低下。CPU vision::cataract と同一演算。
+    const float PIVOT = 0.5;
+    const float BRIGHTNESS_DROP = 0.1;
+    nr = clamp((nr - PIVOT) * (1.0 - uStrength * (1.0 - 0.7)) + PIVOT - uStrength * BRIGHTNESS_DROP, 0.0, 1.0);
+    ng = clamp((ng - PIVOT) * (1.0 - uStrength * (1.0 - 0.7)) + PIVOT - uStrength * BRIGHTNESS_DROP, 0.0, 1.0);
+    nb = clamp((nb - PIVOT) * (1.0 - uStrength * (1.0 - 0.4)) + PIVOT - uStrength * BRIGHTNESS_DROP, 0.0, 1.0);
+
     // 32bit spatial hash 格子補間ノイズによる白濁
     // CPU の整数ピクセル座標 (x, y) を復元（フラグメント中心 uv = (x+0.5)/res）。
     vec2 pixelPos = vTexCoord * uResolution - 0.5;
