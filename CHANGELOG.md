@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix: kako-jun/sensus#134 flickering_stars のノイズを CPU↔GLSL で統一（floaters は parity 不能を明文化）**:
+- **fix: kako-jun/sensus#134 floaters / flickering_stars のノイズを CPU↔GLSL で統一**:
   - **flickering_stars**: CPU の 64bit LCG（`(state>>32)` 抽出・32bit GPU で再現不能）を、点 index ベースの 32bit spatial hash（`vision::star_hash32`、#99/#125 cataract と同系列の黄金比混合 + XOR-shift）に統一。`flickering_stars.frag` も旧 Wang hash + 円形 distance + 合計後クランプから、同一 hash + 整数ピクセル中心の 5×5 正方ボックス + **点ごとの min(1.0) クランプ**（CPU と同順・同演算）に書き換え。点数は float 再計算による不一致を避けるため `FlickeringStarsUniforms.count`（= `(strength*200) as i32`）として渡す。`sim_flickering_stars_glsl` 忠実ミラーで CPU↔GLSL **PSNR ≥ 40 dB**（strength 1.0 / 0.5 非正方形 / seed 差）を検証。
-  - **floaters**: 単一パス GLSL での CPU 忠実再現は不能と判断・明文化。理由は (1) 乱歩ストランドがデータ依存の RNG ストリームを逐次消費し、(2) 最終マスクに 3×3 box blur を掛けるため、200 点ぶんのストランドを毎フラグメントで replay しつつ 9 近傍マスクを再計算する必要があり実機描画として非現実的。`floaters.frag` を意図的近似のまま据え置き、真の parity に必要な設計判断（blob-only モデルへの統一 or CPU 生成マスクのテクスチャ受け渡し）を follow-up として分離。
+  - **floaters**: CPU↔GLSL を **方針 B（CPU 生成マスクのテクスチャ受け渡し）**で bit 一致させた。`vision::floaters_mask(w, h, density, seed, gaze_x, gaze_y) -> GrayImage` を切り出し、blob+strand+3×3 box blur のマスク生成はライブラリ側に集約（乱歩ストランドの見た目を完全維持）。`vision::floaters` はこの u8 マスクから linear sRGB 乗算ブレンドするよう refactor。`floaters.frag` は別モデルのブロック hash 近似を廃し、`uMask` テクスチャ（`vision::floaters_mask` の出力）を `1 - strength*(1-mask)` で乗算ブレンドするだけに書き換え（depth_aware_blur の uDepth と同じ第2テクスチャパターン）。マスクは strength 非依存なので host は density/seed/gaze ごとに 1 回生成すれば strength を uniform で可変にできる。`FloatersUniforms` は strength のみに簡約。`sim_floaters_glsl` 忠実ミラーで CPU↔GLSL **PSNR ≥ 50 dB（bit 一致）**（strength 1.0 / 0.5 非正方形）+ マスクの strength 非依存・決定論を検証。
 
 ### Added
 

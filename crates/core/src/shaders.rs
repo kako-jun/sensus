@@ -712,11 +712,13 @@ pub struct BppvRotationUniforms {
     pub aspect: f32,
 }
 
-/// floaters フィルタの uniform。
+/// floaters フィルタの uniform（#134, 方針 B）。
+///
+/// マスク（blob+strand+blur）は [`crate::vision::floaters_mask`] で生成して `uMask`
+/// テクスチャとして渡すため、uniform は strength のみ。density/seed/gaze はマスク生成側に渡す。
 #[derive(Debug, Clone)]
 pub struct FloatersUniforms {
     pub strength: f32,
-    pub seed: u32,
 }
 
 /// tetrachromacy の uniform を計算する。
@@ -771,11 +773,10 @@ pub fn bppv_rotation_uniforms(strength: f32, time: f32, width: u32, height: u32)
 }
 
 /// floaters の uniform を計算する。
-pub fn floaters_uniforms(strength: f32, seed: u64) -> FloatersUniforms {
-    FloatersUniforms {
-        strength,
-        seed: seed as u32,
-    }
+///
+/// マスクは [`crate::vision::floaters_mask`] で別途生成し `uMask` テクスチャで渡すこと。
+pub fn floaters_uniforms(strength: f32) -> FloatersUniforms {
+    FloatersUniforms { strength }
 }
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1078,13 @@ mod tests {
     fn depth_aware_blur_glsl_is_not_empty() {
         assert!(depth_aware_blur_glsl().contains("uDepth"));
         assert!(depth_aware_blur_glsl().contains("void main"));
+    }
+
+    #[test]
+    fn floaters_glsl_samples_mask_texture() {
+        // #134 方針 B: floaters.frag は uMask テクスチャを参照する
+        assert!(floaters_glsl().contains("uMask"));
+        assert_eq!(floaters_uniforms(0.7).strength, 0.7);
     }
 
     #[test]
