@@ -1,58 +1,38 @@
 #version 300 es
-precision mediump float;
+precision highp float;
 
-// 飛蚊症（Floaters）シミュレーション。
-// hash ベースの floater パターン（seed 依存の擬似ランダム blob）。
-// CPU 実装 vision::floaters に対応。
+// 飛蚊症（Floaters）シミュレーション — 方針 B（#134）。
 //
-// GPU 版は LCG ブロックノイズで floater マスクを生成し、
-// 乗算ブレンドで暗いドットを重ねるシンプル実装。
-// CPU の精密な blob/strand 描画とは異なり、近似的な見た目を提供する。
+// CPU 実装 vision::floaters_mask が生成した u8 マスクを uMask テクスチャ（.r）として
+// 受け取り、linear sRGB 空間で乗算ブレンドする。マスク生成（円形 blob + 乱歩ストランド
+// + 3×3 box blur）はライブラリ側で行い、本シェーダはブレンドのみを担う。
 //
-// 注意: GPU 版はブレンドを sRGB 空間で直接行う（linear 変換なし）。
-// CPU 実装は linear sRGB 空間で乗算するため、厳密な色値は異なるが
-// 視覚的な近似として許容している（「GPU 版は近似」はこの差異を指す）。
+// これにより CPU vision::floaters と **bit 一致**する（同じ u8 マスク・同じブレンド式
+// `1 - strength*(1-mask)`・同じ linear sRGB 乗算）。マスクは strength 非依存なので、
+// host は density/seed/gaze ごとに 1 回マスクを生成・アップロードすれば strength は
+// uniform で可変にできる。depth_aware_blur の uDepth と同じ「第2テクスチャ」パターン。
 //
-// #134（parity 未達・別追跡）: flickering_stars は 32bit spatial hash で CPU↔GLSL を
-// 統一済みだが、floaters は (1) 乱歩ストランドが「データ依存の RNG ストリーム」を
-// 逐次消費し、(2) 最終マスクに 3×3 box blur を掛けるため、単一パスでの忠実再現は
-// 200 点ぶんのストランドを毎フラグメントで replay しつつ 9 近傍のマスクを再計算する
-// 必要があり、実機（Flutter）描画として非現実的。本シェーダは意図的な近似のまま据え置く。
-// 真の parity には「ストランド廃止の blob-only モデルに CPU/GLSL 双方を寄せる」か
-// 「CPU 生成マスクをテクスチャとして渡す」かの設計判断が必要（freeza で起票・追跡）。
+// 旧実装はブロック hash による別モデルの近似で CPU と乖離していた（#134 で解消）。
 
 uniform sampler2D uTexture;
+uniform sampler2D uMask;   // .r = フローターマスク（0 = 不透明フローター .. 1 = 透明）
 uniform float uStrength;
-uniform uint uSeed;    // u64 シードの下位 32bit を uint として渡す（float 経由の精度損失を回避）
 
 in vec2 vTexCoord;
 out vec4 fragColor;
 
-// 単純なハッシュ関数（floater パターン生成用）
-float hash21(vec2 p) {
-    p = fract(p * vec2(127.1, 311.7));
-    p += dot(p, p + 19.19);
-    return fract(p.x * p.y);
+float srgbToLinear(float c) {
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
+float linearToSrgb(float c) {
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055;
 }
 
 void main() {
     vec4 orig = texture(uTexture, vTexCoord);
-
-    // ブロック単位でハッシュを計算（8x8 相当の粗さ）
-    float seedF = float(uSeed);
-    vec2 blockUV = floor(vTexCoord * 16.0 + seedF * 0.01) / 16.0;
-    float noise = hash21(blockUV + seedF * 0.001);
-
-    // noise が閾値を下回る領域を floater として暗化
-    float floaterMask = 1.0;
-    if (noise < 0.05 * uStrength) {
-        floaterMask = 1.0 - uStrength * 0.7;
-    }
-
-    fragColor = vec4(
-        orig.r * floaterMask,
-        orig.g * floaterMask,
-        orig.b * floaterMask,
-        orig.a
-    );
+    float mask = texture(uMask, vTexCoord).r;
+    float blend = 1.0 - uStrength * (1.0 - mask);
+    vec3 lin = vec3(srgbToLinear(orig.r), srgbToLinear(orig.g), srgbToLinear(orig.b));
+    lin *= blend;
+    fragColor = vec4(linearToSrgb(lin.r), linearToSrgb(lin.g), linearToSrgb(lin.b), orig.a);
 }

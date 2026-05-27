@@ -912,34 +912,30 @@ pub fn nyctalopia(img: DynamicImage, strength: f32) -> crate::Result<DynamicImag
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
-/// 飛蚊症（Floaters）シミュレーション。
+/// 飛蚊症（Floaters）のマスクを生成する（#134, 方針 B）。
 ///
-/// 視野内に暗い blob と糸くず形状が浮かぶオーバーレイを乗算ブレンドで適用する。
-/// 円形 blob 30% + 糸くず形状（ランダムウォーク折れ線） 70% の混合。
-/// 描画後に box blur (radius 1px) でエッジをソフト化する。
+/// 円形 blob 30% + 糸くず形状（ランダムウォーク折れ線） 70% を描画し、box blur
+/// (radius 1px) でエッジをソフト化した単チャンネルマスクを返す。各画素は
+/// `0`（完全フローター = 不透明）..`255`（透明）で、最終的な乗算ブレンドは
+/// strength に応じて呼び出し側（[`floaters`] / GLSL `floaters.frag`）が行う。
 ///
-/// - `strength`: 0.0 = 元画像, 1.0 = 強い飛蚊症
+/// **strength 非依存**: マスクは density / seed / gaze だけで決まるので、consumer
+/// （universal-experience GLSL）は本マスクを `uMask` テクスチャとして 1 回アップロードし、
+/// strength は uniform で可変にできる。CPU [`floaters`] も同じ u8 マスクからブレンドするため
+/// CPU↔GLSL が bit 一致する。
+///
 /// - `density`: blob 密度 (0.0..=1.0)
-/// - `seed`: blob 配置のランダムシード（実際に使用される）
+/// - `seed`: blob 配置のランダムシード
 /// - `gaze_x`: 視線 X 位置 (0.0 = 左, 1.0 = 右)
 /// - `gaze_y`: 視線 Y 位置 (0.0 = 上, 1.0 = 下)
-pub fn floaters(
-    img: DynamicImage,
-    strength: f32,
+pub fn floaters_mask(
+    width: u32,
+    height: u32,
     density: f32,
     seed: u64,
     gaze_x: f32,
     gaze_y: f32,
-) -> crate::Result<DynamicImage> {
-    let strength = normalize_strength(strength);
-    let rgba = img.to_rgba8();
-
-    if strength == 0.0 {
-        return Ok(DynamicImage::ImageRgba8(rgba));
-    }
-
-    let width = rgba.width();
-    let height = rgba.height();
+) -> image::GrayImage {
     let w_f = width as f32;
     let h_f = height as f32;
 
@@ -954,7 +950,8 @@ pub fn floaters(
     // blob/糸くず 総数
     let total_count = (density * 200.0) as usize;
     if total_count == 0 {
-        return Ok(DynamicImage::ImageRgba8(rgba));
+        // フローターなし = 全面透明（255）
+        return image::GrayImage::from_pixel(width, height, image::Luma([255]));
     }
 
     let blob_count = (total_count as f32 * 0.3).ceil() as usize; // 30% 円形
@@ -1107,14 +1104,55 @@ pub fn floaters(
         }
     }
 
-    // ── 元画像に乗算ブレンド ──────────────────────────────────────
-    let mut out_rgba = rgba.clone();
+    // ── f32 マスクを u8 に量子化して返す ─────────────────────────
+    // GLSL は本マスクを uMask テクスチャ（.r）として受け取り、CPU と同じ u8 値から
+    // ブレンドするため bit 一致する（#134, 方針 B）。
+    let mut mask_img = image::GrayImage::new(width, height);
+    for py in 0..h {
+        for px in 0..w {
+            let m = blurred_mask[py * w + px].clamp(0.0, 1.0);
+            mask_img.put_pixel(px as u32, py as u32, image::Luma([(m * 255.0).round() as u8]));
+        }
+    }
+    mask_img
+}
+
+/// 飛蚊症（Floaters）シミュレーション。
+///
+/// [`floaters_mask`] で生成した u8 マスクを linear sRGB 空間で乗算ブレンドする。
+/// マスクは strength 非依存で、GLSL（`floaters.frag`）も同じ u8 マスクを `uMask`
+/// テクスチャで受け取り同一ブレンドを行うため CPU↔GLSL が bit 一致する（#134, 方針 B）。
+///
+/// - `strength`: 0.0 = 元画像, 1.0 = 強い飛蚊症
+/// - `density`: blob 密度 (0.0..=1.0)
+/// - `seed`: blob 配置のランダムシード（実際に使用される）
+/// - `gaze_x`: 視線 X 位置 (0.0 = 左, 1.0 = 右)
+/// - `gaze_y`: 視線 Y 位置 (0.0 = 上, 1.0 = 下)
+pub fn floaters(
+    img: DynamicImage,
+    strength: f32,
+    density: f32,
+    seed: u64,
+    gaze_x: f32,
+    gaze_y: f32,
+) -> crate::Result<DynamicImage> {
+    let strength = normalize_strength(strength);
+    let mut rgba = img.to_rgba8();
+
+    if strength == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
+
+    let width = rgba.width();
+    let height = rgba.height();
+    let mask = floaters_mask(width, height, density, seed, gaze_x, gaze_y);
+
     for y in 0..height {
         for x in 0..width {
-            let mask = blurred_mask[y as usize * w + x as usize];
-            let blend = 1.0 - strength * (1.0 - mask);
+            let m = mask.get_pixel(x, y)[0] as f32 / 255.0;
+            let blend = 1.0 - strength * (1.0 - m);
 
-            let px = out_rgba.get_pixel_mut(x, y);
+            let px = rgba.get_pixel_mut(x, y);
             let rl = srgb_to_linear(px[0] as f32 / 255.0);
             let gl = srgb_to_linear(px[1] as f32 / 255.0);
             let bl = srgb_to_linear(px[2] as f32 / 255.0);
@@ -1125,7 +1163,7 @@ pub fn floaters(
         }
     }
 
-    Ok(DynamicImage::ImageRgba8(out_rgba))
+    Ok(DynamicImage::ImageRgba8(rgba))
 }
 
 // ---------------------------------------------------------------

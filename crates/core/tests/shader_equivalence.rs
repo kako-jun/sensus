@@ -4289,3 +4289,76 @@ fn shader_equiv_flickering_stars_seed_differs() {
     let b = flickering_stars(img.clone(), 1.0, 999).unwrap().to_rgba8();
     assert!(psnr(&a, &b) < 60.0, "flickering_stars: 異なる seed で同一出力（seed 不使用の疑い）");
 }
+
+// ===========================================================================
+// #134（方針 B）: floaters CPU↔GLSL 等価
+//
+// マスク（blob+strand+blur）は CPU vision::floaters_mask が生成し、GLSL は uMask
+// テクスチャとして受け取り乗算ブレンドのみ行う。CPU vision::floaters と同じ u8 マスク
+// ・同じブレンド・同じ linear 変換なので bit 一致する。
+// ===========================================================================
+
+/// floaters.frag の忠実ミラー。`mask` は vision::floaters_mask の出力（.r = 0..255）。
+fn sim_floaters_glsl(img: &RgbaImage, mask: &image::GrayImage, strength: f32) -> RgbaImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let m = mask.get_pixel(x, y)[0] as f32 / 255.0;
+            let blend = 1.0 - strength * (1.0 - m);
+            let px = img.get_pixel(x, y);
+            let rl = srgb_to_linear(px[0] as f32 / 255.0) * blend;
+            let gl = srgb_to_linear(px[1] as f32 / 255.0) * blend;
+            let bl = srgb_to_linear(px[2] as f32 / 255.0) * blend;
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(rl) * 255.0).round() as u8,
+                    (linear_to_srgb(gl) * 255.0).round() as u8,
+                    (linear_to_srgb(bl) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
+        }
+    }
+    out
+}
+
+#[test]
+fn shader_equiv_floaters_mask_blend_strength_1_0() {
+    use sensus_core::vision::{floaters, floaters_mask};
+    let img = gradient_32();
+    let mask = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5);
+    let cpu = floaters(img.clone(), 1.0, 0.8, 42, 0.5, 0.5).unwrap().to_rgba8();
+    let gpu = sim_floaters_glsl(&img.to_rgba8(), &mask, 1.0);
+    let db = psnr(&cpu, &gpu);
+    // 同一 u8 マスク・同一ブレンドなので bit 一致（PSNR=∞）。安全側で 50 dB。
+    assert!(db >= 50.0, "floaters strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 50 dB");
+}
+
+#[test]
+fn shader_equiv_floaters_mask_blend_strength_0_5_non_square() {
+    use sensus_core::vision::{floaters, floaters_mask};
+    let img = gradient_64x32();
+    let (w, h) = (img.width(), img.height());
+    let mask = floaters_mask(w, h, 0.6, 7, 0.5, 0.5);
+    let cpu = floaters(img.clone(), 0.5, 0.6, 7, 0.5, 0.5).unwrap().to_rgba8();
+    let gpu = sim_floaters_glsl(&img.to_rgba8(), &mask, 0.5);
+    let db = psnr(&cpu, &gpu);
+    assert!(db >= 50.0, "floaters 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 50 dB");
+}
+
+#[test]
+fn floaters_mask_is_strength_independent() {
+    // マスクは density/seed/gaze だけで決まり strength に依存しない（方針 B の前提）。
+    use sensus_core::vision::floaters_mask;
+    let a = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5);
+    let b = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5);
+    assert_eq!(a.as_raw(), b.as_raw(), "floaters_mask must be deterministic");
+    // density 0 は全面透明（255）
+    let empty = floaters_mask(32, 32, 0.0, 42, 0.5, 0.5);
+    assert!(empty.as_raw().iter().all(|&v| v == 255), "density 0 → all transparent");
+    // フローターがあれば 255 未満の画素が存在する
+    assert!(a.as_raw().iter().any(|&v| v < 255), "mask must contain floater pixels");
+}
