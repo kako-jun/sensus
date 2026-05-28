@@ -8,11 +8,6 @@ use thiserror::Error;
 /// Errors produced by `sensus-core` filters and pipeline operations.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// The requested filter is declared but not yet implemented.
-    /// Phase 1〜3 で順次解消される。
-    #[error("filter {0:?} is not implemented yet")]
-    NotImplemented(crate::Filter),
-
     /// Underlying [`image`] crate error (decode / encode / format).
     #[error("image processing error: {0}")]
     Image(#[from] image::ImageError),

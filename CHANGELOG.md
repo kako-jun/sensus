@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **fix: kako-jun/sensus#111 死にコードの `Error::NotImplemented` / exit-2 経路を削除し、dry_eye の seed doc を是正**: 全 `Filter` バリアントは実装済みで `apply()` の match は網羅的（新バリアント追加は未実装ならコンパイルエラー）なため、`Error::NotImplemented` は core から二度と返らず、CLI の exit-2 ハンドラは到達不能な死にコードだった。さらに `--pipe` 経路ではこの経路が `RunError::Pipeline`（exit 1）に誤マップされ、文書化された exit-2 契約と矛盾していた。`Error::NotImplemented` / `RunError::NotImplemented` / 両ハンドラ / 旧 scaffold の exit-2 記述を**まとめて削除**（終了コードは成功 0 / 失敗 1 に一本化）。`dry_eye` の doc が約束していた未実装関数 `dry_eye_with_seed` への参照を削除し、固定 seed=42 が `dry_eye.frag` との CPU↔GLSL 等価の前提である旨に是正（動画用 seed 対応は CPU/.frag 双方の uniform 化が要るためスコープ外）。
+
 ### Fixed
 
 - **fix: kako-jun/sensus#112 `split_mpo` の JPEG マーカー無視（素朴窓スキャン）を marker 走査に統一**: `split_mpo` は `windows(4)` で `FFD9 FFD8` を素朴スキャンしており、第1フレームの entropy-coded scan data や APPn ペイロード中に同バイト列があると誤分割しえた（session515 が `split_jpeg_frames` で直したのと同じ untrusted-input パーサのバグ class）。SOI から marker/length を正しく走査して**真の EOI** を見つける `first_jpeg_end()` を追加（SOS 後の entropy data の FF00 スタッフィング・FFDn RST を正しく読み飛ばす）。回帰テスト 3 件（APP1 ペイロードに埋め込んだ FFD9 FFD8 を誤認しない / SOS entropy + stuffing + RST を走査 / 非 SOI・EOI 欠落の拒否）。
