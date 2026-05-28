@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **chore: kako-jun/sensus#113 v0.1-0.2 コア独立レビュー実施 — 色覚関数の strength 正規化を共通化**: 5 ラウンドレビュー（#68-#90）が未カバーだった v0.1-0.2 コア（色覚行列・視野マスク・初代 hearing DSP・stereo/MPO/XMP パーサ・SAD 深度推定）を correctness 観点で精査。**致命的なバグは検出されず**（パーサは bounds-checked、SAD は overflow なし、色覚・マスクは linear 空間で clamp 済み）。唯一の整合性所見として、色覚関数（`apply_machado_matrix` / `achromatopsia`）が `normalize_strength` 相当の NaN/clamp 処理をインラインで重複していたのを、#120 で `pub(crate)` 化した `normalize_strength` に統一。挙動は不変（`achromatopsia_nan_strength_returns_identity` 等で確認）。
+
 - **fix: kako-jun/sensus#108 depth フィルタを他フィルタと合成可能に（CLI 合成、hard error 解消）**: depth フィルタ（myopia-depth / hyperopia-depth / depth-of-field）は深度マップという第2入力が必要で Pipeline/Filter（単一画像）に載らないため、これまで他フィルタとの併用を hard error で拒否していた（`TODO(#19)`）。Pipeline を 2 入力対応に拡張する代わりに、**CLI 側で合成**する方針（#107 の「depth は単一入力契約に載せない」判断と整合）: 非 depth フィルタを Pipeline で先に適用し、その結果に `depth_aware_blur` をかける。`--depth` / `--mpo` / `--portrait` の 3 経路すべてで `--filter <color> --filter <depth>` の併用が可能に。depth フィルタは 1 つだけ許可（`depth_aware_blur` は単一 kind）。統合テスト 2 件（color+depth 合成が depth-only と異なる / depth 2 つは拒否）。
 
 ### Removed

@@ -167,14 +167,8 @@ pub fn tritanopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// `strength = 1.0` で完全グレースケール (R == G == B)。`strength = 0.0` で原画像。
 /// 中間値は linear sRGB 空間で線形補間。
 pub fn achromatopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
-    // NaN strength は identity（元画像）として扱う。
-    // f32::NAN.clamp(0.0, 1.0) は NaN のままだが、上流で 0.0 に置換しているので
-    // silent な全画素 0 出力にはならない。
-    let strength = if strength.is_nan() {
-        0.0
-    } else {
-        strength.clamp(0.0, 1.0)
-    };
+    // strength を正規化（NaN→0 / clamp 0..1）。CPU 全段共通の正規化を使う（#113）。
+    let strength = normalize_strength(strength);
     let mut rgba = img.to_rgba8();
 
     // strength == 0.0 のショートカット（元画像と完全一致を保証）。
@@ -213,14 +207,8 @@ fn apply_machado_matrix(
     matrix: &[[f32; 3]; 3],
     strength: f32,
 ) -> Result<DynamicImage> {
-    // NaN strength は identity（元画像）として扱う。
-    // f32::NAN.clamp(0.0, 1.0) は NaN のままだが、上流で 0.0 に置換しているので
-    // silent な全画素 0 出力にはならない。
-    let strength = if strength.is_nan() {
-        0.0
-    } else {
-        strength.clamp(0.0, 1.0)
-    };
+    // strength を正規化（NaN→0 / clamp 0..1）。CPU 全段共通の正規化を使う（#113）。
+    let strength = normalize_strength(strength);
     let mut rgba: RgbaImage = img.to_rgba8();
 
     if strength == 0.0 {
