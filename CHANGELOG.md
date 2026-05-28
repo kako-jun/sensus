@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **fix: kako-jun/sensus#108 depth フィルタを他フィルタと合成可能に（CLI 合成、hard error 解消）**: depth フィルタ（myopia-depth / hyperopia-depth / depth-of-field）は深度マップという第2入力が必要で Pipeline/Filter（単一画像）に載らないため、これまで他フィルタとの併用を hard error で拒否していた（`TODO(#19)`）。Pipeline を 2 入力対応に拡張する代わりに、**CLI 側で合成**する方針（#107 の「depth は単一入力契約に載せない」判断と整合）: 非 depth フィルタを Pipeline で先に適用し、その結果に `depth_aware_blur` をかける。`--depth` / `--mpo` / `--portrait` の 3 経路すべてで `--filter <color> --filter <depth>` の併用が可能に。depth フィルタは 1 つだけ許可（`depth_aware_blur` は単一 kind）。統合テスト 2 件（color+depth 合成が depth-only と異なる / depth 2 つは拒否）。
+
 ### Removed
 
 - **fix: kako-jun/sensus#111 死にコードの `Error::NotImplemented` / exit-2 経路を削除し、dry_eye の seed doc を是正**: 全 `Filter` バリアントは実装済みで `apply()` の match は網羅的（新バリアント追加は未実装ならコンパイルエラー）なため、`Error::NotImplemented` は core から二度と返らず、CLI の exit-2 ハンドラは到達不能な死にコードだった。さらに `--pipe` 経路ではこの経路が `RunError::Pipeline`（exit 1）に誤マップされ、文書化された exit-2 契約と矛盾していた。`Error::NotImplemented` / `RunError::NotImplemented` / 両ハンドラ / 旧 scaffold の exit-2 記述を**まとめて削除**（終了コードは成功 0 / 失敗 1 に一本化）。`dry_eye` の doc が約束していた未実装関数 `dry_eye_with_seed` への参照を削除し、固定 seed=42 が `dry_eye.frag` との CPU↔GLSL 等価の前提である旨に是正（動画用 seed 対応は CPU/.frag 双方の uniform 化が要るためスコープ外）。

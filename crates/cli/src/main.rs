@@ -489,19 +489,17 @@ fn run(cli: Cli) -> Result<(), RunError> {
     }
 
     // --mpo が指定されている場合のバリデーションと処理
-    if let Some(mpo_path) = cli.mpo {
-        // 複数フィルタとの組み合わせは不可
-        if cli.filter.len() > 1 {
-            return Err(RunError::MpoError(
-                "sensus: --mpo cannot be combined with multiple filters".to_string(),
-            ));
+    if let Some(mpo_path) = cli.mpo.clone() {
+        // depth フィルタは 1 つだけ必須（#108: 非 depth フィルタは合成可能）
+        let kinds = depth_kinds(&cli);
+        if kinds.len() != 1 {
+            return Err(RunError::MpoError(if kinds.is_empty() {
+                "sensus: --mpo requires a depth blur filter (myopia-depth, hyperopia-depth, depth-of-field)".to_string()
+            } else {
+                "sensus: --mpo accepts at most one depth blur filter".to_string()
+            }));
         }
-        // depth フィルタ以外は不可
-        if !cli.filter.iter().any(|f| f.is_depth_filter()) {
-            return Err(RunError::MpoError(
-                "sensus: --mpo requires a depth blur filter (myopia-depth, hyperopia-depth, depth-of-field)".to_string(),
-            ));
-        }
+        let kind = kinds[0];
         // --depth との同時指定は不可
         if cli.depth.is_some() {
             return Err(RunError::MpoError(
@@ -509,7 +507,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
             ));
         }
 
-        let kind = cli.filter[0].depth_kind().unwrap();
         let bytes = std::fs::read(&mpo_path).map_err(|source| RunError::MpoRead {
             path: mpo_path.clone(),
             source,
@@ -518,7 +515,9 @@ fn run(cli: Cli) -> Result<(), RunError> {
             .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
         let depth_img = stereo_to_depth(&left, &right)
             .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
-        let out = depth_aware_blur(left, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
+        // #108: depth 以外のフィルタを左目画像に先に適用してから depth blur
+        let base = apply_non_depth_filters(left, &cli)?;
+        let out = depth_aware_blur(base, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
             .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
@@ -528,17 +527,17 @@ fn run(cli: Cli) -> Result<(), RunError> {
     }
 
     // --portrait: Android XMP Depth
-    if let Some(portrait_path) = cli.portrait {
-        if cli.filter.len() > 1 {
-            return Err(RunError::PortraitError(
-                "sensus: --portrait cannot be combined with multiple filters".to_string(),
-            ));
+    if let Some(portrait_path) = cli.portrait.clone() {
+        // depth フィルタは 1 つだけ必須（#108: 非 depth フィルタは合成可能）
+        let kinds = depth_kinds(&cli);
+        if kinds.len() != 1 {
+            return Err(RunError::PortraitError(if kinds.is_empty() {
+                "sensus: --portrait requires a depth blur filter (myopia-depth, hyperopia-depth, depth-of-field)".to_string()
+            } else {
+                "sensus: --portrait accepts at most one depth blur filter".to_string()
+            }));
         }
-        if !cli.filter.iter().any(|f| f.is_depth_filter()) {
-            return Err(RunError::PortraitError(
-                "sensus: --portrait requires a depth blur filter (myopia-depth, hyperopia-depth, depth-of-field)".to_string(),
-            ));
-        }
+        let kind = kinds[0];
         if cli.depth.is_some() {
             return Err(RunError::PortraitError(
                 "sensus: --portrait and --depth cannot be used together".to_string(),
@@ -565,8 +564,9 @@ fn run(cli: Cli) -> Result<(), RunError> {
             })?
         };
 
-        let kind = cli.filter[0].depth_kind().unwrap();
-        let out = depth_aware_blur(source_img, &depth_map, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
+        // #108: depth 以外のフィルタを先に適用してから depth blur
+        let base = apply_non_depth_filters(source_img, &cli)?;
+        let out = depth_aware_blur(base, &depth_map, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
             .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
@@ -576,7 +576,7 @@ fn run(cli: Cli) -> Result<(), RunError> {
     }
 
     // --mpo なし・--portrait なし → --input が必須
-    let input_path = cli.input.ok_or_else(|| {
+    let input_path = cli.input.clone().ok_or_else(|| {
         RunError::InputRequired(
             "sensus: --input is required when --mpo and --portrait are not specified".to_string(),
         )
@@ -587,15 +587,15 @@ fn run(cli: Cli) -> Result<(), RunError> {
         source,
     })?;
 
-    // depth フィルタが含まれる場合は単独処理（Pipeline を通さない）
-    // TODO(#19): Pipeline 統合時にここを削除し Pipeline 経由で処理する
+    // depth フィルタが含まれる場合（#108: 非 depth フィルタを先に合成してから depth blur）
     if cli.filter.iter().any(|f| f.is_depth_filter()) {
-        if cli.filter.len() > 1 {
+        let kinds = depth_kinds(&cli);
+        if kinds.len() != 1 {
             return Err(RunError::Pipeline(
-                "sensus: depth blur filters cannot be combined with other filters".to_string(),
+                "sensus: exactly one depth blur filter is allowed (myopia-depth / hyperopia-depth / depth-of-field)".to_string(),
             ));
         }
-        let kind = cli.filter[0].depth_kind().unwrap();
+        let kind = kinds[0];
 
         let depth_path = cli.depth.as_ref().ok_or_else(|| {
             RunError::Pipeline(
@@ -606,7 +606,9 @@ fn run(cli: Cli) -> Result<(), RunError> {
             path: depth_path.clone(),
             source,
         })?;
-        let out = depth_aware_blur(img, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
+        // #108: depth 以外のフィルタを先に適用してから depth blur で合成
+        let base = apply_non_depth_filters(img, &cli)?;
+        let out = depth_aware_blur(base, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
             .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
@@ -725,6 +727,46 @@ fn apply_filters_to_image(
 ) -> Result<image::DynamicImage, RunError> {
     let mut pipeline = Pipeline::new();
     for f in &cli.filter {
+        let core_filter = f.to_core();
+        let mut step = FilterStep::new(core_filter, cli.strength);
+        step.axis = cli.axis;
+        step.seed = cli.seed;
+        step.density = cli.density;
+        step.gaze_x = cli.gaze_x;
+        step.gaze_y = cli.gaze_y;
+        step.side = cli.side;
+        step.offset_x = cli.offset_x;
+        step.offset_y = cli.offset_y;
+        step.ghost_strength = cli.ghost_strength;
+        step.amplitude = cli.amplitude;
+        step.direction_deg = cli.direction_deg;
+        step.num_rays = cli.num_rays;
+        step.ray_length_ratio = cli.ray_length;
+        step.threshold = cli.threshold;
+        pipeline = pipeline.push(step);
+    }
+    pipeline
+        .apply(img)
+        .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))
+}
+
+/// cli.filter 中の depth フィルタの kind 一覧（#108）。
+fn depth_kinds(cli: &Cli) -> Vec<DepthBlurKind> {
+    cli.filter.iter().filter_map(|f| f.depth_kind()).collect()
+}
+
+/// depth **以外**のフィルタを Pipeline で `img` に適用する（#108 の合成用）。
+///
+/// depth フィルタは深度マップという第2入力が必要で Pipeline に載らないため、CLI 側で
+/// 「非 depth フィルタを先に適用 → その結果に depth_aware_blur」と合成する。非 depth
+/// フィルタが無ければ `img` をそのまま返す。
+fn apply_non_depth_filters(
+    img: image::DynamicImage,
+    cli: &Cli,
+) -> Result<image::DynamicImage, RunError> {
+    // 非 depth フィルタだけで Pipeline を組む。空なら Pipeline::apply は恒等。
+    let mut pipeline = Pipeline::new();
+    for f in cli.filter.iter().filter(|f| !f.is_depth_filter()) {
         let core_filter = f.to_core();
         let mut step = FilterStep::new(core_filter, cli.strength);
         step.axis = cli.axis;
