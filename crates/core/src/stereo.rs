@@ -14,22 +14,73 @@ const BLOCK_SIZE: u32 = 7;
 /// 最大視差（右方向へのオフセット探索ピクセル数）。
 const MAX_DISPARITY: u32 = 64;
 
+/// 先頭の完全な JPEG の終端（EOI=FFD9 の直後）のインデックスを返す。
+///
+/// `windows(4)` で `FFD9 FFD8` を素朴に探すと、第1フレームの entropy-coded scan data や
+/// APPn ペイロード中に同じバイト列が現れたときに誤分割する（#112）。これを避けるため、
+/// SOI から marker/length を正しく走査して**真の EOI** を見つける
+/// （CLI の `split_jpeg_frames` と同一ロジック）。
+///
+/// 先頭が SOI でない、または EOI が見つからない場合は `None`。
+fn first_jpeg_end(data: &[u8]) -> Option<usize> {
+    let n = data.len();
+    // 先頭は SOI (FFD8) でなければならない
+    if n < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+        return None;
+    }
+    let mut i = 2; // SOI を消費
+    loop {
+        // 次の 0xFF を探す（entropy-coded data 中の非マーカーバイトを読み飛ばす）
+        while i < n && data[i] != 0xFF {
+            i += 1;
+        }
+        if i + 1 >= n {
+            return None;
+        }
+        let marker = data[i + 1];
+        match marker {
+            // EOI: 先頭 JPEG の終端
+            0xD9 => return Some(i + 2),
+            // 別の SOI（通常は来ない）はスキップ
+            0xD8 => i += 2,
+            // entropy data 中のスタッフドバイト (FF00) / パディング (FFFF)
+            0x00 | 0xFF => i += 1,
+            // RST0-7 / TEM: length フィールドなし
+            0xD0..=0xD7 | 0x01 => i += 2,
+            // 通常マーカー（APPn / SOF / SOS / DQT / DHT 等）: 2 バイト length フィールドあり。
+            // SOS の場合もここで header 長だけスキップし、後続の entropy data は
+            // 上の 0xFF 走査ループが処理する。
+            _ => {
+                if i + 3 >= n {
+                    return None;
+                }
+                let seg = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+                i += 2 + seg; // マーカー2バイト + (length 自身を含む)セグメント長
+            }
+        }
+    }
+}
+
 /// MPO バイト列を左目・右目 [`DynamicImage`] のペアに分割する。
 ///
-/// MPO は JPEG のスーパーセット。先頭 JPEG が左目、`FFD9 FFD8` パターン
-/// 直後のバイト列が右目 JPEG となる。右目が見つからない場合は
+/// MPO は JPEG のスーパーセット。先頭 JPEG が左目、その直後の JPEG が右目となる。
+/// 先頭 JPEG の終端は [`first_jpeg_end`] で **marker 走査**して求める（APPn ペイロードや
+/// entropy data 中の `FFD9 FFD8` バイト列で誤分割しない）。右目が見つからない場合は
 /// [`Error::InvalidMpo`] を返す。
 pub fn split_mpo(data: &[u8]) -> Result<(DynamicImage, DynamicImage)> {
-    // FFD9 FFD8 パターンを探す（FFD9 = EOI, FFD8 = SOI）
-    let split_pos = data
-        .windows(4)
-        .position(|w| w[0] == 0xFF && w[1] == 0xD9 && w[2] == 0xFF && w[3] == 0xD8)
-        .ok_or(Error::InvalidMpo)?;
+    // 先頭 JPEG の真の終端（EOI 直後）を marker 走査で求める
+    let split_pos = first_jpeg_end(data).ok_or(Error::InvalidMpo)?;
 
     // 左目: 先頭〜EOI（FFD9 含む）
-    let left_bytes = &data[..split_pos + 2];
-    // 右目: FFD8 から末尾まで
-    let right_bytes = &data[split_pos + 2..];
+    let left_bytes = &data[..split_pos];
+
+    // 右目: split_pos 以降で最初に現れる SOI (FFD8) から末尾まで。
+    // 通常は split_pos 直後が右目 SOI だが、稀なパディングにも耐えるよう走査する。
+    let right_rel = data[split_pos..]
+        .windows(2)
+        .position(|w| w[0] == 0xFF && w[1] == 0xD8)
+        .ok_or(Error::InvalidMpo)?;
+    let right_bytes = &data[split_pos + right_rel..];
 
     let left = image::load_from_memory(left_bytes)?;
     let right = image::load_from_memory(right_bytes)?;
@@ -733,5 +784,53 @@ mod tests {
             matches!(result, Err(crate::Error::NoDepthMap)),
             "zero seg_len should return NoDepthMap without panic, got: {result:?}"
         );
+    }
+
+    // ---------------------------------------------------------------
+    // #112: first_jpeg_end の marker 走査回帰テスト
+    // （APPn ペイロード / entropy data 中の FFD9 FFD8 を真の境界と誤認しない）
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn first_jpeg_end_skips_embedded_eoi_soi_in_app_segment() {
+        // APP1 セグメントのペイロードに罠の FFD9 FFD8 を埋め込む。
+        // 素朴な windows(4) スキャンはここで誤分割するが、length 走査は skip する。
+        let mut data = vec![0xFF, 0xD8]; // SOI
+        data.extend([0xFF, 0xE1, 0x00, 0x08]); // APP1, length=8（length 2 + payload 6）
+        data.extend([0xFF, 0xD9, 0xFF, 0xD8, 0x00, 0x01]); // 6バイトの罠ペイロード
+        data.extend([0xFF, 0xD9]); // 真の EOI
+        let real_end = data.len();
+        data.extend([0xFF, 0xD8, 0x11, 0x22]); // 第2 JPEG の SOI + ダミー
+
+        assert_eq!(
+            first_jpeg_end(&data),
+            Some(real_end),
+            "APP1 ペイロード中の埋め込み FFD9 FFD8 を真の EOI と誤認してはならない"
+        );
+    }
+
+    #[test]
+    fn first_jpeg_end_walks_sos_entropy_with_stuffing_and_rst() {
+        // SOS 後の entropy data に FF00 スタッフィングと FFD0 RST を含めても、
+        // 真の EOI まで正しく走査する。
+        let mut data = vec![0xFF, 0xD8]; // SOI
+        data.extend([0xFF, 0xDA, 0x00, 0x02]); // SOS header（length=2、ペイロードなし）
+        data.extend([0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD0, 0x56]); // entropy: stuffing + RST0
+        data.extend([0xFF, 0xD9]); // EOI
+        let end = data.len();
+        data.extend([0xFF, 0xD8]); // 第2 JPEG の SOI
+
+        assert_eq!(
+            first_jpeg_end(&data),
+            Some(end),
+            "entropy data 中の FF00 / FFD0 を境界と誤認せず真の EOI まで走査すること"
+        );
+    }
+
+    #[test]
+    fn first_jpeg_end_rejects_non_soi_start_and_missing_eoi() {
+        assert_eq!(first_jpeg_end(&[]), None, "空入力");
+        assert_eq!(first_jpeg_end(&[0x00, 0x11, 0x22]), None, "先頭が SOI でない");
+        assert_eq!(first_jpeg_end(&[0xFF, 0xD8, 0x01, 0x02]), None, "EOI なし");
     }
 }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix: kako-jun/sensus#112 `split_mpo` の JPEG マーカー無視（素朴窓スキャン）を marker 走査に統一**: `split_mpo` は `windows(4)` で `FFD9 FFD8` を素朴スキャンしており、第1フレームの entropy-coded scan data や APPn ペイロード中に同バイト列があると誤分割しえた（session515 が `split_jpeg_frames` で直したのと同じ untrusted-input パーサのバグ class）。SOI から marker/length を正しく走査して**真の EOI** を見つける `first_jpeg_end()` を追加（SOS 後の entropy data の FF00 スタッフィング・FFDn RST を正しく読み飛ばす）。回帰テスト 3 件（APP1 ペイロードに埋め込んだ FFD9 FFD8 を誤認しない / SOS entropy + stuffing + RST を走査 / 非 SOI・EOI 欠落の拒否）。
+
 ### Changed
 
 - **fix: kako-jun/sensus#110 `Filter::Floaters.size` の死にフィールドを配線（受け取って捨てていた）**: `apply()` が `let _ = size` で無視し「現在は無視（0.0 を渡すこと）」と doc されていた死にフィールドを、blob 半径・糸くず幅の相対倍率として機能させた。`vision::floaters` / `floaters_mask` に `size` 引数を追加（0.1..=5.0 に clamp、0/NaN は 1.0 フォールバック）、`blob_radius` と strand `half_w` に乗じる。`apply()` / `Pipeline::FilterStep` から enum の `size` を渡すよう配線。マスクは CPU 生成（#134 方針 B）なので GLSL 側変更は不要。効果アサート `floaters_size_scales_coverage`（size 大 → 被覆面積増＝平均マスク低下、NaN→1.0 フォールバック）。
