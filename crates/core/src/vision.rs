@@ -2489,7 +2489,9 @@ pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) ->
 /// `strength = 0.0` は元画像と完全一致。
 ///
 /// シード値は内部で固定（42）のため、同一入力に対して毎回同一のノイズパターンになります。
-/// フレームごとに異なるパターンが必要な場合は将来の `dry_eye_with_seed(img, strength, seed)` を使用してください（未実装）。
+/// この固定 seed は `dry_eye.frag` の `tileHash` と一致させる CPU↔GLSL 等価の前提でもある。
+/// フレームごとに異なるパターン（動画用）を出すには CPU と `.frag` の双方に seed uniform を
+/// 通す必要があり、現状はスコープ外（必要になれば別途 seed 対応版を設計する）。
 ///
 /// #99: タイルノイズを行優先の逐次 64bit LCG から、タイル座標だけの決定論的 32bit
 /// spatial hash に変更した。これにより `dry_eye.frag` がフラグメント単位で同じノイズ場・

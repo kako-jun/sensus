@@ -1,7 +1,8 @@
 //! sensus CLI — simulate sensory perception on images.
 //!
-//! Phase 1 (Issue #2) 以降で各フィルタを実装する。本 scaffold (#1) では
-//! 引数を受け取り、未実装フィルタの場合は stderr に通知して exit(2) する。
+//! 画像/音声を読み、選択したフィルタを適用して出力する。エラーは stderr に通知し
+//! 非ゼロ終了する（成功 0 / 失敗 1）。core の `Filter` は全バリアント実装済みで、
+//! 未実装フィルタ経路（旧 exit-2）は持たない。
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -401,10 +402,6 @@ enum RunError {
         source: image::ImageError,
     },
 
-    /// A filter was selected but not yet implemented in core.
-    #[error("{0}")]
-    NotImplemented(String),
-
     /// A pipeline step failed at runtime.
     #[error("{0}")]
     Pipeline(String),
@@ -472,10 +469,6 @@ fn main() -> ExitCode {
         Err(RunError::AudioError(msg)) => {
             eprintln!("{msg}");
             ExitCode::FAILURE
-        }
-        Err(RunError::NotImplemented(msg)) => {
-            eprintln!("{msg}");
-            ExitCode::from(2)
         }
         Err(err) => {
             eprintln!("{err}");
@@ -594,8 +587,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
         source,
     })?;
 
-    let (width, height) = (img.width(), img.height());
-
     // depth フィルタが含まれる場合は単独処理（Pipeline を通さない）
     // TODO(#19): Pipeline 統合時にここを削除し Pipeline 経由で処理する
     if cli.filter.iter().any(|f| f.is_depth_filter()) {
@@ -683,15 +674,6 @@ fn run(cli: Cli) -> Result<(), RunError> {
                     source,
                 })?;
             Ok(())
-        }
-        Err(CoreError::NotImplemented(filter)) => {
-            let msg = format!(
-                "sensus: filter {:?} (strength {:.2}) is not implemented yet.\n\
-                 sensus: input {}x{} {:?} -> output {:?}\n\
-                 sensus: see https://github.com/kako-jun/sensus for roadmap.",
-                filter, cli.strength, width, height, input_path, cli.output
-            );
-            Err(RunError::NotImplemented(msg))
         }
         Err(CoreError::Image(err)) => Err(RunError::InputOpen {
             path: input_path.clone(),

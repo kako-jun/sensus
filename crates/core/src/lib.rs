@@ -27,10 +27,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// v0.4.0 以降、一部バリアントはパラメータを直接 enum に埋め込む形式（案 A）。
 /// パラメータなしバリアントは `apply()` でデフォルト値を使用して適用される。
 ///
-/// Implemented filters return their result via [`apply`]; variants whose
-/// implementation has not yet landed return [`Error::NotImplemented`].
-/// The enum lives in `sensus-core` so non-CLI consumers (GUI, library
-/// users) can refer to filters without pulling in clap.
+/// すべてのバリアントは [`apply`] で実装済み（match は網羅的なので、新バリアントを
+/// 追加すると未実装はコンパイルエラーになる）。enum は `sensus-core` にあるため、
+/// 非 CLI consumer（GUI / ライブラリ利用者）は clap を持ち込まずにフィルタを参照できる。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Filter {
     // vision (Phase 1: color vision deficiency)
