@@ -6,97 +6,26 @@
 
 use image::DynamicImage;
 
-use crate::{vision, Filter, Result};
+use crate::{Filter, Result};
 
 /// 1つのフィルタ適用単位。
-// 設計メモ: FilterStep は Filter enum にパラメータが埋め込まれた後も薄いラッパーとして維持する。
-// パラメータの追加は Filter enum 側のみに行い、FilterStep は strength を付加するだけにとどめる。
+///
+/// フィルタ固有のパラメータはすべて [`Filter`] enum の payload に持たせる方針なので、
+/// `FilterStep` は「どのフィルタを」「どの強度で」適用するかだけを保持する薄いラッパー。
+/// 適用は [`crate::apply`] に委譲するため、単体適用と pipeline 適用の挙動は常に一致する。
 pub struct FilterStep {
     pub filter: Filter,
     pub strength: f32,
-    /// astigmatism 用軸（度）。デフォルト: 90.0
-    pub axis: f32,
-    /// cataract / floaters 用ランダムシード。デフォルト: 0
-    pub seed: u64,
-    /// floaters 用密度。デフォルト: 0.5
-    pub density: f32,
-    /// floaters 用視線 X 位置（0=左, 1=右）。デフォルト: 0.5
-    pub gaze_x: f32,
-    /// floaters 用視線 Y 位置（0=上, 1=下）。デフォルト: 0.5
-    pub gaze_y: f32,
-    /// hemianopia 用側（0.0=左視野消失, 1.0=右視野消失）。デフォルト: 0.0
-    pub side: f32,
-    /// diplopia 水平ずれ（min(W,H) 比）。デフォルト: 0.02
-    pub offset_x: f32,
-    /// diplopia 垂直ずれ（min(W,H) 比）。デフォルト: 0.01
-    pub offset_y: f32,
-    /// diplopia 幽霊像強度。デフォルト: 0.7
-    pub ghost_strength: f32,
-    /// nystagmus 振幅（min(W,H) 比）。デフォルト: 0.03
-    pub amplitude: f32,
-    /// nystagmus 方向（0°=水平, 90°=垂直）。デフォルト: 0.0
-    pub direction_deg: f32,
-    /// starbursts 光芒数。デフォルト: 6
-    pub num_rays: u32,
-    /// starbursts 光芒長（min(W,H) 比）。デフォルト: 0.1
-    pub ray_length_ratio: f32,
-    /// starbursts 輝度閾値。デフォルト: 0.8
-    pub threshold: f32,
-    /// starbursts 波長分散（虹色光芒）。デフォルト: 0.0（白）
-    pub dispersion: f32,
-    /// metamorphopsia 空間周波数。デフォルト: 4.0
-    pub meta_freq: f32,
-    /// metamorphopsia LCG シード。デフォルト: 0
-    pub meta_seed: u64,
 }
 
 impl FilterStep {
-    /// デフォルトパラメータで `FilterStep` を生成する。
+    /// `FilterStep` を生成する。フィルタ固有のパラメータは `filter` の payload で指定する。
     pub fn new(filter: Filter, strength: f32) -> Self {
-        Self {
-            filter,
-            strength,
-            axis: 90.0,
-            seed: 0,
-            density: 0.5,
-            gaze_x: 0.5,
-            gaze_y: 0.5,
-            side: 0.0,
-            offset_x: 0.02,
-            offset_y: 0.01,
-            ghost_strength: 0.7,
-            amplitude: 0.03,
-            direction_deg: 0.0,
-            num_rays: 6,
-            ray_length_ratio: 0.1,
-            threshold: 0.8,
-            dispersion: 0.0,
-            meta_freq: 4.0,
-            meta_seed: 0,
-        }
+        Self { filter, strength }
     }
 
     fn apply(&self, img: DynamicImage) -> Result<DynamicImage> {
-        match self.filter {
-            Filter::Astigmatism { axis_deg } => vision::astigmatism(img, self.strength, axis_deg),
-            Filter::Cataract => vision::cataract(img, self.strength, self.seed),
-            Filter::Floaters { seed, density, size } => {
-                vision::floaters(img, self.strength, density, seed, self.gaze_x, self.gaze_y, size)
-            }
-            Filter::Photophobia => vision::photophobia(img, self.strength),
-            Filter::NightBlindness => vision::nyctalopia(img, self.strength),
-            Filter::Hemianopia { side } => vision::hemianopia(img, self.strength, side),
-            Filter::Glaucoma { mode } => vision::glaucoma(img, self.strength, mode),
-            Filter::Diplopia => vision::diplopia(img, self.strength, self.offset_x, self.offset_y, self.ghost_strength),
-            Filter::Nystagmus => vision::nystagmus(img, self.strength, self.amplitude, self.direction_deg),
-            Filter::Starbursts { num_rays, ray_length_ratio, threshold, dispersion } => {
-                vision::starbursts(img, self.strength, num_rays, ray_length_ratio, threshold, dispersion)
-            }
-            Filter::Metamorphopsia => vision::metamorphopsia(img, self.strength, self.meta_freq, self.meta_seed),
-            Filter::FlickeringStars { seed } => vision::flickering_stars(img, self.strength, seed),
-            Filter::DetailLoss { cell_size } => vision::detail_loss_with_cell_size(img, self.strength, cell_size),
-            f => crate::apply(f, img, self.strength),
-        }
+        crate::apply(self.filter, img, self.strength)
     }
 }
 
@@ -123,12 +52,10 @@ impl Pipeline {
     /// メッセージを持つ [`crate::Error`] を返す。
     pub fn apply(&self, mut img: DynamicImage) -> Result<DynamicImage> {
         for (i, step) in self.steps.iter().enumerate() {
-            img = step.apply(img).map_err(|e| {
-                crate::Error::Pipeline {
-                    step: i,
-                    filter: format!("{:?}", step.filter),
-                    source: Box::new(e),
-                }
+            img = step.apply(img).map_err(|e| crate::Error::Pipeline {
+                step: i,
+                filter: format!("{:?}", step.filter),
+                source: Box::new(e),
             })?;
         }
         Ok(img)
@@ -145,7 +72,7 @@ impl Default for Pipeline {
 // AudioPipeline (Issue #66): 聴覚フィルタの多段合成
 // ---------------------------------------------------------------
 
-use crate::{HearingFilter, hearing::AudioBuffer};
+use crate::{hearing::AudioBuffer, HearingFilter};
 
 /// 1つの聴覚フィルタ適用単位。
 pub struct AudioFilterStep {
@@ -203,7 +130,7 @@ impl Default for AudioPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, RgbaImage, RgbImage};
+    use image::{DynamicImage, RgbImage, RgbaImage};
 
     fn make_image() -> DynamicImage {
         DynamicImage::ImageRgb8(RgbImage::new(64, 64))
@@ -229,7 +156,12 @@ mod tests {
         let pipeline = Pipeline::new()
             .push(FilterStep::new(Filter::Myopia, 0.5))
             .push(FilterStep::new(Filter::Protanopia, 1.0))
-            .push(FilterStep::new(Filter::Glaucoma { mode: crate::vision::GlaucomaMode::Vignette }, 0.8));
+            .push(FilterStep::new(
+                Filter::Glaucoma {
+                    mode: crate::vision::GlaucomaMode::Vignette,
+                },
+                0.8,
+            ));
         assert!(pipeline.apply(img).is_ok());
     }
 
@@ -244,9 +176,16 @@ mod tests {
     #[test]
     fn floaters_step_with_params() {
         let img = make_image();
-        let mut step = FilterStep::new(Filter::Floaters { seed: 42, density: 0.3, size: 1.0 }, 0.6);
-        step.gaze_x = 0.4;
-        step.gaze_y = 0.6;
+        let step = FilterStep::new(
+            Filter::Floaters {
+                seed: 42,
+                density: 0.3,
+                size: 1.0,
+                gaze_x: 0.4,
+                gaze_y: 0.6,
+            },
+            0.6,
+        );
         let pipeline = Pipeline::new().push(step);
         assert!(pipeline.apply(img).is_ok());
     }
@@ -273,8 +212,16 @@ mod tests {
         let img2 = img.clone();
 
         let step = FilterStep::new(Filter::Protanopia, 1.0);
-        let via_pipeline = Pipeline::new().push(step).apply(img).unwrap().to_rgb8().into_raw();
-        let direct = crate::apply(Filter::Protanopia, img2, 1.0).unwrap().to_rgb8().into_raw();
+        let via_pipeline = Pipeline::new()
+            .push(step)
+            .apply(img)
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
+        let direct = crate::apply(Filter::Protanopia, img2, 1.0)
+            .unwrap()
+            .to_rgb8()
+            .into_raw();
 
         assert_eq!(via_pipeline, direct);
     }
@@ -293,21 +240,34 @@ mod tests {
 
         let ab = Pipeline::new()
             .push(FilterStep::new(Filter::Protanopia, 1.0))
-            .push(FilterStep::new(Filter::Glaucoma { mode: crate::vision::GlaucomaMode::Vignette }, 1.0))
+            .push(FilterStep::new(
+                Filter::Glaucoma {
+                    mode: crate::vision::GlaucomaMode::Vignette,
+                },
+                1.0,
+            ))
             .apply(img)
             .unwrap()
             .to_rgb8()
             .into_raw();
 
         let ba = Pipeline::new()
-            .push(FilterStep::new(Filter::Glaucoma { mode: crate::vision::GlaucomaMode::Vignette }, 1.0))
+            .push(FilterStep::new(
+                Filter::Glaucoma {
+                    mode: crate::vision::GlaucomaMode::Vignette,
+                },
+                1.0,
+            ))
             .push(FilterStep::new(Filter::Protanopia, 1.0))
             .apply(img2)
             .unwrap()
             .to_rgb8()
             .into_raw();
 
-        assert_ne!(ab, ba, "protanopia→glaucoma and glaucoma→protanopia should differ");
+        assert_ne!(
+            ab, ba,
+            "protanopia→glaucoma and glaucoma→protanopia should differ"
+        );
     }
 
     /// alpha チャンネル付き画像で alpha が保持されること。
@@ -387,8 +347,15 @@ mod tests {
             .push(HearingFilter::HearingLoss, 1.0)
             .apply(&buf)
             .unwrap();
-        let changed = out.samples.iter().zip(buf.samples.iter()).any(|(a, b)| (a - b).abs() > 1e-6);
-        assert!(changed, "HearingLoss(strength=1.0) must attenuate non-zero input");
+        let changed = out
+            .samples
+            .iter()
+            .zip(buf.samples.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(
+            changed,
+            "HearingLoss(strength=1.0) must attenuate non-zero input"
+        );
     }
 
     #[test]
@@ -419,7 +386,9 @@ mod tests {
     fn audio_pipeline_matches_sequential_apply_hearing() {
         // #114: AudioPipeline は apply_hearing を順に適用したものと bit 一致する。
         let buf = AudioBuffer {
-            samples: (0..44100).map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin()).collect(),
+            samples: (0..44100)
+                .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 44100.0).sin())
+                .collect(),
             sample_rate: 44100,
             channels: 1,
         };
@@ -431,9 +400,13 @@ mod tests {
             .unwrap();
 
         let s1 = crate::apply_hearing(HearingFilter::HearingLoss, buf.clone(), 0.7).unwrap();
-        let manual = crate::apply_hearing(HearingFilter::Tinnitus { freq_hz: 4000.0 }, s1, 0.3).unwrap();
+        let manual =
+            crate::apply_hearing(HearingFilter::Tinnitus { freq_hz: 4000.0 }, s1, 0.3).unwrap();
 
-        assert_eq!(pipelined.samples, manual.samples, "pipeline must equal sequential apply_hearing");
+        assert_eq!(
+            pipelined.samples, manual.samples,
+            "pipeline must equal sequential apply_hearing"
+        );
         assert_eq!(pipelined.sample_rate, manual.sample_rate);
         assert_eq!(pipelined.channels, manual.channels);
     }

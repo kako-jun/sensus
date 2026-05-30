@@ -5,7 +5,7 @@
 //! # 音声バッファ
 //!
 //! - [`AudioBuffer`] — `Vec<f32>` の PCM サンプル列（normalized, -1.0..=1.0）
-//! - サンプルはインターリーブ: ch0[0], ch1[0], ch0[1], ch1[1], ...
+//! - サンプルはインターリーブ: `ch0[0], ch1[0], ch0[1], ch1[1], ...`
 //! - `channels` が 1 のときはモノラル
 //!
 //! # 周波数フィルタ
@@ -91,7 +91,11 @@ impl BiquadFilter {
 /// `sample_rate`: サンプルレート (Hz)
 pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
     // sample_rate=0 の場合はフォールバックとして 44100 Hz を使用する。
-    let fs = if sample_rate == 0 { 44100.0 } else { sample_rate as f32 };
+    let fs = if sample_rate == 0 {
+        44100.0
+    } else {
+        sample_rate as f32
+    };
     // バイリニア変換による Butterworth 2 次 LP
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
@@ -122,7 +126,11 @@ pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = if sample_rate == 0 { 44100.0 } else { sample_rate as f32 };
+    let fs = if sample_rate == 0 {
+        44100.0
+    } else {
+        sample_rate as f32
+    };
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let q = std::f32::consts::FRAC_1_SQRT_2;
@@ -153,7 +161,11 @@ pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `bandwidth_hz`: 帯域幅 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn band_reject_biquad(center_hz: f32, bandwidth_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = if sample_rate == 0 { 44100.0 } else { sample_rate as f32 };
+    let fs = if sample_rate == 0 {
+        44100.0
+    } else {
+        sample_rate as f32
+    };
     let f0 = center_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let bw = bandwidth_hz.max(1.0);
@@ -185,7 +197,10 @@ pub fn band_reject_biquad(center_hz: f32, bandwidth_hz: f32, sample_rate: u32) -
 // ---------------------------------------------------------------
 
 /// 全チャンネルに同一 Biquad フィルタを適用する（チャンネルごとに独立したステート）。
-fn apply_biquad_all_channels(buf: &AudioBuffer, make_filter: impl Fn() -> BiquadFilter) -> Vec<f32> {
+fn apply_biquad_all_channels(
+    buf: &AudioBuffer,
+    make_filter: impl Fn() -> BiquadFilter,
+) -> Vec<f32> {
     let ch = buf.channels as usize;
     if ch == 0 {
         return buf.samples.clone();
@@ -303,7 +318,11 @@ pub fn hyperacusis(buf: AudioBuffer, strength: f32) -> AudioBuffer {
         return buf;
     }
     let gain = 1.0 + s * 3.0; // 1.0 → 4.0
-    let samples = buf.samples.iter().map(|&x| (x * gain).clamp(-1.0, 1.0)).collect();
+    let samples = buf
+        .samples
+        .iter()
+        .map(|&x| (x * gain).clamp(-1.0, 1.0))
+        .collect();
     AudioBuffer {
         samples,
         sample_rate: buf.sample_rate,
@@ -372,7 +391,7 @@ pub fn paracusis(buf: AudioBuffer, strength: f32) -> AudioBuffer {
         .map(|&x| {
             let driven = x * drive;
             let distorted = driven.tanh(); // ソフトクリップ
-            // 元とブレンド
+                                           // 元とブレンド
             x + (distorted - x) * s
         })
         .collect();
@@ -592,17 +611,21 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
     const LCG_C: u64 = 1013904223;
     let mut state: u64 = 42;
     let noise_amp = s * 0.05; // 最大 5% のノイズ
-    let mut noisy: Vec<f32> = buf.samples.iter().map(|&x| {
-        state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
-        // -1.0..=1.0 の符号付きノイズ
-        let noise = (state >> 32) as f32 / (u32::MAX as f32 / 2.0) - 1.0;
-        (x + noise * noise_amp).clamp(-1.0, 1.0)
-    }).collect();
+    let mut noisy: Vec<f32> = buf
+        .samples
+        .iter()
+        .map(|&x| {
+            state = state.wrapping_mul(LCG_A).wrapping_add(LCG_C);
+            // -1.0..=1.0 の符号付きノイズ
+            let noise = (state >> 32) as f32 / (u32::MAX as f32 / 2.0) - 1.0;
+            (x + noise * noise_amp).clamp(-1.0, 1.0)
+        })
+        .collect();
 
     // Step 2: FIR スミア（隣接 3 サンプルの加重平均: 0.25, 0.5, 0.25）
     // strength に応じて元とブレンド
     let w_center = 1.0 - s * 0.5; // strength=1.0 で center=0.5
-    let w_side = s * 0.25;         // strength=1.0 で w_center=0.5, w_side=0.25 → 合計 0.5 + 0.25×2 = 1.0
+    let w_side = s * 0.25; // strength=1.0 で w_center=0.5, w_side=0.25 → 合計 0.5 + 0.25×2 = 1.0
     let mut smeared = noisy.clone();
     for i in 0..n {
         let prev = if i >= ch { noisy[i - ch] } else { noisy[i] };
@@ -613,7 +636,11 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
 
     // Step 3: gap 埋め（< 5 ms の無音区間を前後の値で補間）
     // sample_rate=0 は 44100 Hz として扱う
-    let sr = if buf.sample_rate == 0 { 44100 } else { buf.sample_rate };
+    let sr = if buf.sample_rate == 0 {
+        44100
+    } else {
+        buf.sample_rate
+    };
     let gap_frames = ((sr as f32 * 0.005) as usize).max(1); // 5 ms
     let silence_threshold = 0.01_f32;
 
@@ -629,20 +656,21 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
                 gap_start = Some(f);
             }
         } else if let Some(gs) = gap_start {
-                let gap_len = f - gs;
-                if gap_len < gap_frames {
-                    // gap を前後の値で線形補間して埋める
-                    let before_f = if gs > 0 { gs - 1 } else { gs };
-                    for gf in gs..f {
-                        let t = (gf - gs + 1) as f32 / (gap_len + 1) as f32;
-                        for c in 0..ch {
-                            let before_val = result[before_f * ch + c];
-                            let after_val = noisy[f * ch + c];
-                            result[gf * ch + c] = (before_val + (after_val - before_val) * t).clamp(-1.0, 1.0);
-                        }
+            let gap_len = f - gs;
+            if gap_len < gap_frames {
+                // gap を前後の値で線形補間して埋める
+                let before_f = if gs > 0 { gs - 1 } else { gs };
+                for gf in gs..f {
+                    let t = (gf - gs + 1) as f32 / (gap_len + 1) as f32;
+                    for c in 0..ch {
+                        let before_val = result[before_f * ch + c];
+                        let after_val = noisy[f * ch + c];
+                        result[gf * ch + c] =
+                            (before_val + (after_val - before_val) * t).clamp(-1.0, 1.0);
                     }
                 }
-                gap_start = None;
+            }
+            gap_start = None;
         }
     }
 
@@ -751,7 +779,8 @@ mod tests {
         let buf = silence(44100, 44100, 1);
         let out = tinnitus(buf, 1.0, 4000.0);
         // 無音に耳鳴りが加わるので RMS > 0
-        let rms: f32 = (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
+        let rms: f32 =
+            (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
         assert!(rms > 0.0, "tinnitus should add signal to silence");
     }
 
@@ -954,7 +983,10 @@ mod tests {
         let buf = sine_wave(440.0, 1000, 44100);
         let orig = buf.samples.clone();
         let out = auditory_processing_disorder(buf, 0.0);
-        assert_eq!(out.samples, orig, "APD strength=0 should be byte-exact identity");
+        assert_eq!(
+            out.samples, orig,
+            "APD strength=0 should be byte-exact identity"
+        );
     }
 
     #[test]
@@ -962,7 +994,8 @@ mod tests {
         // 無音バッファに strength=1 で APD を適用すると RMS > 0 になる
         let buf = silence(44100, 44100, 1);
         let out = auditory_processing_disorder(buf, 1.0);
-        let rms: f32 = (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
+        let rms: f32 =
+            (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
         assert!(rms > 0.0, "APD should add noise to silence, rms={rms}");
     }
 
@@ -983,7 +1016,10 @@ mod tests {
         let out_rms = rms(&out.samples);
         // tanh クリッピングで RMS が変化することを確認（完全一致しないこと）
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
-        assert!(rel_diff > 0.001, "paracusis strength=1 must alter signal RMS (rel_diff={rel_diff})");
+        assert!(
+            rel_diff > 0.001,
+            "paracusis strength=1 must alter signal RMS (rel_diff={rel_diff})"
+        );
     }
 
     #[test]
@@ -993,7 +1029,10 @@ mod tests {
         let out = dysmelodia(buf, 1.0);
         let out_rms = rms(&out.samples);
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
-        assert!(rel_diff > 0.001, "dysmelodia strength=1 must alter signal RMS (rel_diff={rel_diff})");
+        assert!(
+            rel_diff > 0.001,
+            "dysmelodia strength=1 must alter signal RMS (rel_diff={rel_diff})"
+        );
     }
 
     #[test]
@@ -1004,7 +1043,10 @@ mod tests {
         let out = amusia(buf, 1.0);
         let out_rms = rms(&out.samples);
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
-        assert!(rel_diff > 0.1, "amusia strength=1 must significantly attenuate 4 kHz signal (rel_diff={rel_diff})");
+        assert!(
+            rel_diff > 0.1,
+            "amusia strength=1 must significantly attenuate 4 kHz signal (rel_diff={rel_diff})"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1016,19 +1058,30 @@ mod tests {
         let buf = sine_wave(2000.0, 1000, 44100);
         let orig = buf.samples.clone();
         let out = misophonia(buf, 0.0, 2000.0);
-        assert_eq!(out.samples, orig, "misophonia strength=0 should be byte-exact identity");
+        assert_eq!(
+            out.samples, orig,
+            "misophonia strength=0 should be byte-exact identity"
+        );
     }
 
     #[test]
     fn misophonia_empty_buffer_does_not_panic() {
-        let buf = AudioBuffer { samples: vec![], sample_rate: 44100, channels: 1 };
+        let buf = AudioBuffer {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
         let out = misophonia(buf, 1.0, 2000.0);
         assert!(out.samples.is_empty());
     }
 
     #[test]
     fn misophonia_stereo_preserves_channel_count() {
-        let buf = AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 2 };
+        let buf = AudioBuffer {
+            samples: vec![0.1; 2000],
+            sample_rate: 44100,
+            channels: 2,
+        };
         let out = misophonia(buf, 1.0, 2000.0);
         assert_eq!(out.channels, 2);
         assert_eq!(out.samples.len(), 2000);
@@ -1042,7 +1095,10 @@ mod tests {
         let out = misophonia(buf, 1.0, 2000.0);
         let out_rms = rms(&out.samples);
         let rel_diff = (out_rms - orig_rms).abs() / orig_rms.max(1e-6);
-        assert!(rel_diff > 0.05, "misophonia strength=1 must alter the trigger-band signal (rel_diff={rel_diff})");
+        assert!(
+            rel_diff > 0.05,
+            "misophonia strength=1 must alter the trigger-band signal (rel_diff={rel_diff})"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -1054,19 +1110,30 @@ mod tests {
         let buf = sine_wave(440.0, 1000, 44100);
         let orig = buf.samples.clone();
         let out = labyrinthitis(buf, 0.0);
-        assert_eq!(out.samples, orig, "labyrinthitis strength=0 should be byte-exact identity");
+        assert_eq!(
+            out.samples, orig,
+            "labyrinthitis strength=0 should be byte-exact identity"
+        );
     }
 
     #[test]
     fn labyrinthitis_empty_buffer_does_not_panic() {
-        let buf = AudioBuffer { samples: vec![], sample_rate: 44100, channels: 1 };
+        let buf = AudioBuffer {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
         let out = labyrinthitis(buf, 1.0);
         assert!(out.samples.is_empty());
     }
 
     #[test]
     fn labyrinthitis_stereo_preserves_channel_count() {
-        let buf = AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 2 };
+        let buf = AudioBuffer {
+            samples: vec![0.1; 2000],
+            sample_rate: 44100,
+            channels: 2,
+        };
         let out = labyrinthitis(buf, 1.0);
         assert_eq!(out.channels, 2);
         assert_eq!(out.samples.len(), 2000);
@@ -1076,7 +1143,10 @@ mod tests {
     fn labyrinthitis_adds_tinnitus_to_silence() {
         let buf = silence(44100, 44100, 1);
         let out = labyrinthitis(buf, 1.0);
-        assert!(rms(&out.samples) > 0.0, "labyrinthitis should add tinnitus to silence");
+        assert!(
+            rms(&out.samples) > 0.0,
+            "labyrinthitis should add tinnitus to silence"
+        );
     }
 
     #[test]
@@ -1084,7 +1154,8 @@ mod tests {
         // 感音難聴は高音域カット: 高音(8 kHz)は低音(200 Hz)より強く減衰する。
         // メニエール（低音側が落ちる）とは逆向きであることを検証する。
         let high = sine_wave(8000.0, 44100, 44100);
-        let high_ratio = rms(&labyrinthitis(high.clone(), 1.0).samples) / rms(&high.samples).max(1e-6);
+        let high_ratio =
+            rms(&labyrinthitis(high.clone(), 1.0).samples) / rms(&high.samples).max(1e-6);
 
         let low = sine_wave(200.0, 44100, 44100);
         let low_ratio = rms(&labyrinthitis(low.clone(), 1.0).samples) / rms(&low.samples).max(1e-6);
@@ -1104,19 +1175,30 @@ mod tests {
         let buf = sine_wave(440.0, 1000, 44100);
         let orig = buf.samples.clone();
         let out = meniere(buf, 0.0);
-        assert_eq!(out.samples, orig, "meniere strength=0 should be byte-exact identity");
+        assert_eq!(
+            out.samples, orig,
+            "meniere strength=0 should be byte-exact identity"
+        );
     }
 
     #[test]
     fn meniere_empty_buffer_does_not_panic() {
-        let buf = AudioBuffer { samples: vec![], sample_rate: 44100, channels: 1 };
+        let buf = AudioBuffer {
+            samples: vec![],
+            sample_rate: 44100,
+            channels: 1,
+        };
         let out = meniere(buf, 1.0);
         assert!(out.samples.is_empty());
     }
 
     #[test]
     fn meniere_stereo_preserves_channel_count() {
-        let buf = AudioBuffer { samples: vec![0.1; 2000], sample_rate: 44100, channels: 2 };
+        let buf = AudioBuffer {
+            samples: vec![0.1; 2000],
+            sample_rate: 44100,
+            channels: 2,
+        };
         let out = meniere(buf, 1.0);
         assert_eq!(out.channels, 2);
         assert_eq!(out.samples.len(), 2000);
@@ -1127,7 +1209,10 @@ mod tests {
         // 無音に低音の唸る耳鳴りが加わるので RMS > 0
         let buf = silence(44100, 44100, 1);
         let out = meniere(buf, 1.0);
-        assert!(rms(&out.samples) > 0.0, "meniere should add roaring tinnitus to silence");
+        assert!(
+            rms(&out.samples) > 0.0,
+            "meniere should add roaring tinnitus to silence"
+        );
     }
 
     #[test]
@@ -1184,11 +1269,16 @@ mod tests {
         let buf = sine_wave(440.0, 4000, 44100);
         let out = diplacusis(buf, 1.0);
         let (l, r) = deinterleave_lr(&out);
-        assert_ne!(l, r, "diplacusis must produce different left/right channels");
-        // 単なる定数オフセットではなく、リサンプリングによる音程差であることを確認
-        let diff_rms = rms(
-            &l.iter().zip(r.iter()).map(|(&a, &b)| a - b).collect::<Vec<_>>(),
+        assert_ne!(
+            l, r,
+            "diplacusis must produce different left/right channels"
         );
+        // 単なる定数オフセットではなく、リサンプリングによる音程差であることを確認
+        let diff_rms = rms(&l
+            .iter()
+            .zip(r.iter())
+            .map(|(&a, &b)| a - b)
+            .collect::<Vec<_>>());
         assert!(diff_rms > 0.0, "L/R difference must be non-trivial");
     }
 
@@ -1198,16 +1288,21 @@ mod tests {
         let buf = sine_wave(4000.0, 44100, 44100);
         let orig = rms(&buf.samples);
         let out = rms(&sudden_hearing_loss(buf, 1.0, 4000.0).samples);
-        assert!(out < orig * 0.8, "sudden_hearing_loss must attenuate the notch band (orig={orig}, out={out})");
+        assert!(
+            out < orig * 0.8,
+            "sudden_hearing_loss must attenuate the notch band (orig={orig}, out={out})"
+        );
     }
 
     #[test]
     fn noise_induced_hearing_loss_attenuates_4khz_more_than_low() {
         // 騒音性難聴は 4 kHz 付近を削る: 4 kHz は低音(500 Hz)より強く減衰する。
         let high = sine_wave(4000.0, 44100, 44100);
-        let high_ratio = rms(&noise_induced_hearing_loss(high.clone(), 1.0).samples) / rms(&high.samples).max(1e-6);
+        let high_ratio = rms(&noise_induced_hearing_loss(high.clone(), 1.0).samples)
+            / rms(&high.samples).max(1e-6);
         let low = sine_wave(500.0, 44100, 44100);
-        let low_ratio = rms(&noise_induced_hearing_loss(low.clone(), 1.0).samples) / rms(&low.samples).max(1e-6);
+        let low_ratio = rms(&noise_induced_hearing_loss(low.clone(), 1.0).samples)
+            / rms(&low.samples).max(1e-6);
         assert!(
             high_ratio < low_ratio,
             "noise-induced must attenuate 4 kHz more than 500 Hz: high_ratio={high_ratio}, low_ratio={low_ratio}"
@@ -1220,7 +1315,11 @@ mod tests {
         let buf = sine_wave(440.0, 8000, 44100);
         let orig = buf.samples.clone();
         let out = pitch_shift_semitones(buf, 12.0);
-        assert_eq!(out.samples.len(), orig.len(), "pitch shift must preserve length");
+        assert_eq!(
+            out.samples.len(),
+            orig.len(),
+            "pitch shift must preserve length"
+        );
         assert_ne!(out.samples, orig, "pitch shift must alter the waveform");
     }
 
@@ -1230,7 +1329,16 @@ mod tests {
         let buf = sine_wave(440.0, 44100, 44100);
         let orig = buf.samples.clone();
         let out = tinnitus(buf, 1.0, 4000.0);
-        let diff: Vec<f32> = out.samples.iter().zip(orig.iter()).map(|(&a, &b)| a - b).collect();
-        assert!(rms(&diff) > 0.01, "tinnitus must add a tone even on a non-silent signal (diff_rms={})", rms(&diff));
+        let diff: Vec<f32> = out
+            .samples
+            .iter()
+            .zip(orig.iter())
+            .map(|(&a, &b)| a - b)
+            .collect();
+        assert!(
+            rms(&diff) > 0.01,
+            "tinnitus must add a tone even on a non-silent signal (diff_rms={})",
+            rms(&diff)
+        );
     }
 }

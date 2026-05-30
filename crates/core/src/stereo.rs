@@ -64,7 +64,7 @@ fn first_jpeg_end(data: &[u8]) -> Option<usize> {
 /// MPO バイト列を左目・右目 [`DynamicImage`] のペアに分割する。
 ///
 /// MPO は JPEG のスーパーセット。先頭 JPEG が左目、その直後の JPEG が右目となる。
-/// 先頭 JPEG の終端は [`first_jpeg_end`] で **marker 走査**して求める（APPn ペイロードや
+/// 先頭 JPEG の終端は内部関数 `first_jpeg_end` で **marker 走査**して求める（APPn ペイロードや
 /// entropy data 中の `FFD9 FFD8` バイト列で誤分割しない）。右目が見つからない場合は
 /// [`Error::InvalidMpo`] を返す。
 pub fn split_mpo(data: &[u8]) -> Result<(DynamicImage, DynamicImage)> {
@@ -190,8 +190,7 @@ pub fn read_xmp_depth(data: &[u8]) -> Result<DynamicImage> {
                 if s.contains("GDepth:Data") {
                     if let Some(b64) = extract_gdepth_data(s) {
                         let decoded = base64_decode(b64.as_bytes())?;
-                        return image::load_from_memory(&decoded)
-                            .map_err(crate::Error::Image);
+                        return image::load_from_memory(&decoded).map_err(crate::Error::Image);
                     }
                 }
             }
@@ -317,7 +316,11 @@ mod tests {
         let mpo = make_synthetic_mpo(&left, &right);
 
         let result = split_mpo(&mpo);
-        assert!(result.is_ok(), "valid MPO should return Ok, got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "valid MPO should return Ok, got: {:?}",
+            result.err()
+        );
         let (l, r) = result.unwrap();
         assert_eq!(l.width(), 8);
         assert_eq!(l.height(), 8);
@@ -332,7 +335,11 @@ mod tests {
         let mpo = make_synthetic_mpo(&left, &right);
 
         let (l, _r) = split_mpo(&mpo).unwrap();
-        assert_eq!((l.width(), l.height()), (16, 8), "left image dimensions should match first JPEG");
+        assert_eq!(
+            (l.width(), l.height()),
+            (16, 8),
+            "left image dimensions should match first JPEG"
+        );
     }
 
     #[test]
@@ -342,7 +349,11 @@ mod tests {
         let mpo = make_synthetic_mpo(&left, &right);
 
         let (_l, r) = split_mpo(&mpo).unwrap();
-        assert_eq!((r.width(), r.height()), (12, 6), "right image dimensions should match second JPEG");
+        assert_eq!(
+            (r.width(), r.height()),
+            (12, 6),
+            "right image dimensions should match second JPEG"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -414,7 +425,10 @@ mod tests {
         // 最初の FFD9 FFD8 で分割されるため、右目には right1+right2 が入るはず
         // （image::load_from_memory は先頭JPEGだけ読む → right1 の寸法になるはず）
         let result = split_mpo(&mpo);
-        assert!(result.is_ok(), "multiple FFD9-FFD8 should succeed using first occurrence");
+        assert!(
+            result.is_ok(),
+            "multiple FFD9-FFD8 should succeed using first occurrence"
+        );
         let (l, _r) = result.unwrap();
         // 左目は left であること
         assert_eq!((l.width(), l.height()), (8, 8));
@@ -563,7 +577,10 @@ mod tests {
         let luma = depth.to_luma8();
         // d=0 → pixel_val = 0
         for px in luma.pixels() {
-            assert_eq!(px[0], 0, "uniform gray should produce zero disparity (dark output)");
+            assert_eq!(
+                px[0], 0,
+                "uniform gray should produce zero disparity (dark output)"
+            );
         }
     }
 
@@ -590,8 +607,16 @@ mod tests {
             let n = (b0 << 16) | (b1 << 8) | b2;
             out.push(CHARS[(n >> 18) as usize] as char);
             out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
-            out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] as char } else { '=' });
-            out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] as char } else { '=' });
+            out.push(if chunk.len() > 1 {
+                CHARS[((n >> 6) & 0x3F) as usize] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                CHARS[(n & 0x3F) as usize] as char
+            } else {
+                '='
+            });
         }
         out
     }
@@ -643,7 +668,11 @@ mod tests {
         let b64 = base64_encode_test(&png);
         let jpeg = make_portrait_jpeg_with_xmp_attr(&b64);
         let result = read_xmp_depth(&jpeg);
-        assert!(result.is_ok(), "attribute-form GDepth:Data should succeed, got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "attribute-form GDepth:Data should succeed, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -652,7 +681,11 @@ mod tests {
         let b64 = base64_encode_test(&png);
         let jpeg = make_portrait_jpeg_with_xmp_element(&b64);
         let result = read_xmp_depth(&jpeg);
-        assert!(result.is_ok(), "element-form GDepth:Data should succeed, got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "element-form GDepth:Data should succeed, got: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -695,7 +728,10 @@ mod tests {
         // 不正な base64 文字 '@' を含むデータ
         let jpeg = make_portrait_jpeg_with_xmp_attr("@@@@INVALID@@@@");
         let result = read_xmp_depth(&jpeg);
-        assert!(result.is_err(), "invalid base64 should return error, got Ok");
+        assert!(
+            result.is_err(),
+            "invalid base64 should return error, got Ok"
+        );
     }
 
     #[test]
@@ -720,7 +756,7 @@ mod tests {
 
         // 1つ目: GDepth:Data なし（短い ASCII XMP）
         let xmp_no_depth = "X".repeat(52); // 52 bytes → seg_len=54
-        // 2つ目: GDepth:Data あり
+                                           // 2つ目: GDepth:Data あり
         let xmp_with_depth = format!(
             r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:GDepth="http://ns.google.com/photos/1.0/depthmap/" GDepth:Data="{b64}"/></rdf:RDF></x:xmpmeta>"#
         );
@@ -741,7 +777,11 @@ mod tests {
         data.extend_from_slice(&[0xFF, 0xD9]);
 
         let result = read_xmp_depth(&data);
-        assert!(result.is_ok(), "GDepth:Data in second APP1 should be found, got: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "GDepth:Data in second APP1 should be found, got: {:?}",
+            result.err()
+        );
     }
 
     // ---------------------------------------------------------------
@@ -830,7 +870,11 @@ mod tests {
     #[test]
     fn first_jpeg_end_rejects_non_soi_start_and_missing_eoi() {
         assert_eq!(first_jpeg_end(&[]), None, "空入力");
-        assert_eq!(first_jpeg_end(&[0x00, 0x11, 0x22]), None, "先頭が SOI でない");
+        assert_eq!(
+            first_jpeg_end(&[0x00, 0x11, 0x22]),
+            None,
+            "先頭が SOI でない"
+        );
         assert_eq!(first_jpeg_end(&[0xFF, 0xD8, 0x01, 0x02]), None, "EOI なし");
     }
 }

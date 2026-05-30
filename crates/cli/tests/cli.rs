@@ -179,6 +179,83 @@ fn cli_astigmatism_with_axis_writes_output_png() {
 }
 
 #[test]
+fn cli_axis_actually_changes_astigmatism_output() {
+    // 回帰 (B2): --axis が pipeline まで届かず固定値 90° が使われていた問題の再発防止。
+    // 横長グラデーション画像に axis=0 と axis=90 の astigmatism をかけると、
+    // ボケ方向が直交するので出力 RGBA は一致しないはず。
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    // 大きめ画像にして方向性ブラー半径 (≈ min(W,H)·1.1%) を 1px 以上確保する。
+    let img = image::RgbaImage::from_fn(200, 200, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
+    });
+    img.save(&input).unwrap();
+
+    let run_axis = |axis: &str, out: &std::path::Path| {
+        let status = cargo_run()
+            .args([
+                "-i",
+                input.to_str().unwrap(),
+                "-o",
+                out.to_str().unwrap(),
+                "--filter",
+                "astigmatism",
+                "--strength",
+                "1.0",
+                "--axis",
+                axis,
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success(), "astigmatism --axis {axis} should succeed");
+        image::open(out).unwrap().to_rgba8().into_raw()
+    };
+
+    let a0 = run_axis("0", &dir.path().join("a0.png"));
+    let a90 = run_axis("90", &dir.path().join("a90.png"));
+    assert_ne!(
+        a0, a90,
+        "--axis must change astigmatism blur direction (regression: axis was pinned to 90)"
+    );
+}
+
+#[test]
+fn cli_newly_exposed_filters_run() {
+    // 回帰 (S1): core にあるのに CLI から選べなかった 5 フィルタが疎通すること。
+    let dir = TempDir::new().unwrap();
+    let input = dir.path().join("in.png");
+    write_solid_png(&input, 32, 32, [200, 120, 60, 255]);
+
+    for filter in [
+        "metamorphopsia",
+        "contrast-sensitivity",
+        "detail-loss",
+        "teichopsia",
+        "flickering-stars",
+    ] {
+        let output = dir.path().join(format!("out-{filter}.png"));
+        let status = cargo_run()
+            .args([
+                "-i",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--filter",
+                filter,
+                "--strength",
+                "1.0",
+            ])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "expected exit 0 for newly exposed filter {filter}"
+        );
+        assert!(output.exists(), "expected output PNG for filter {filter}");
+    }
+}
+
+#[test]
 fn cli_axis_out_of_range_is_rejected() {
     let dir = TempDir::new().unwrap();
     let input = dir.path().join("in.png");

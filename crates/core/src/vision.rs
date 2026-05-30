@@ -735,16 +735,13 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             // 白内障の霞み感の核。pivot 0.5 を中心にコントラストを per-channel 収縮させ
             // （ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）、全体輝度を僅かに下げる。
             // c_ch = 1 - s*(1 - coeff_ch) で strength=0 のとき恒等。CPU/GLSL/sim で同一演算。
-            let nr = ((nr - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7))
-                + CATARACT_PIVOT
+            let nr = ((nr - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7)) + CATARACT_PIVOT
                 - strength * CATARACT_BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);
-            let ng = ((ng - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7))
-                + CATARACT_PIVOT
+            let ng = ((ng - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7)) + CATARACT_PIVOT
                 - strength * CATARACT_BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);
-            let nb = ((nb - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.4))
-                + CATARACT_PIVOT
+            let nb = ((nb - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.4)) + CATARACT_PIVOT
                 - strength * CATARACT_BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);
 
@@ -935,7 +932,11 @@ pub fn floaters_mask(
     let gaze_x = gaze_x.clamp(0.0, 1.0);
     let gaze_y = gaze_y.clamp(0.0, 1.0);
     // size は blob 半径・糸くず幅の相対倍率（#110）。1.0 = 既定。0 や NaN は 1.0 にフォールバック。
-    let size = if size.is_finite() && size > 0.0 { size.clamp(0.1, 5.0) } else { 1.0 };
+    let size = if size.is_finite() && size > 0.0 {
+        size.clamp(0.1, 5.0)
+    } else {
+        1.0
+    };
 
     // 視線オフセット（フローターは視線に追随）
     let offset_x = (gaze_x - 0.5) * 0.3 * w_f;
@@ -949,7 +950,7 @@ pub fn floaters_mask(
     }
 
     let blob_count = (total_count as f32 * 0.3).ceil() as usize; // 30% 円形
-    let strand_count = total_count - blob_count;                  // 70% 糸くず
+    let strand_count = total_count - blob_count; // 70% 糸くず
 
     let blob_radius = (w_f.min(h_f) * 0.04 * size).max(2.0);
     let blob_radius_sq = blob_radius * blob_radius;
@@ -1105,7 +1106,11 @@ pub fn floaters_mask(
     for py in 0..h {
         for px in 0..w {
             let m = blurred_mask[py * w + px].clamp(0.0, 1.0);
-            mask_img.put_pixel(px as u32, py as u32, image::Luma([(m * 255.0).round() as u8]));
+            mask_img.put_pixel(
+                px as u32,
+                py as u32,
+                image::Luma([(m * 255.0).round() as u8]),
+            );
         }
     }
     mask_img
@@ -1317,7 +1322,11 @@ impl GlaucomaMode {
 /// - `img`: 入力画像
 /// - `strength`: 強度 (0.0..=1.0)
 /// - `mode`: 暗点の種類（[`GlaucomaMode`] を参照）
-pub fn glaucoma(img: DynamicImage, strength: f32, mode: GlaucomaMode) -> crate::Result<DynamicImage> {
+pub fn glaucoma(
+    img: DynamicImage,
+    strength: f32,
+    mode: GlaucomaMode,
+) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let rgba = img.to_rgba8();
     if strength == 0.0 {
@@ -1384,8 +1393,14 @@ pub fn glaucoma(img: DynamicImage, strength: f32, mode: GlaucomaMode) -> crate::
             // 上方弧状: θ ∈ [90°, 270°]（y > on_y の半面、画像座標では y 下向き）
             // 下方弧状: θ ∈ [-90°, 90°]（y < on_y の半面）
 
-            let apply_superior = matches!(mode, GlaucomaMode::ArcuateSuperior | GlaucomaMode::Biarcuate);
-            let apply_inferior = matches!(mode, GlaucomaMode::ArcuateInferior | GlaucomaMode::Biarcuate);
+            let apply_superior = matches!(
+                mode,
+                GlaucomaMode::ArcuateSuperior | GlaucomaMode::Biarcuate
+            );
+            let apply_inferior = matches!(
+                mode,
+                GlaucomaMode::ArcuateInferior | GlaucomaMode::Biarcuate
+            );
 
             let mut out_rgba = rgba.clone();
             for y in 0..height {
@@ -1406,7 +1421,7 @@ pub fn glaucoma(img: DynamicImage, strength: f32, mode: GlaucomaMode) -> crate::
                     // ゼロ除算・NaN は発生しない。
                     let t_r = (r - r_min) / (r_max - r_min);
                     let fade_r = t_r * t_r * (3.0 - 2.0 * t_r); // smoothstep
-                    // 帯の中央（t_r=0.5）が最も暗く、両端に向かって明るくなる
+                                                                // 帯の中央（t_r=0.5）が最も暗く、両端に向かって明るくなる
                     let fade_radial = 1.0 - (fade_r * 2.0 - 1.0).abs();
 
                     // 角度条件: dy > 0 が画像下方（inferior）、dy < 0 が上方（superior）
@@ -1626,6 +1641,20 @@ fn sample_bilinear(rgba: &image::RgbaImage, fx: f32, fy: f32) -> image::Rgba<u8>
     image::Rgba(out)
 }
 
+/// 静止画で [`vertigo`] を 1 フレーム描くときの代表時刻（秒）。
+///
+/// `vertigo` の回転角は 0.3 Hz の sin 波で、`time_t = 1/(4·0.3) ≈ 0.833 s` で sin = 1
+/// となり回転が最大になる。静止画は時間軸を持てないため、効果が最も伝わるこのピーク位相を
+/// 既定とする（`apply(Filter::Vertigo)` 経由）。アニメーションは GLSL 側の time uniform が担当する。
+pub const VERTIGO_STILL_TIME_S: f32 = 0.8333333;
+
+/// 静止画で [`bppv_rotation`] を 1 フレーム描くときの代表時刻（秒）。
+///
+/// `bppv_rotation` は周期 2 s の sawtooth で、急速相の終わり（`phase = 0.3`、すなわち
+/// `time_t = 0.6 s`）で回転角が最大になる。`time_t = 0` では回転角が 0 になり恒等変換に
+/// なってしまうため、静止画ではこのピーク位相を既定とする（`apply(Filter::BppvRotation)` 経由）。
+pub const BPPV_STILL_TIME_S: f32 = 0.6;
+
 /// めまい（vertigo）シミュレーション。
 ///
 /// `time_t` (秒) に応じて画像を回転させ、周辺をブラーで揺らす。
@@ -1764,7 +1793,7 @@ pub fn vestibular_neuritis(img: DynamicImage, strength: f32) -> Result<DynamicIm
 
     // 水平方向の motion blur（強い揺れを表現）
     let blur_a = s * 0.04 * width as f32; // 長軸（水平）
-    let blur_b = MIN_BLUR_RADIUS_PX;      // 短軸（ほぼ 0 の 1D ブラー）
+    let blur_b = MIN_BLUR_RADIUS_PX; // 短軸（ほぼ 0 の 1D ブラー）
     if blur_a >= MIN_BLUR_RADIUS_PX {
         let (linear, alpha) = rgba_to_linear_planes(&shifted);
         // 水平方向の 1D blur: axis_rad = 0.0 (水平軸方向がボケ)
@@ -1853,14 +1882,20 @@ pub fn depth_aware_blur(
         let delta = bin_center - focus_depth;
         *radius = match kind {
             DepthBlurKind::Myopia => {
-                if delta < 0.0 { (-delta) * max_radius_ratio * min_dim } else { 0.0 }
+                if delta < 0.0 {
+                    (-delta) * max_radius_ratio * min_dim
+                } else {
+                    0.0
+                }
             }
             DepthBlurKind::Hyperopia => {
-                if delta > 0.0 { delta * max_radius_ratio * min_dim } else { 0.0 }
+                if delta > 0.0 {
+                    delta * max_radius_ratio * min_dim
+                } else {
+                    0.0
+                }
             }
-            DepthBlurKind::DepthOfField => {
-                delta.abs() * max_radius_ratio * min_dim
-            }
+            DepthBlurKind::DepthOfField => delta.abs() * max_radius_ratio * min_dim,
         };
     }
 
@@ -1904,12 +1939,26 @@ pub fn depth_aware_blur(
         let blur_floor = if bin_radius[floor_bin] < MIN_BLUR_RADIUS_PX {
             linear.clone()
         } else {
-            ellipse_blur(&linear, w, h, bin_radius[floor_bin], bin_radius[floor_bin], 0.0)
+            ellipse_blur(
+                &linear,
+                w,
+                h,
+                bin_radius[floor_bin],
+                bin_radius[floor_bin],
+                0.0,
+            )
         };
         let blur_ceil = if bin_radius[ceil_bin] < MIN_BLUR_RADIUS_PX {
             linear.clone()
         } else {
-            ellipse_blur(&linear, w, h, bin_radius[ceil_bin], bin_radius[ceil_bin], 0.0)
+            ellipse_blur(
+                &linear,
+                w,
+                h,
+                bin_radius[ceil_bin],
+                bin_radius[ceil_bin],
+                0.0,
+            )
         };
 
         // 該当画素に線形補間結果を書き込む
@@ -1936,7 +1985,14 @@ pub fn depth_aware_blur(
         let blur_last = if bin_radius[N_BINS - 1] < MIN_BLUR_RADIUS_PX {
             linear.clone()
         } else {
-            ellipse_blur(&linear, w, h, bin_radius[N_BINS - 1], bin_radius[N_BINS - 1], 0.0)
+            ellipse_blur(
+                &linear,
+                w,
+                h,
+                bin_radius[N_BINS - 1],
+                bin_radius[N_BINS - 1],
+                0.0,
+            )
         };
         for (idx, &d) in depths.iter().enumerate() {
             let scaled = d * (N_BINS - 1) as f32;
@@ -2133,7 +2189,14 @@ pub fn nystagmus(
 
     let (linear, alpha) = rgba_to_linear_planes(&rgba);
     // 1D directional blur: 短軸を MIN_BLUR_RADIUS_PX に縮退
-    let blurred = ellipse_blur(&linear, width, height, radius_px, MIN_BLUR_RADIUS_PX, blur_axis_rad);
+    let blurred = ellipse_blur(
+        &linear,
+        width,
+        height,
+        radius_px,
+        MIN_BLUR_RADIUS_PX,
+        blur_axis_rad,
+    );
     let out = linear_planes_to_rgba(&blurred, &alpha, width, height);
     Ok(DynamicImage::ImageRgba8(out))
 }
@@ -2296,9 +2359,9 @@ pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
         .map(|(i, &[r, g, b])| {
             let x = (i as u32 % width) as f32;
             let y = (i as u32 / width) as f32;
-            let ux = (x - cx) / cx;  // -1.0..=1.0
+            let ux = (x - cx) / cx; // -1.0..=1.0
             let uy = (y - cy) / cy;
-            let d = ux * ux + uy * uy;  // 0.0（中心）〜 2.0+（角）
+            let d = ux * ux + uy * uy; // 0.0（中心）〜 2.0+（角）
 
             // コントラスト圧縮（linear 空間で 0.5 中心に圧縮）
             let cr = 0.5 + (r - 0.5) * contrast_factor;
@@ -2357,7 +2420,12 @@ pub fn eye_strain(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// - `strength`: 歪み強度（0.0..=1.0）
 /// - `freq`: 空間周波数（グリッドセルサイズ = `max(1, 画像短辺 / freq) px`）
 /// - `seed`: LCG シード（同じ seed なら同じ歪みパターン）
-pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) -> Result<DynamicImage> {
+pub fn metamorphopsia(
+    img: DynamicImage,
+    strength: f32,
+    freq: f32,
+    seed: u64,
+) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
     if s == 0.0 {
@@ -2455,10 +2523,8 @@ pub fn metamorphopsia(img: DynamicImage, strength: f32, freq: f32, seed: u64) ->
                 + d11y * tx * ty;
 
             // サンプリング座標（clamp でエッジ処理）
-            let src_x = (x as f32 + disp_x)
-                .clamp(0.0, (width - 1) as f32);
-            let src_y = (y as f32 + disp_y)
-                .clamp(0.0, (height - 1) as f32);
+            let src_x = (x as f32 + disp_x).clamp(0.0, (width - 1) as f32);
+            let src_y = (y as f32 + disp_y).clamp(0.0, (height - 1) as f32);
 
             let px = sample_bilinear(&rgba, src_x, src_y);
             out.put_pixel(x, y, px);
@@ -2560,7 +2626,8 @@ pub fn dry_eye(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
                     sub_linear.push(linear[(sy * width + sx) as usize]);
                 }
             }
-            let sub_blurred = ellipse_blur(&sub_linear, sub_w, sub_h, blur_radius, blur_radius, 0.0);
+            let sub_blurred =
+                ellipse_blur(&sub_linear, sub_w, sub_h, blur_radius, blur_radius, 0.0);
 
             // タイル内のピクセルだけ out に書く
             for y in y0_tile..y1_tile {
@@ -2699,7 +2766,11 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// 公開 API（apply 経由）が GLSL シェーダとも等価テスト済み関数とも異なる出力を出していた。
 /// シェーダ（universal-experience の表示経路 = 正本）の中心点サンプリングに統一した。
 #[allow(unused_variables)]
-pub fn detail_loss_with_cell_size(img: DynamicImage, _strength: f32, cell_size: u32) -> Result<DynamicImage> {
+pub fn detail_loss_with_cell_size(
+    img: DynamicImage,
+    _strength: f32,
+    cell_size: u32,
+) -> Result<DynamicImage> {
     let rgba = img.to_rgba8();
     let tile_size = cell_size.max(1);
     if tile_size <= 1 {
@@ -3586,7 +3657,10 @@ mod tests {
     fn glaucoma_strength_zero_is_identity() {
         let input = solid_rgba(32, 32, [200, 50, 30, 255]);
         let original = raw_rgba_vec(&input);
-        assert_eq!(raw_rgba_vec(&glaucoma(input, 0.0, GlaucomaMode::Vignette).unwrap()), original);
+        assert_eq!(
+            raw_rgba_vec(&glaucoma(input, 0.0, GlaucomaMode::Vignette).unwrap()),
+            original
+        );
     }
 
     #[test]
@@ -3613,10 +3687,7 @@ mod tests {
     fn tunnel_vision_strength_zero_is_identity() {
         let input = solid_rgba(32, 32, [200, 50, 30, 255]);
         let original = raw_rgba_vec(&input);
-        assert_eq!(
-            raw_rgba_vec(&tunnel_vision(input, 0.0).unwrap()),
-            original
-        );
+        assert_eq!(raw_rgba_vec(&tunnel_vision(input, 0.0).unwrap()), original);
     }
 
     // ---------------------------------------------------------------
@@ -3721,7 +3792,9 @@ mod tests {
         // 白画像で中心（r < inner_r=0.3）は変化なし
         let size = 64_u32;
         let input = solid_rgba(size, size, [200, 100, 50, 255]);
-        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+            .unwrap()
+            .to_rgba8();
         let cx = size / 2;
         let cy = size / 2;
         let center = out.get_pixel(cx, cy);
@@ -3738,7 +3811,9 @@ mod tests {
         // コーナー (r=1.0 > outer_r=0.5) → mul=0.0 → 黒
         let size = 64_u32;
         let input = solid_rgba(size, size, [200, 100, 50, 255]);
-        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+            .unwrap()
+            .to_rgba8();
         let corner = out.get_pixel(0, 0);
         assert_eq!([corner[0], corner[1], corner[2]], [0, 0, 0]);
     }
@@ -3752,8 +3827,12 @@ mod tests {
         // コーナー付近では strength=0.5 の方が strength=1.0 より明るい
         let size = 64_u32;
         let input = solid_rgba(size, size, [200, 200, 200, 255]);
-        let out05 = glaucoma(input.clone(), 0.5, GlaucomaMode::Vignette).unwrap().to_rgba8();
-        let out10 = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+        let out05 = glaucoma(input.clone(), 0.5, GlaucomaMode::Vignette)
+            .unwrap()
+            .to_rgba8();
+        let out10 = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+            .unwrap()
+            .to_rgba8();
         // コーナー (0,0) での輝度比較
         let r05 = out05.get_pixel(0, 0)[0] as i32;
         let r10 = out10.get_pixel(0, 0)[0] as i32;
@@ -3946,7 +4025,9 @@ mod tests {
         // 中心から 30% 離れた点での輝度比較（glaucoma は保存, tunnel は暗化済み）
         let size = 100_u32;
         let input = solid_rgba(size, size, [200, 200, 200, 255]);
-        let g_out = glaucoma(input.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+        let g_out = glaucoma(input.clone(), 1.0, GlaucomaMode::Vignette)
+            .unwrap()
+            .to_rgba8();
         let t_out = tunnel_vision(input, 1.0).unwrap().to_rgba8();
         // (50, 65) は中心から dy=15, normalized ≈ 0.15 → glaucoma ではinner_r=0.3 内で保存
         let cx = 50_u32;
@@ -4015,7 +4096,9 @@ mod tests {
     fn glaucoma_white_image_center_stays_white_corner_goes_black() {
         let size = 64_u32;
         let input = solid_rgba(size, size, [255, 255, 255, 255]);
-        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+        let out = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+            .unwrap()
+            .to_rgba8();
         let cx = size / 2;
         let cy = size / 2;
         let center = out.get_pixel(cx, cy);
@@ -4037,7 +4120,10 @@ mod tests {
         let size = 32_u32;
         let input = solid_rgba(size, size, [0, 0, 0, 255]);
         let original = raw_rgba_vec(&input);
-        assert_eq!(raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap()), original);
+        assert_eq!(
+            raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap()),
+            original
+        );
     }
 
     #[test]
@@ -4140,9 +4226,15 @@ mod tests {
         let w_sum: i32 = w[0..3].iter().map(|&v| v as i32).sum();
         let b_sum: i32 = b[0..3].iter().map(|&v| v as i32).sum();
         // 白は最大未満まで下がる（コントラスト収縮 + 輝度低下）
-        assert!(w_sum < 255 * 3, "cataract should dim pure white: sum={w_sum}");
+        assert!(
+            w_sum < 255 * 3,
+            "cataract should dim pure white: sum={w_sum}"
+        );
         // 黒は白濁ヴェールで持ち上がる
-        assert!(b_sum > 0, "cataract veil should lift pure black: sum={b_sum}");
+        assert!(
+            b_sum > 0,
+            "cataract veil should lift pure black: sum={b_sum}"
+        );
         // 白黒の輝度差（コントラスト）が元の最大 (255*3) より縮む
         assert!(
             (w_sum - b_sum) < 255 * 3,
@@ -4269,7 +4361,10 @@ mod tests {
         let input = solid_rgba(32, 32, [200, 150, 100, 255]);
         let out1 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.3, 12345, 0.5, 0.5, 1.0).unwrap());
         let out2 = raw_rgba_vec(&floaters(input, 0.8, 0.3, 12345, 0.5, 0.5, 1.0).unwrap());
-        assert_eq!(out1, out2, "same seed must produce byte-exact identical output");
+        assert_eq!(
+            out1, out2,
+            "same seed must produce byte-exact identical output"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -4437,7 +4532,10 @@ mod tests {
         let input = solid_rgba(32, 32, [200, 150, 100, 255]);
         let out0 = raw_rgba_vec(&floaters(input.clone(), 0.8, 0.5, 0, 0.5, 0.5, 1.0).unwrap());
         let out1 = raw_rgba_vec(&floaters(input, 0.8, 0.5, 1, 0.5, 0.5, 1.0).unwrap());
-        assert_ne!(out0, out1, "seed=0 and seed=1 must produce different output");
+        assert_ne!(
+            out0, out1,
+            "seed=0 and seed=1 must produce different output"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -4484,8 +4582,8 @@ mod tests {
         let input = solid_rgba(16, 16, [128, 128, 255, 255]);
         let out = cataract(input, 1.0, 0).unwrap().to_rgba8();
         let orig_b_mean: f64 = 255.0;
-        let out_b_mean: f64 = out.pixels().map(|p| p[2] as f64).sum::<f64>()
-            / (out.width() * out.height()) as f64;
+        let out_b_mean: f64 =
+            out.pixels().map(|p| p[2] as f64).sum::<f64>() / (out.width() * out.height()) as f64;
         assert!(
             out_b_mean < orig_b_mean,
             "cataract yellowing: blue channel mean ({out_b_mean:.1}) should be below input ({orig_b_mean:.1})"
@@ -4632,25 +4730,13 @@ mod tests {
         let input = center_white_dot(size);
         let depth_far = depth_map_solid(size, 0); // depth≈0.0 (遠方)
 
-        let out_blurred = depth_aware_blur(
-            input.clone(),
-            &depth_far,
-            1.0,
-            0.1,
-            DepthBlurKind::Myopia,
-        )
-        .unwrap();
+        let out_blurred =
+            depth_aware_blur(input.clone(), &depth_far, 1.0, 0.1, DepthBlurKind::Myopia).unwrap();
 
         // focus と同深度（depth=1.0, val=255）はボケない
         let depth_focus = depth_map_solid(size, 255); // depth≈1.0 (focus と同深度)
-        let out_sharp = depth_aware_blur(
-            input,
-            &depth_focus,
-            1.0,
-            0.1,
-            DepthBlurKind::Myopia,
-        )
-        .unwrap();
+        let out_sharp =
+            depth_aware_blur(input, &depth_focus, 1.0, 0.1, DepthBlurKind::Myopia).unwrap();
 
         let cx = size / 2;
         let cy = size / 2;
@@ -4676,20 +4762,16 @@ mod tests {
         let input = center_white_dot(size);
         let depth = depth_map_solid(size, 255); // depth≈1.0 (近方)
 
-        let out = depth_aware_blur(
-            input.clone(),
-            &depth,
-            0.0,
-            0.1,
-            DepthBlurKind::Myopia,
-        )
-        .unwrap();
+        let out = depth_aware_blur(input.clone(), &depth, 0.0, 0.1, DepthBlurKind::Myopia).unwrap();
 
         // ボケなし: 中心は元の白 (255) のまま
         let cx = size / 2;
         let cy = size / 2;
         let center = out.to_rgba8().get_pixel(cx, cy)[0];
-        assert_eq!(center, 255, "near pixel (depth=1.0 > focus=0.0) must stay sharp");
+        assert_eq!(
+            center, 255,
+            "near pixel (depth=1.0 > focus=0.0) must stay sharp"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -4727,14 +4809,8 @@ mod tests {
 
         // focus と同じ depth=128 (ビン3 or 4, delta≈0)
         let depth_focus = depth_map_solid(size, 128);
-        let out_focus = depth_aware_blur(
-            input,
-            &depth_focus,
-            0.5,
-            0.1,
-            DepthBlurKind::DepthOfField,
-        )
-        .unwrap();
+        let out_focus =
+            depth_aware_blur(input, &depth_focus, 0.5, 0.1, DepthBlurKind::DepthOfField).unwrap();
 
         let cx = size / 2;
         let cy = size / 2;
@@ -4793,14 +4869,8 @@ mod tests {
 
         // focus と同深度（depth=0.0, val=0）はボケない
         let depth_far = depth_map_solid(size, 0); // depth≈0.0 (遠方 = focus と同深度)
-        let out_sharp = depth_aware_blur(
-            input,
-            &depth_far,
-            0.0,
-            0.1,
-            DepthBlurKind::Hyperopia,
-        )
-        .unwrap();
+        let out_sharp =
+            depth_aware_blur(input, &depth_far, 0.0, 0.1, DepthBlurKind::Hyperopia).unwrap();
 
         let cx = size / 2;
         let cy = size / 2;
@@ -4866,14 +4936,8 @@ mod tests {
 
         // d=0.0（focus=0.0 と一致）はシャープ
         let depth_zero = depth_map_solid(size, 0);
-        let out_sharp = depth_aware_blur(
-            input,
-            &depth_zero,
-            0.0,
-            0.1,
-            DepthBlurKind::DepthOfField,
-        )
-        .unwrap();
+        let out_sharp =
+            depth_aware_blur(input, &depth_zero, 0.0, 0.1, DepthBlurKind::DepthOfField).unwrap();
 
         let cx = size / 2;
         let cy = size / 2;
@@ -5038,11 +5102,16 @@ mod tests {
         let orig = img.clone().into_raw();
         let out = diplopia(DynamicImage::ImageRgba8(img), 0.0, 0.1, 0.1, 0.7).unwrap();
         let out_raw = out.to_rgba8().into_raw();
-        let max_err = orig.iter().zip(out_raw.iter())
+        let max_err = orig
+            .iter()
+            .zip(out_raw.iter())
             .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
             .max()
             .unwrap_or(0);
-        assert!(max_err <= 1, "strength=0 should be identity, max_err={max_err}");
+        assert!(
+            max_err <= 1,
+            "strength=0 should be identity, max_err={max_err}"
+        );
     }
 
     #[test]
@@ -5088,7 +5157,10 @@ mod tests {
             "half ghost_strength alpha blend should produce ≈188 (sRGB of linear 0.5), got {val}"
         );
         // また、orig(0) と ghost(255) の単純平均 127 より大きいはず（linear→sRGB変換で増加）
-        assert!(val > 50, "blend result should be clearly above black, got {val}");
+        assert!(
+            val > 50,
+            "blend result should be clearly above black, got {val}"
+        );
     }
 
     #[test]
@@ -5102,11 +5174,16 @@ mod tests {
         let orig = img.clone().into_raw();
         let out = diplopia(DynamicImage::ImageRgba8(img), 1.0, 0.1, 0.1, 0.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
-        let max_err = orig.iter().zip(out_raw.iter())
+        let max_err = orig
+            .iter()
+            .zip(out_raw.iter())
             .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
             .max()
             .unwrap_or(0);
-        assert!(max_err <= 1, "ghost_strength=0 should be identity, max_err={max_err}");
+        assert!(
+            max_err <= 1,
+            "ghost_strength=0 should be identity, max_err={max_err}"
+        );
     }
 
     #[test]
@@ -5119,7 +5196,10 @@ mod tests {
             *px = Rgba([(x * 8) as u8, (y * 8) as u8, 200, 255]);
         }
         let result = diplopia(DynamicImage::ImageRgba8(img), 0.7, 0.2, 0.1, 0.8);
-        assert!(result.is_ok(), "diplopia should not panic on gradient image");
+        assert!(
+            result.is_ok(),
+            "diplopia should not panic on gradient image"
+        );
         // alpha blend の数学的性質から出力画像が正しく生成されること（u8 の上限は型保証）
         let _ = result.unwrap().to_rgba8();
     }
@@ -5168,11 +5248,16 @@ mod tests {
         let orig = img.clone().into_raw();
         let out = nystagmus(DynamicImage::ImageRgba8(img), 1.0, 0.0, 0.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
-        let max_err = orig.iter().zip(out_raw.iter())
+        let max_err = orig
+            .iter()
+            .zip(out_raw.iter())
             .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
             .max()
             .unwrap_or(0);
-        assert!(max_err <= 1, "amplitude=0 should be identity, max_err={max_err}");
+        assert!(
+            max_err <= 1,
+            "amplitude=0 should be identity, max_err={max_err}"
+        );
     }
 
     #[test]
@@ -5203,12 +5288,17 @@ mod tests {
         let orig = img.clone().into_raw();
         let out = starbursts(DynamicImage::ImageRgba8(img), 0.0, 6, 0.1, 0.5, 0.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
-        let max_err = orig.iter().zip(out_raw.iter())
+        let max_err = orig
+            .iter()
+            .zip(out_raw.iter())
             .map(|(&a, &b)| (a as i32 - b as i32).unsigned_abs())
             .max()
             .unwrap_or(0);
         // strength=0 は early return するため byte-exact 一致するはず
-        assert!(max_err == 0, "strength=0 should be byte-exact identity, max_err={max_err}");
+        assert!(
+            max_err == 0,
+            "strength=0 should be byte-exact identity, max_err={max_err}"
+        );
     }
 
     #[test]
@@ -5218,10 +5308,9 @@ mod tests {
         let size = 64_u32;
         let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 255]));
         img.put_pixel(size / 2, size / 2, Rgba([255, 255, 255, 255]));
-        let out = starbursts(
-            DynamicImage::ImageRgba8(img),
-            1.0, 8, 0.3, 0.5, 1.0,
-        ).unwrap().to_rgba8();
+        let out = starbursts(DynamicImage::ImageRgba8(img), 1.0, 8, 0.3, 0.5, 1.0)
+            .unwrap()
+            .to_rgba8();
 
         // 全ピクセルの R/G/B の最大値を収集し、チャネル間で差があることを確認
         let mut any_diff = false;
@@ -5231,7 +5320,10 @@ mod tests {
                 break;
             }
         }
-        assert!(any_diff, "dispersion=1.0 should produce colored (non-gray) pixels");
+        assert!(
+            any_diff,
+            "dispersion=1.0 should produce colored (non-gray) pixels"
+        );
     }
 
     #[test]
@@ -5244,7 +5336,10 @@ mod tests {
         let orig = img.clone().into_raw();
         let out = eye_strain(DynamicImage::ImageRgba8(img), 0.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
-        assert_eq!(orig, out_raw, "eye_strain strength=0 should be byte-exact identity");
+        assert_eq!(
+            orig, out_raw,
+            "eye_strain strength=0 should be byte-exact identity"
+        );
     }
 
     #[test]
@@ -5257,7 +5352,10 @@ mod tests {
         let orig = img.clone().into_raw();
         let out = dry_eye(DynamicImage::ImageRgba8(img), 0.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
-        assert_eq!(orig, out_raw, "dry_eye strength=0 should be byte-exact identity");
+        assert_eq!(
+            orig, out_raw,
+            "dry_eye strength=0 should be byte-exact identity"
+        );
     }
 
     #[test]
@@ -5315,7 +5413,10 @@ mod tests {
         let out_raw = out.to_rgba8().into_raw();
         // 少なくとも 1 バイト異なることを確認
         let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
-        assert!(differs, "metamorphopsia strength=1 must change at least some pixels");
+        assert!(
+            differs,
+            "metamorphopsia strength=1 must change at least some pixels"
+        );
     }
 
     #[test]
@@ -5349,10 +5450,19 @@ mod tests {
             *px = Rgba([(x * 4) as u8, (y * 4) as u8, 100, 255]);
         }
         let dyn_img = DynamicImage::ImageRgba8(img);
-        let out1 = metamorphopsia(dyn_img.clone(), 1.0, 4.0, 1).unwrap().to_rgba8().into_raw();
-        let out2 = metamorphopsia(dyn_img, 1.0, 4.0, 99999).unwrap().to_rgba8().into_raw();
+        let out1 = metamorphopsia(dyn_img.clone(), 1.0, 4.0, 1)
+            .unwrap()
+            .to_rgba8()
+            .into_raw();
+        let out2 = metamorphopsia(dyn_img, 1.0, 4.0, 99999)
+            .unwrap()
+            .to_rgba8()
+            .into_raw();
         let differs = out1.iter().zip(out2.iter()).any(|(a, b)| a != b);
-        assert!(differs, "different seeds must produce different distortion patterns");
+        assert!(
+            differs,
+            "different seeds must produce different distortion patterns"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -5371,7 +5481,10 @@ mod tests {
         let out = vertigo(DynamicImage::ImageRgba8(img), 1.0, 0.25).unwrap();
         let out_raw = out.to_rgba8().into_raw();
         let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
-        assert!(differs, "vertigo strength=1 must change at least some pixels");
+        assert!(
+            differs,
+            "vertigo strength=1 must change at least some pixels"
+        );
     }
 
     #[test]
@@ -5386,7 +5499,10 @@ mod tests {
         let out = bppv_rotation(DynamicImage::ImageRgba8(img), 1.0, 0.1).unwrap();
         let out_raw = out.to_rgba8().into_raw();
         let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
-        assert!(differs, "bppv_rotation strength=1 must change at least some pixels");
+        assert!(
+            differs,
+            "bppv_rotation strength=1 must change at least some pixels"
+        );
     }
 
     #[test]
@@ -5400,7 +5516,10 @@ mod tests {
         let out = vestibular_neuritis(DynamicImage::ImageRgba8(img), 1.0).unwrap();
         let out_raw = out.to_rgba8().into_raw();
         let differs = orig_raw.iter().zip(out_raw.iter()).any(|(a, b)| a != b);
-        assert!(differs, "vestibular_neuritis strength=1 must change at least some pixels");
+        assert!(
+            differs,
+            "vestibular_neuritis strength=1 must change at least some pixels"
+        );
     }
 
     // ---------------------------------------------------------------
@@ -5481,10 +5600,20 @@ mod tests {
         for (x, y, px) in img.enumerate_pixels_mut() {
             *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
         }
-        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        let orig_sum: u32 = img
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
         let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Vignette).unwrap();
-        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
-        assert!(out_sum < orig_sum, "glaucoma Vignette strength=1 must darken: {out_sum} < {orig_sum}");
+        let out_sum: u32 = out
+            .to_rgba8()
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
+        assert!(
+            out_sum < orig_sum,
+            "glaucoma Vignette strength=1 must darken: {out_sum} < {orig_sum}"
+        );
     }
 
     #[test]
@@ -5493,10 +5622,25 @@ mod tests {
         for px in img.pixels_mut() {
             *px = Rgba([200, 200, 200, 255]);
         }
-        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
-        let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::ArcuateSuperior).unwrap();
-        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
-        assert!(out_sum < orig_sum, "glaucoma ArcuateSuperior strength=1 must darken");
+        let orig_sum: u32 = img
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
+        let out = glaucoma(
+            DynamicImage::ImageRgba8(img),
+            1.0,
+            GlaucomaMode::ArcuateSuperior,
+        )
+        .unwrap();
+        let out_sum: u32 = out
+            .to_rgba8()
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
+        assert!(
+            out_sum < orig_sum,
+            "glaucoma ArcuateSuperior strength=1 must darken"
+        );
     }
 
     #[test]
@@ -5505,10 +5649,25 @@ mod tests {
         for px in img.pixels_mut() {
             *px = Rgba([200, 200, 200, 255]);
         }
-        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
-        let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::ArcuateInferior).unwrap();
-        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
-        assert!(out_sum < orig_sum, "glaucoma ArcuateInferior strength=1 must darken");
+        let orig_sum: u32 = img
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
+        let out = glaucoma(
+            DynamicImage::ImageRgba8(img),
+            1.0,
+            GlaucomaMode::ArcuateInferior,
+        )
+        .unwrap();
+        let out_sum: u32 = out
+            .to_rgba8()
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
+        assert!(
+            out_sum < orig_sum,
+            "glaucoma ArcuateInferior strength=1 must darken"
+        );
     }
 
     #[test]
@@ -5517,10 +5676,20 @@ mod tests {
         for px in img.pixels_mut() {
             *px = Rgba([200, 200, 200, 255]);
         }
-        let orig_sum: u32 = img.pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
+        let orig_sum: u32 = img
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
         let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Biarcuate).unwrap();
-        let out_sum: u32 = out.to_rgba8().pixels().map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32).sum();
-        assert!(out_sum < orig_sum, "glaucoma Biarcuate strength=1 must darken");
+        let out_sum: u32 = out
+            .to_rgba8()
+            .pixels()
+            .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
+            .sum();
+        assert!(
+            out_sum < orig_sum,
+            "glaucoma Biarcuate strength=1 must darken"
+        );
     }
 
     // -------------------------------------------------------
@@ -5534,14 +5703,23 @@ mod tests {
             *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 128, 255]);
         }
         let orig = img.clone();
-        let out = contrast_sensitivity(DynamicImage::ImageRgba8(img), 0.0).unwrap().to_rgba8();
+        let out = contrast_sensitivity(DynamicImage::ImageRgba8(img), 0.0)
+            .unwrap()
+            .to_rgba8();
         // PSNR >= 60 dB
-        let mse: f64 = orig.pixels().zip(out.pixels()).map(|(a, b)| {
-            (0..3).map(|i| {
-                let d = a[i] as f64 - b[i] as f64;
-                d * d
-            }).sum::<f64>()
-        }).sum::<f64>() / (64.0 * 64.0 * 3.0);
+        let mse: f64 = orig
+            .pixels()
+            .zip(out.pixels())
+            .map(|(a, b)| {
+                (0..3)
+                    .map(|i| {
+                        let d = a[i] as f64 - b[i] as f64;
+                        d * d
+                    })
+                    .sum::<f64>()
+            })
+            .sum::<f64>()
+            / (64.0 * 64.0 * 3.0);
         if mse > 0.0 {
             let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
             assert!(psnr >= 60.0, "PSNR={psnr:.1} dB, expected >= 60 dB");
@@ -5555,7 +5733,9 @@ mod tests {
             *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
         }
         let orig = img.clone();
-        let out = contrast_sensitivity(DynamicImage::ImageRgba8(img), 1.0).unwrap().to_rgba8();
+        let out = contrast_sensitivity(DynamicImage::ImageRgba8(img), 1.0)
+            .unwrap()
+            .to_rgba8();
 
         let luma = |p: &image::Rgba<u8>| -> f64 {
             0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64
@@ -5582,7 +5762,10 @@ mod tests {
             *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 128, 255]);
         }
         let orig = img.clone().into_raw();
-        let out = detail_loss(DynamicImage::ImageRgba8(img), 0.0).unwrap().to_rgba8().into_raw();
+        let out = detail_loss(DynamicImage::ImageRgba8(img), 0.0)
+            .unwrap()
+            .to_rgba8()
+            .into_raw();
         assert_eq!(orig, out, "detail_loss strength=0 must be identity");
     }
 
@@ -5593,7 +5776,9 @@ mod tests {
             *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
         }
         let orig = img.clone();
-        let out = detail_loss(DynamicImage::ImageRgba8(img), 1.0).unwrap().to_rgba8();
+        let out = detail_loss(DynamicImage::ImageRgba8(img), 1.0)
+            .unwrap()
+            .to_rgba8();
 
         let luma = |p: &image::Rgba<u8>| -> f64 {
             0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64
@@ -5606,7 +5791,10 @@ mod tests {
 
         let sd_in = stddev(&orig);
         let sd_out = stddev(&out);
-        assert!(sd_out < sd_in, "detail_loss strength=1 must reduce stddev (in={sd_in:.2}, out={sd_out:.2})");
+        assert!(
+            sd_out < sd_in,
+            "detail_loss strength=1 must reduce stddev (in={sd_in:.2}, out={sd_out:.2})"
+        );
     }
 
     // -------------------------------------------------------
@@ -5620,11 +5808,23 @@ mod tests {
             *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 128, 255]);
         }
         let orig = img.clone();
-        let out = teichopsia(DynamicImage::ImageRgba8(img), 0.0).unwrap().to_rgba8();
+        let out = teichopsia(DynamicImage::ImageRgba8(img), 0.0)
+            .unwrap()
+            .to_rgba8();
         // PSNR >= 60 dB
-        let mse: f64 = orig.pixels().zip(out.pixels()).map(|(a, b)| {
-            (0..3).map(|i| { let d = a[i] as f64 - b[i] as f64; d * d }).sum::<f64>()
-        }).sum::<f64>() / (64.0 * 64.0 * 3.0);
+        let mse: f64 = orig
+            .pixels()
+            .zip(out.pixels())
+            .map(|(a, b)| {
+                (0..3)
+                    .map(|i| {
+                        let d = a[i] as f64 - b[i] as f64;
+                        d * d
+                    })
+                    .sum::<f64>()
+            })
+            .sum::<f64>()
+            / (64.0 * 64.0 * 3.0);
         if mse > 0.0 {
             let psnr = 10.0 * (255.0_f64 * 255.0 / mse).log10();
             assert!(psnr >= 60.0, "PSNR={psnr:.1} dB expected >= 60 dB");
@@ -5637,11 +5837,16 @@ mod tests {
         for px in img.pixels_mut() {
             *px = Rgba([200, 200, 200, 255]);
         }
-        let out = teichopsia(DynamicImage::ImageRgba8(img), 1.0).unwrap().to_rgba8();
+        let out = teichopsia(DynamicImage::ImageRgba8(img), 1.0)
+            .unwrap()
+            .to_rgba8();
         // 中心ピクセル（scotoma）が暗化されているか
         let center = out.get_pixel(32, 32);
         let brightness = center[0] as u32 + center[1] as u32 + center[2] as u32;
-        assert!(brightness < 600, "teichopsia strength=1 must darken center (got {brightness})");
+        assert!(
+            brightness < 600,
+            "teichopsia strength=1 must darken center (got {brightness})"
+        );
     }
 
     // -------------------------------------------------------
@@ -5655,7 +5860,10 @@ mod tests {
             *px = Rgba([(x * 3 + y * 7) as u8, (y * 4) as u8, 100, 255]);
         }
         let orig = img.clone().into_raw();
-        let out = flickering_stars(DynamicImage::ImageRgba8(img), 0.0, 42).unwrap().to_rgba8().into_raw();
+        let out = flickering_stars(DynamicImage::ImageRgba8(img), 0.0, 42)
+            .unwrap()
+            .to_rgba8()
+            .into_raw();
         assert_eq!(orig, out, "flickering_stars strength=0 must be identity");
     }
 
@@ -5666,10 +5874,19 @@ mod tests {
             // 暗めの画像で始める（最大輝度が additive で上がることを確認）
             *px = Rgba([50, 50, 50, 255]);
         }
-        let orig_max: u8 = img.pixels().map(|p| p[0].max(p[1]).max(p[2])).max().unwrap_or(0);
-        let out = flickering_stars(DynamicImage::ImageRgba8(img), 1.0, 42).unwrap().to_rgba8();
-        let out_max: u8 = out.pixels().map(|p| p[0].max(p[1]).max(p[2])).max().unwrap_or(0);
+        let orig_max: u8 = img
+            .pixels()
+            .map(|p| p[0].max(p[1]).max(p[2]))
+            .max()
+            .unwrap_or(0);
+        let out = flickering_stars(DynamicImage::ImageRgba8(img), 1.0, 42)
+            .unwrap()
+            .to_rgba8();
+        let out_max: u8 = out
+            .pixels()
+            .map(|p| p[0].max(p[1]).max(p[2]))
+            .max()
+            .unwrap_or(0);
         assert!(out_max > orig_max, "flickering_stars strength=1 must increase max brightness (orig={orig_max}, out={out_max})");
     }
 }
-

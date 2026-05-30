@@ -31,9 +31,9 @@ use sensus_core::shaders::{
 };
 use sensus_core::vision::{
     achromatopsia, astigmatism, bppv_rotation, deuteranopia, diplopia, dry_eye, eye_strain,
-    glaucoma, GlaucomaMode, hemianopia, hyperopia, macular_degeneration, metamorphopsia, myopia,
-    nyctalopia, nystagmus, photophobia, presbyopia, protanopia, starbursts, tetrachromacy,
-    tritanopia, tunnel_vision, vertigo, vestibular_neuritis,
+    glaucoma, hemianopia, hyperopia, macular_degeneration, metamorphopsia, myopia, nyctalopia,
+    nystagmus, photophobia, presbyopia, protanopia, starbursts, tetrachromacy, tritanopia,
+    tunnel_vision, vertigo, vestibular_neuritis, GlaucomaMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -96,13 +96,7 @@ fn sim_color_matrix(img: &RgbaImage, matrix: &[f32; 9], strength: f32) -> RgbaIm
 }
 
 /// 全色盲フィルタシェーダ（achromatopsia.frag）をソフトウェアシミュレートする。
-fn sim_achromatopsia(
-    img: &RgbaImage,
-    r_w: f32,
-    g_w: f32,
-    b_w: f32,
-    strength: f32,
-) -> RgbaImage {
+fn sim_achromatopsia(img: &RgbaImage, r_w: f32, g_w: f32, b_w: f32, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let mut out = img.clone();
     for y in 0..h {
@@ -324,7 +318,8 @@ fn sim_photophobia_glsl(img: &RgbaImage, radius_px: f32) -> RgbaImage {
                     let t = i as f32 / N as f32;
                     let r = t.sqrt() * radius_px;
                     let theta = i as f32 * PHI;
-                    let s = highlight_at(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
+                    let s =
+                        highlight_at(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
                     acc[0] += s[0];
                     acc[1] += s[1];
                     acc[2] += s[2];
@@ -400,9 +395,9 @@ fn color_chart_32() -> DynamicImage {
     for y in 0..32u32 {
         for x in 0..32u32 {
             let px = match (x < 16, y < 16) {
-                (true, true) => [220, 50, 50, 255],   // 赤
-                (false, true) => [50, 200, 50, 255],  // 緑
-                (true, false) => [50, 50, 220, 255],  // 青
+                (true, true) => [220, 50, 50, 255],     // 赤
+                (false, true) => [50, 200, 50, 255],    // 緑
+                (true, false) => [50, 50, 220, 255],    // 青
                 (false, false) => [200, 200, 200, 255], // 灰
             };
             img.put_pixel(x, y, image::Rgba(px));
@@ -484,7 +479,13 @@ fn shader_equiv_achromatopsia_strength_1_0() {
     let img = color_chart_32();
     let uni = achromatopsia_uniforms(1.0);
     let cpu_out = achromatopsia(img.clone(), 1.0).unwrap().to_rgba8();
-    let gpu_sim = sim_achromatopsia(&img.to_rgba8(), uni.r_weight, uni.g_weight, uni.b_weight, uni.strength);
+    let gpu_sim = sim_achromatopsia(
+        &img.to_rgba8(),
+        uni.r_weight,
+        uni.g_weight,
+        uni.b_weight,
+        uni.strength,
+    );
     let err = max_channel_error(&cpu_out, &gpu_sim);
     assert!(
         err <= 2,
@@ -498,7 +499,13 @@ fn shader_equiv_achromatopsia_strength_0_0() {
     let img = color_chart_32();
     let uni = achromatopsia_uniforms(0.0);
     let cpu_out = achromatopsia(img.clone(), 0.0).unwrap().to_rgba8();
-    let gpu_sim = sim_achromatopsia(&img.to_rgba8(), uni.r_weight, uni.g_weight, uni.b_weight, uni.strength);
+    let gpu_sim = sim_achromatopsia(
+        &img.to_rgba8(),
+        uni.r_weight,
+        uni.g_weight,
+        uni.b_weight,
+        uni.strength,
+    );
     let err = max_channel_error(&cpu_out, &gpu_sim);
     assert!(
         err <= 2,
@@ -519,10 +526,7 @@ fn shader_equiv_myopia_strength_1_0_psnr() {
     let cpu_out = myopia(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_disk_blur(&img.to_rgba8(), uni.radius_px);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(
-        db >= 30.0,
-        "myopia strength=1.0: PSNR {db:.1} dB < 30 dB"
-    );
+    assert!(db >= 30.0, "myopia strength=1.0: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
@@ -767,10 +771,7 @@ fn shader_equiv_astigmatism_axis_0_psnr() {
     // シェーダへ渡す axis_deg は uni.axis_deg（ぼかし方向）
     let gpu_sim = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(
-        db >= 30.0,
-        "astigmatism axis=0°: PSNR {db:.1} dB < 30 dB"
-    );
+    assert!(db >= 30.0, "astigmatism axis=0°: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
@@ -780,10 +781,7 @@ fn shader_equiv_astigmatism_axis_45_psnr() {
     let cpu_out = astigmatism(img.clone(), 1.0, 45.0).unwrap().to_rgba8();
     let gpu_sim = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(
-        db >= 30.0,
-        "astigmatism axis=45°: PSNR {db:.1} dB < 30 dB"
-    );
+    assert!(db >= 30.0, "astigmatism axis=45°: PSNR {db:.1} dB < 30 dB");
 }
 
 #[test]
@@ -793,10 +791,7 @@ fn shader_equiv_astigmatism_axis_90_psnr() {
     let cpu_out = astigmatism(img.clone(), 1.0, 90.0).unwrap().to_rgba8();
     let gpu_sim = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(
-        db >= 30.0,
-        "astigmatism axis=90°: PSNR {db:.1} dB < 30 dB"
-    );
+    assert!(db >= 30.0, "astigmatism axis=90°: PSNR {db:.1} dB < 30 dB");
 }
 
 /// 鋭エッジのカラーチャート（任意サイズ）。4 象限を別色で塗る。
@@ -842,7 +837,9 @@ fn shader_equiv_astigmatism_real_blur_sharp_edge_axes() {
             "テスト前提: radius {}px が実ブラー領域でない",
             uni.radius_px
         );
-        let cpu = astigmatism(img.clone(), 1.0, sharp_axis).unwrap().to_rgba8();
+        let cpu = astigmatism(img.clone(), 1.0, sharp_axis)
+            .unwrap()
+            .to_rgba8();
         // .frag に渡すのはぼかし方向 uni.axis_deg（= sharp_axis + 90）。
         let gpu = sim_astigmatism(&img.to_rgba8(), uni.radius_px, uni.axis_deg);
         let db = psnr(&cpu, &gpu);
@@ -910,7 +907,9 @@ fn shader_equiv_nystagmus_real_blur_sharp_edge_axes() {
     for dir in [0.0_f32, 45.0, 90.0] {
         let u = nystagmus_uniforms(1.0, amplitude, dir, min_dim);
         assert!(u.radius_px > 0.5 && u.radius_px.ceil() <= 15.0);
-        let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+        let cpu = nystagmus(img.clone(), 1.0, amplitude, dir)
+            .unwrap()
+            .to_rgba8();
         // nystagmus.frag は揺れ方向をそのままぼかし方向に使う（+90° しない）。
         let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
         let db = psnr(&cpu, &gpu);
@@ -1003,7 +1002,8 @@ fn simulate_eye_strain_glsl(
                     let ft = i as f32 / N as f32;
                     let r = ft.sqrt() * radius_px;
                     let theta = i as f32 * PHI;
-                    let s = processed_at(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
+                    let s =
+                        processed_at(u + theta.cos() * r * texel_w, v + theta.sin() * r * texel_h);
                     acc[0] += s[0];
                     acc[1] += s[1];
                     acc[2] += s[2];
@@ -1058,7 +1058,10 @@ fn shader_equiv_eye_strain_strength_0_5_psnr() {
     let cpu_out = eye_strain(img.clone(), 0.5).unwrap().to_rgba8();
     let glsl_out = simulate_eye_strain_glsl(&img, uni.strength, uni.radius_px, uni.texel_size);
     let db = psnr(&cpu_out, &glsl_out);
-    assert!(db >= 30.0, "eye_strain strength=0.5: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "eye_strain strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 /// 縦半分が白・縦半分が黒のグラデーション無しのコントラストエッジ画像。
@@ -1257,9 +1260,15 @@ fn shader_equiv_strength_zero_no_change() {
         ("deuteranopia", deuteranopia(img.clone(), 0.0)),
         ("tritanopia", tritanopia(img.clone(), 0.0)),
         ("achromatopsia", achromatopsia(img.clone(), 0.0)),
-        ("glaucoma", glaucoma(img.clone(), 0.0, GlaucomaMode::Vignette)),
+        (
+            "glaucoma",
+            glaucoma(img.clone(), 0.0, GlaucomaMode::Vignette),
+        ),
         ("tunnel_vision", tunnel_vision(img.clone(), 0.0)),
-        ("macular_degeneration", macular_degeneration(img.clone(), 0.0)),
+        (
+            "macular_degeneration",
+            macular_degeneration(img.clone(), 0.0),
+        ),
         ("hemianopia", hemianopia(img.clone(), 0.0, 0.5)),
     ] {
         let cpu_out = cpu_result.unwrap().to_rgba8();
@@ -1279,7 +1288,13 @@ fn shader_equiv_strength_zero_no_change() {
 /// glaucoma.frag / tunnel_vision.frag の計算を Rust で再現する。
 /// `inner_r`, `outer_r` を外から渡すことで両方に使用する。
 /// `aspect` = width / height（シェーダの uAspect と同じ）。
-fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32, aspect: f32) -> RgbaImage {
+fn sim_vignette_fov(
+    img: &RgbaImage,
+    strength: f32,
+    inner_r: f32,
+    outer_r: f32,
+    aspect: f32,
+) -> RgbaImage {
     let (w, h) = img.dimensions();
     // シェーダと同じ aspect 補正済みコーナー距離: sqrt((0.5*aspect)^2 + 0.5^2)
     let corner_dist = (0.5 * aspect * 0.5 * aspect + 0.5 * 0.5_f32).sqrt();
@@ -1302,12 +1317,16 @@ fn sim_vignette_fov(img: &RgbaImage, strength: f32, inner_r: f32, outer_r: f32, 
             let rl = srgb_to_linear(px[0] as f32 / 255.0);
             let gl = srgb_to_linear(px[1] as f32 / 255.0);
             let bl = srgb_to_linear(px[2] as f32 / 255.0);
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1350,8 +1369,7 @@ fn sim_glaucoma_arcuate(
 
                 let in_superior = dy_n < 0.0;
                 let in_inferior = dy_n > 0.0;
-                let in_arc =
-                    (apply_superior && in_superior) || (apply_inferior && in_inferior);
+                let in_arc = (apply_superior && in_superior) || (apply_inferior && in_inferior);
                 if !in_arc {
                     1.0
                 } else {
@@ -1365,12 +1383,16 @@ fn sim_glaucoma_arcuate(
             let rl = srgb_to_linear(px[0] as f32 / 255.0);
             let gl = srgb_to_linear(px[1] as f32 / 255.0);
             let bl = srgb_to_linear(px[2] as f32 / 255.0);
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1404,12 +1426,16 @@ fn sim_macular_degeneration(img: &RgbaImage, strength: f32) -> RgbaImage {
             let out_g = (gl + (darkened - gl) * t).clamp(0.0, 1.0);
             let out_b = (bl + (darkened - bl) * t).clamp(0.0, 1.0);
 
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(out_r) * 255.0).round() as u8,
-                (linear_to_srgb(out_g) * 255.0).round() as u8,
-                (linear_to_srgb(out_b) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(out_r) * 255.0).round() as u8,
+                    (linear_to_srgb(out_g) * 255.0).round() as u8,
+                    (linear_to_srgb(out_b) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1447,12 +1473,16 @@ fn sim_macular_degeneration_aspect(img: &RgbaImage, strength: f32, aspect: f32) 
             let out_g = (gl + (darkened - gl) * t).clamp(0.0, 1.0);
             let out_b = (bl + (darkened - bl) * t).clamp(0.0, 1.0);
 
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(out_r) * 255.0).round() as u8,
-                (linear_to_srgb(out_g) * 255.0).round() as u8,
-                (linear_to_srgb(out_b) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(out_r) * 255.0).round() as u8,
+                    (linear_to_srgb(out_g) * 255.0).round() as u8,
+                    (linear_to_srgb(out_b) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1489,12 +1519,16 @@ fn sim_hemianopia(img: &RgbaImage, strength: f32, side_glsl: f32) -> RgbaImage {
             let rl = srgb_to_linear(px[0] as f32 / 255.0);
             let gl = srgb_to_linear(px[1] as f32 / 255.0);
             let bl = srgb_to_linear(px[2] as f32 / 255.0);
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb((rl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((gl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb((bl * mul).clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1510,7 +1544,9 @@ fn shader_equiv_glaucoma_strength_1_0_psnr() {
     let u = glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=1.0: PSNR {db:.1} dB < 30 dB");
@@ -1522,7 +1558,9 @@ fn shader_equiv_glaucoma_strength_0_5_psnr() {
     let u = glaucoma_uniforms(0.5, 32, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 0.5, GlaucomaMode::Vignette).unwrap().to_rgba8();
+    let cpu_out = glaucoma(img.clone(), 0.5, GlaucomaMode::Vignette)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=0.5: PSNR {db:.1} dB < 30 dB");
@@ -1535,7 +1573,10 @@ fn shader_equiv_macular_degeneration_strength_1_0_psnr() {
     let cpu_out = macular_degeneration(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "macular_degeneration strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "macular_degeneration strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1545,7 +1586,10 @@ fn shader_equiv_macular_degeneration_strength_0_5_psnr() {
     let cpu_out = macular_degeneration(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "macular_degeneration strength=0.5: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "macular_degeneration strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1555,18 +1599,24 @@ fn shader_equiv_hemianopia_right_strength_1_0_psnr() {
     let cpu_out = hemianopia(img.clone(), 1.0, 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_hemianopia(&img.to_rgba8(), u.strength, u.side);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "hemianopia right strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "hemianopia right strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
 fn shader_equiv_hemianopia_left_strength_1_0_psnr() {
     let img = gradient_32();
     let u = hemianopia_uniforms(1.0, -1.0); // 左側欠損
-    // vision::hemianopia は side=0.0 で左欠損
+                                            // vision::hemianopia は side=0.0 で左欠損
     let cpu_out = hemianopia(img.clone(), 1.0, 0.0).unwrap().to_rgba8();
     let gpu_sim = sim_hemianopia(&img.to_rgba8(), u.strength, u.side);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "hemianopia left strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "hemianopia left strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1578,7 +1628,10 @@ fn shader_equiv_tunnel_vision_strength_1_0_psnr() {
     let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "tunnel_vision strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "tunnel_vision strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1590,7 +1643,10 @@ fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
     let cpu_out = tunnel_vision(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "tunnel_vision strength=0.5: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "tunnel_vision strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1630,12 +1686,16 @@ fn sim_tetrachromacy(img: &RgbaImage, strength: f32) -> RgbaImage {
                     b,
                 )
             };
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(nr) * 255.0).round() as u8,
-                (linear_to_srgb(ng) * 255.0).round() as u8,
-                (linear_to_srgb(nb) * 255.0).round() as u8,
-                orig[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(nr) * 255.0).round() as u8,
+                    (linear_to_srgb(ng) * 255.0).round() as u8,
+                    (linear_to_srgb(nb) * 255.0).round() as u8,
+                    orig[3],
+                ]),
+            );
         }
     }
     out
@@ -1648,7 +1708,10 @@ fn shader_equiv_tetrachromacy_strength_1_0_psnr() {
     let cpu_out = tetrachromacy(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_tetrachromacy(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "tetrachromacy strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "tetrachromacy strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1658,7 +1721,10 @@ fn shader_equiv_tetrachromacy_strength_0_psnr() {
     let cpu_out = tetrachromacy(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "tetrachromacy strength=0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "tetrachromacy strength=0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1707,12 +1773,16 @@ fn sim_vestibular_neuritis(img: &RgbaImage, radius_px: f32, shift_texel: f32) ->
             }
             let blurred = [acc[0] / N as f32, acc[1] / N as f32, acc[2] / N as f32];
             let src = img.get_pixel(x, y);
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
-                src[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(blurred[0].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[1].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(blurred[2].clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    src[3],
+                ]),
+            );
         }
     }
     out
@@ -1725,7 +1795,10 @@ fn shader_equiv_vestibular_neuritis_strength_1_0_psnr() {
     let cpu_out = vestibular_neuritis(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_vestibular_neuritis(&img.to_rgba8(), u.radius_px, u.shift_texel);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "vestibular_neuritis strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "vestibular_neuritis strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1735,7 +1808,10 @@ fn shader_equiv_vestibular_neuritis_strength_0_psnr() {
     let cpu_out = vestibular_neuritis(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 30.0, "vestibular_neuritis strength=0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "vestibular_neuritis strength=0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1802,12 +1878,16 @@ fn sim_contrast_sensitivity(img: &RgbaImage, strength: f32) -> RgbaImage {
             let nr = (0.5 + (r - 0.5) * scale).clamp(0.0, 1.0);
             let ng = (0.5 + (g - 0.5) * scale).clamp(0.0, 1.0);
             let nb = (0.5 + (b - 0.5) * scale).clamp(0.0, 1.0);
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(nr) * 255.0).round() as u8,
-                (linear_to_srgb(ng) * 255.0).round() as u8,
-                (linear_to_srgb(nb) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(nr) * 255.0).round() as u8,
+                    (linear_to_srgb(ng) * 255.0).round() as u8,
+                    (linear_to_srgb(nb) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1820,7 +1900,10 @@ fn shader_equiv_contrast_sensitivity_strength_0_identity() {
     let cpu_out = contrast_sensitivity(img.clone(), 0.0).unwrap().to_rgba8();
     let gpu_sim = sim_contrast_sensitivity(&img.to_rgba8(), 0.0);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "contrast_sensitivity strength=0 identity: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "contrast_sensitivity strength=0 identity: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -1830,7 +1913,10 @@ fn shader_equiv_contrast_sensitivity_strength_0_5_psnr() {
     let cpu_out = contrast_sensitivity(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_contrast_sensitivity(&img.to_rgba8(), 0.5);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "contrast_sensitivity strength=0.5: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "contrast_sensitivity strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 /// detail_loss シェーダ（detail_loss.frag, 3×3サンプル近似）を Rust でシミュレート。
@@ -1854,12 +1940,16 @@ fn sim_detail_loss_shader(img: &RgbaImage, strength: f32) -> RgbaImage {
             let lin_g = srgb_to_linear(s[1] as f32 / 255.0);
             let lin_b = srgb_to_linear(s[2] as f32 / 255.0);
             let orig_alpha = img.get_pixel(x, y)[3];
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(lin_r.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(lin_g.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(lin_b.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                orig_alpha,
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(lin_r.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(lin_g.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(lin_b.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    orig_alpha,
+                ]),
+            );
         }
     }
     out
@@ -1872,7 +1962,10 @@ fn shader_equiv_detail_loss_strength_0_identity() {
     let cpu_out = detail_loss(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 60.0, "detail_loss strength=0 identity: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "detail_loss strength=0 identity: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 #[test]
@@ -1883,7 +1976,10 @@ fn shader_equiv_detail_loss_cpu_gpu_psnr() {
     let cpu_out = detail_loss(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_detail_loss_shader(&img.to_rgba8(), 0.5);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "detail_loss CPU/GPU strength=0.5: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "detail_loss CPU/GPU strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 /// [M-2] detail_loss strength=1.0: CPU と GPU シミュレータが一致（PSNR ≥ 30 dB）
@@ -1894,7 +1990,10 @@ fn shader_equiv_detail_loss_strength_1_psnr() {
     let cpu_out = detail_loss(img.clone(), 1.0).unwrap().to_rgba8();
     let gpu_sim = sim_detail_loss_shader(&img.to_rgba8(), 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "detail_loss CPU/GPU strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "detail_loss CPU/GPU strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 /// teichopsia コンパイルテスト + strength=0 で元画像と近い（PSNR ≥ 25 dB）
@@ -1905,7 +2004,10 @@ fn shader_equiv_teichopsia_strength_0_near_identity() {
     let cpu_out = teichopsia(img.clone(), 0.0).unwrap().to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&cpu_out, &orig);
-    assert!(db >= 25.0, "teichopsia strength=0 near identity: PSNR {db:.1} dB < 25 dB");
+    assert!(
+        db >= 25.0,
+        "teichopsia strength=0 near identity: PSNR {db:.1} dB < 25 dB"
+    );
 }
 
 #[test]
@@ -1945,17 +2047,25 @@ fn sim_teichopsia(img: &RgbaImage, strength: f32) -> RgbaImage {
                 let ring_t = (dist - 0.2) / 0.3;
                 let fade = (ring_t * (1.0 - ring_t) * 4.0).clamp(0.0, 1.0);
                 let brightness = saw * strength * fade * 0.6;
-                ((rl + brightness).clamp(0.0, 1.0), (gl + brightness).clamp(0.0, 1.0), (bl + brightness).clamp(0.0, 1.0))
+                (
+                    (rl + brightness).clamp(0.0, 1.0),
+                    (gl + brightness).clamp(0.0, 1.0),
+                    (bl + brightness).clamp(0.0, 1.0),
+                )
             } else {
                 (rl, gl, bl)
             };
 
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(nr.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(ng.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(nb.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                px[3],
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(nr.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(ng.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(nb.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    px[3],
+                ]),
+            );
         }
     }
     out
@@ -1968,7 +2078,10 @@ fn shader_equiv_teichopsia_strength_05_psnr() {
     let cpu_out = teichopsia(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_teichopsia(&img.to_rgba8(), 0.5);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 25.0, "teichopsia CPU/GPU strength=0.5: PSNR {db:.1} dB < 25 dB");
+    assert!(
+        db >= 25.0,
+        "teichopsia CPU/GPU strength=0.5: PSNR {db:.1} dB < 25 dB"
+    );
 }
 
 /// flickering_stars: コンパイルテスト（ランダム描画なので等価テストは行わない）
@@ -2001,7 +2114,11 @@ fn gradient_64() -> DynamicImage {
     for y in 0..64u32 {
         for x in 0..64u32 {
             let v = (x * 4) as u8;
-            img.put_pixel(x, y, image::Rgba([v, (v / 2).wrapping_add(y as u8), 255 - v, 255]));
+            img.put_pixel(
+                x,
+                y,
+                image::Rgba([v, (v / 2).wrapping_add(y as u8), 255 - v, 255]),
+            );
         }
     }
     DynamicImage::ImageRgba8(img)
@@ -2014,11 +2131,16 @@ fn shader_equiv_glaucoma_non_square_64x32_psnr() {
     let u = glaucoma_uniforms(1.0, 64, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette).unwrap().to_rgba8();
+    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette)
+        .unwrap()
+        .to_rgba8();
     let aspect = 64.0_f32 / 32.0_f32; // 2.0
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, aspect);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "glaucoma non-square 64×32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "glaucoma non-square 64×32: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2044,7 +2166,10 @@ fn shader_equiv_teichopsia_non_square_psnr() {
     let cpu_out = teichopsia(img.clone(), 0.5).unwrap().to_rgba8();
     let gpu_sim = sim_teichopsia(&img.to_rgba8(), 0.5);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 25.0, "teichopsia non-square 64×32: PSNR {db:.1} dB < 25 dB");
+    assert!(
+        db >= 25.0,
+        "teichopsia non-square 64×32: PSNR {db:.1} dB < 25 dB"
+    );
 }
 
 #[test]
@@ -2056,7 +2181,10 @@ fn shader_equiv_macular_degeneration_non_square_psnr() {
     // aspect 補正付きシミュレータで GPU 側の動作を再現
     let gpu_sim = sim_macular_degeneration_aspect(&img.to_rgba8(), u.strength, u.aspect);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "macular_degeneration non-square 64×32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "macular_degeneration non-square 64×32: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -2070,7 +2198,10 @@ fn shader_equiv_tunnel_vision_non_square_psnr() {
     let aspect = 64.0_f32 / 32.0_f32; // 2.0
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, aspect);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 30.0, "tunnel_vision non-square 64×32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "tunnel_vision non-square 64×32: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2087,7 +2218,10 @@ fn shader_equiv_cataract_strength_zero_psnr() {
     let cpu_out = cataract(img.clone(), 0.0, 42).unwrap().to_rgba8();
     // strength=0 なので入力と完全一致のはず
     let db = psnr(&cpu_out, &img.to_rgba8());
-    assert!(db >= 40.0, "cataract strength=0: PSNR {db:.1} dB < 40 dB (should be identity)");
+    assert!(
+        db >= 40.0,
+        "cataract strength=0: PSNR {db:.1} dB < 40 dB (should be identity)"
+    );
     // シェーダ文字列が空でないこともチェック
     assert!(!cataract_glsl().is_empty());
 }
@@ -2115,12 +2249,16 @@ fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32) -> RgbaImage {
             let lin_g = srgb_to_linear(s[1] as f32 / 255.0);
             let lin_b = srgb_to_linear(s[2] as f32 / 255.0);
             let orig_alpha = img.get_pixel(x, y)[3];
-            out.put_pixel(x, y, image::Rgba([
-                (linear_to_srgb(lin_r.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(lin_g.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                (linear_to_srgb(lin_b.clamp(0.0, 1.0)) * 255.0).round() as u8,
-                orig_alpha,
-            ]));
+            out.put_pixel(
+                x,
+                y,
+                image::Rgba([
+                    (linear_to_srgb(lin_r.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(lin_g.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    (linear_to_srgb(lin_b.clamp(0.0, 1.0)) * 255.0).round() as u8,
+                    orig_alpha,
+                ]),
+            );
         }
     }
     out
@@ -2134,20 +2272,30 @@ fn shader_equiv_apply_detail_loss_cpu_gpu_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = color_chart_32();
     // tile_size に半端な境界を含むよう cell_size=7 を使う（32 / 7 でタイルがはみ出す）
-    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7).unwrap().to_rgba8();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 60.0, "apply(DetailLoss) cell_size=7 CPU/GPU: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss) cell_size=7 CPU/GPU: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 #[test]
 fn shader_equiv_apply_detail_loss_cell_size_20_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = color_chart_32();
-    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 20).unwrap().to_rgba8();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 20)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 20);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 60.0, "apply(DetailLoss) cell_size=20 CPU/GPU: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss) cell_size=20 CPU/GPU: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 #[test]
@@ -2155,19 +2303,30 @@ fn apply_detail_loss_strength_0_identity() {
     use sensus_core::{apply, Filter};
     let img = gradient_32();
     // cell_size=1 のとき早期リターンで identity
-    let out = apply(Filter::DetailLoss { cell_size: 1 }, img.clone(), 0.0).unwrap().to_rgba8();
+    let out = apply(Filter::DetailLoss { cell_size: 1 }, img.clone(), 0.0)
+        .unwrap()
+        .to_rgba8();
     let orig = img.to_rgba8();
     let db = psnr(&out, &orig);
-    assert!(db >= 60.0, "apply(DetailLoss, cell_size=1) should be identity: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss, cell_size=1) should be identity: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 #[test]
 fn apply_detail_loss_strength_1_runs_without_crash() {
     use sensus_core::{apply, Filter};
     let img = color_chart_32();
-    let out = apply(Filter::DetailLoss { cell_size: 20 }, img.clone(), 1.0).unwrap().to_rgba8();
+    let out = apply(Filter::DetailLoss { cell_size: 20 }, img.clone(), 1.0)
+        .unwrap()
+        .to_rgba8();
     // 出力が入力と異なること（詳細消失フィルタが適用されている）
-    assert_ne!(out.as_raw(), img.to_rgba8().as_raw(), "apply(DetailLoss) strength=1 should change image");
+    assert_ne!(
+        out.as_raw(),
+        img.to_rgba8().as_raw(),
+        "apply(DetailLoss) strength=1 should change image"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2206,10 +2365,15 @@ fn varying_alpha_32() -> DynamicImage {
 fn shader_equiv_apply_detail_loss_non_square_64x32_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = gradient_64x32();
-    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7).unwrap().to_rgba8();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 60.0, "apply(DetailLoss) non-square 64×32 cell_size=7: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss) non-square 64×32 cell_size=7: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 /// kako-jun/sensus#96: 縦長（32×64）でも apply 経路が中心点サンプリングシェーダと等価。
@@ -2218,10 +2382,15 @@ fn shader_equiv_apply_detail_loss_non_square_64x32_psnr() {
 fn shader_equiv_apply_detail_loss_non_square_32x64_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = gradient_32x64();
-    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7).unwrap().to_rgba8();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 60.0, "apply(DetailLoss) non-square 32×64 cell_size=7: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss) non-square 32×64 cell_size=7: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 /// kako-jun/sensus#96: cell_size=0 は tile_size = cell_size.max(1) = 1 で identity 早期リターン。
@@ -2230,9 +2399,15 @@ fn shader_equiv_apply_detail_loss_non_square_32x64_psnr() {
 fn apply_detail_loss_cell_size_0_identity() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = color_chart_32();
-    let out = detail_loss_with_cell_size(img.clone(), 1.0, 0).unwrap().to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), 1.0, 0)
+        .unwrap()
+        .to_rgba8();
     let orig = img.to_rgba8();
-    assert_eq!(out.as_raw(), orig.as_raw(), "detail_loss cell_size=0 should be identity (tile_size=max(1))");
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "detail_loss cell_size=0 should be identity (tile_size=max(1))"
+    );
 }
 
 /// kako-jun/sensus#96: cell_size が画像サイズを超えると全体が1タイルになり、
@@ -2242,14 +2417,21 @@ fn shader_equiv_apply_detail_loss_cell_size_exceeds_image_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = color_chart_32();
     // cell_size=100 > 32: タイルは1つ、中心 = (50,50) を clamp(31) → 右下灰
-    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 100).unwrap().to_rgba8();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 100)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 100);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 60.0, "apply(DetailLoss) cell_size>image: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss) cell_size>image: PSNR {db:.1} dB < 60 dB"
+    );
     // 全画素が同一色（1タイルに塗り潰し）であること
     let first = *cpu_out.get_pixel(0, 0);
     assert!(
-        cpu_out.pixels().all(|p| p[0] == first[0] && p[1] == first[1] && p[2] == first[2]),
+        cpu_out
+            .pixels()
+            .all(|p| p[0] == first[0] && p[1] == first[1] && p[2] == first[2]),
         "cell_size>image: 全 RGB が単一色になるはず"
     );
 }
@@ -2261,10 +2443,15 @@ fn shader_equiv_apply_detail_loss_coprime_cell_size_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = gradient_32();
     // gcd(32,5)=1: 端で 32 % 5 = 2px の半端タイルが残る
-    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 5).unwrap().to_rgba8();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 5)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 5);
     let db = psnr(&cpu_out, &gpu_sim);
-    assert!(db >= 60.0, "apply(DetailLoss) coprime cell_size=5: PSNR {db:.1} dB < 60 dB");
+    assert!(
+        db >= 60.0,
+        "apply(DetailLoss) coprime cell_size=5: PSNR {db:.1} dB < 60 dB"
+    );
 }
 
 /// kako-jun/sensus#96: 中心点方式は alpha チャンネルを変質させない。
@@ -2274,9 +2461,15 @@ fn apply_detail_loss_preserves_alpha_per_pixel() {
     use sensus_core::vision::detail_loss_with_cell_size;
     let img = varying_alpha_32();
     let orig = img.to_rgba8();
-    let out = detail_loss_with_cell_size(img.clone(), 1.0, 8).unwrap().to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), 1.0, 8)
+        .unwrap()
+        .to_rgba8();
     // RGB は実際に変化していること（テストが無意味な identity でないことを保証）
-    assert_ne!(out.as_raw(), orig.as_raw(), "detail_loss cell_size=8 should change RGB");
+    assert_ne!(
+        out.as_raw(),
+        orig.as_raw(),
+        "detail_loss cell_size=8 should change RGB"
+    );
     // alpha は1画素ずつ完全一致
     for (po, pi) in out.pixels().zip(orig.pixels()) {
         assert_eq!(po[3], pi[3], "alpha は画素ごとに保存されるべき");
@@ -2293,7 +2486,11 @@ fn shader_cataract_strength_1_runs_without_crash() {
     let img = gradient_32();
     let out = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
     // 出力が入力と異なること（白内障フィルタが適用されている）
-    assert_ne!(out.as_raw(), img.to_rgba8().as_raw(), "cataract strength=1 should change image");
+    assert_ne!(
+        out.as_raw(),
+        img.to_rgba8().as_raw(),
+        "cataract strength=1 should change image"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2499,10 +2696,15 @@ fn shader_equiv_metamorphopsia_strength_1_0_psnr() {
     // 唯一の乖離源は sample_bilinear の f32 丸めと、最終セルの頂点 clamp 差（端のみ）。
     let img = gradient_32();
     let uni = metamorphopsia_uniforms(1.0, 4.0, 42, 32, 32);
-    let cpu_out = metamorphopsia(img.clone(), 1.0, 4.0, 42).unwrap().to_rgba8();
+    let cpu_out = metamorphopsia(img.clone(), 1.0, 4.0, 42)
+        .unwrap()
+        .to_rgba8();
     let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
     let db = psnr(&cpu_out, &glsl);
-    assert!(db >= 30.0, "metamorphopsia strength=1.0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "metamorphopsia strength=1.0: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -2512,17 +2714,25 @@ fn shader_equiv_metamorphopsia_strength_0_5_psnr() {
     let cpu_out = metamorphopsia(img.clone(), 0.5, 8.0, 7).unwrap().to_rgba8();
     let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
     let db = psnr(&cpu_out, &glsl);
-    assert!(db >= 30.0, "metamorphopsia strength=0.5: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "metamorphopsia strength=0.5: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
 fn shader_equiv_metamorphopsia_non_square_64x32_psnr() {
     let img = gradient_64x32();
     let uni = metamorphopsia_uniforms(1.0, 6.0, 123, 64, 32);
-    let cpu_out = metamorphopsia(img.clone(), 1.0, 6.0, 123).unwrap().to_rgba8();
+    let cpu_out = metamorphopsia(img.clone(), 1.0, 6.0, 123)
+        .unwrap()
+        .to_rgba8();
     let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
     let db = psnr(&cpu_out, &glsl);
-    assert!(db >= 30.0, "metamorphopsia non-square 64x32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "metamorphopsia non-square 64x32: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -2531,10 +2741,18 @@ fn shader_equiv_metamorphopsia_strength_0_0_is_identity() {
     let img = gradient_32();
     let input = img.to_rgba8();
     let uni = metamorphopsia_uniforms(0.0, 4.0, 42, 32, 32);
-    let cpu_out = metamorphopsia(img.clone(), 0.0, 4.0, 42).unwrap().to_rgba8();
-    assert_eq!(cpu_out, input, "metamorphopsia strength=0.0: CPU が identity でない");
+    let cpu_out = metamorphopsia(img.clone(), 0.0, 4.0, 42)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        cpu_out, input,
+        "metamorphopsia strength=0.0: CPU が identity でない"
+    );
     let glsl = sim_metamorphopsia_glsl(&input, uni.strength, uni.freq, uni.seed);
-    assert_eq!(glsl, input, "metamorphopsia strength=0.0: GLSL が identity でない");
+    assert_eq!(
+        glsl, input,
+        "metamorphopsia strength=0.0: GLSL が identity でない"
+    );
 }
 
 #[test]
@@ -2563,7 +2781,10 @@ fn shader_equiv_dry_eye_non_square_64x32_psnr() {
     let cpu_out = dry_eye(img.clone(), 1.0).unwrap().to_rgba8();
     let glsl = sim_dry_eye_glsl(&img.to_rgba8(), 1.0);
     let db = psnr(&cpu_out, &glsl);
-    assert!(db >= 30.0, "dry_eye non-square 64x32: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "dry_eye non-square 64x32: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -2571,7 +2792,10 @@ fn shader_equiv_dry_eye_strength_0_0_is_identity() {
     let img = gradient_64();
     let input = img.to_rgba8();
     let cpu_out = dry_eye(img.clone(), 0.0).unwrap().to_rgba8();
-    assert_eq!(cpu_out, input, "dry_eye strength=0.0: CPU が identity でない");
+    assert_eq!(
+        cpu_out, input,
+        "dry_eye strength=0.0: CPU が identity でない"
+    );
     let glsl = sim_dry_eye_glsl(&input, 0.0);
     assert_eq!(glsl, input, "dry_eye strength=0.0: GLSL が identity でない");
 }
@@ -2648,8 +2872,7 @@ fn shader_equiv_metamorphopsia_edge_clamp_diff_is_bounded() {
                 let pc = cpu.get_pixel(x, y);
                 let pg = glsl.get_pixel(x, y);
                 for c in 0..3 {
-                    edge_max =
-                        edge_max.max((pc[c] as i32 - pg[c] as i32).unsigned_abs() as u8);
+                    edge_max = edge_max.max((pc[c] as i32 - pg[c] as i32).unsigned_abs() as u8);
                 }
             }
         }
@@ -2667,10 +2890,15 @@ fn shader_equiv_metamorphopsia_large_128_psnr() {
     // 128×128（多数セル）でも近似が破綻しないこと。
     let img = gradient_wh(128, 128);
     let uni = metamorphopsia_uniforms(1.0, 12.0, 99, 128, 128);
-    let cpu = metamorphopsia(img.clone(), 1.0, 12.0, 99).unwrap().to_rgba8();
+    let cpu = metamorphopsia(img.clone(), 1.0, 12.0, 99)
+        .unwrap()
+        .to_rgba8();
     let glsl = sim_metamorphopsia_glsl(&img.to_rgba8(), uni.strength, uni.freq, uni.seed);
     let db = psnr(&cpu, &glsl);
-    assert!(db >= 30.0, "metamorphopsia 128x128: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "metamorphopsia 128x128: PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -2692,7 +2920,9 @@ fn metamorphopsia_strength_1_changes_image() {
     // 単色だと変位しても画素が変わらないためグラデーションを使う。
     let img = gradient_32();
     let input = img.to_rgba8();
-    let out = metamorphopsia(img.clone(), 1.0, 4.0, 42).unwrap().to_rgba8();
+    let out = metamorphopsia(img.clone(), 1.0, 4.0, 42)
+        .unwrap()
+        .to_rgba8();
     let d = max_abs_rgb_diff(&out, &input);
     assert!(
         d >= 8,
@@ -2965,8 +3195,16 @@ fn shader_equiv_diplopia_strength_1_0_psnr() {
     let img = color_chart_32();
     let input = img.to_rgba8();
     let u = diplopia_test_uniforms(&input, 1.0, 0.1, 0.05, 0.6);
-    let cpu = diplopia(img.clone(), 1.0, 0.1, 0.05, 0.6).unwrap().to_rgba8();
-    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let cpu = diplopia(img.clone(), 1.0, 0.1, 0.05, 0.6)
+        .unwrap()
+        .to_rgba8();
+    let gpu = sim_diplopia_glsl(
+        &input,
+        u.strength,
+        u.offset_x_texel,
+        u.offset_y_texel,
+        u.ghost_strength,
+    );
     let db = psnr(&cpu, &gpu);
     assert!(db >= 40.0, "diplopia strength=1.0: PSNR {db:.1} dB < 40 dB");
     // identity 偽陽性排除
@@ -2981,8 +3219,16 @@ fn shader_equiv_diplopia_strength_0_5_psnr() {
     let img = gradient_32();
     let input = img.to_rgba8();
     let u = diplopia_test_uniforms(&input, 0.5, 0.08, 0.0, 0.7);
-    let cpu = diplopia(img.clone(), 0.5, 0.08, 0.0, 0.7).unwrap().to_rgba8();
-    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let cpu = diplopia(img.clone(), 0.5, 0.08, 0.0, 0.7)
+        .unwrap()
+        .to_rgba8();
+    let gpu = sim_diplopia_glsl(
+        &input,
+        u.strength,
+        u.offset_x_texel,
+        u.offset_y_texel,
+        u.ghost_strength,
+    );
     let db = psnr(&cpu, &gpu);
     assert!(db >= 40.0, "diplopia strength=0.5: PSNR {db:.1} dB < 40 dB");
 }
@@ -2990,7 +3236,9 @@ fn shader_equiv_diplopia_strength_0_5_psnr() {
 #[test]
 fn shader_equiv_diplopia_strength_0_0_is_identity() {
     let img = color_chart_32();
-    let cpu = diplopia(img.clone(), 0.0, 0.1, 0.05, 0.6).unwrap().to_rgba8();
+    let cpu = diplopia(img.clone(), 0.0, 0.1, 0.05, 0.6)
+        .unwrap()
+        .to_rgba8();
     assert_eq!(
         cpu.as_raw(),
         img.to_rgba8().as_raw(),
@@ -3003,8 +3251,16 @@ fn shader_equiv_diplopia_non_square_64x32_psnr() {
     let img = gradient_64x32();
     let input = img.to_rgba8();
     let u = diplopia_test_uniforms(&input, 0.8, 0.1, 0.1, 0.5);
-    let cpu = diplopia(img.clone(), 0.8, 0.1, 0.1, 0.5).unwrap().to_rgba8();
-    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let cpu = diplopia(img.clone(), 0.8, 0.1, 0.1, 0.5)
+        .unwrap()
+        .to_rgba8();
+    let gpu = sim_diplopia_glsl(
+        &input,
+        u.strength,
+        u.offset_x_texel,
+        u.offset_y_texel,
+        u.ghost_strength,
+    );
     let db = psnr(&cpu, &gpu);
     assert!(db >= 38.0, "diplopia 64x32: PSNR {db:.1} dB < 38 dB");
 }
@@ -3014,8 +3270,16 @@ fn shader_equiv_diplopia_non_square_32x64_psnr() {
     let img = gradient_32x64();
     let input = img.to_rgba8();
     let u = diplopia_test_uniforms(&input, 0.8, 0.1, 0.1, 0.5);
-    let cpu = diplopia(img.clone(), 0.8, 0.1, 0.1, 0.5).unwrap().to_rgba8();
-    let gpu = sim_diplopia_glsl(&input, u.strength, u.offset_x_texel, u.offset_y_texel, u.ghost_strength);
+    let cpu = diplopia(img.clone(), 0.8, 0.1, 0.1, 0.5)
+        .unwrap()
+        .to_rgba8();
+    let gpu = sim_diplopia_glsl(
+        &input,
+        u.strength,
+        u.offset_x_texel,
+        u.offset_y_texel,
+        u.ghost_strength,
+    );
     let db = psnr(&cpu, &gpu);
     assert!(db >= 38.0, "diplopia 32x64: PSNR {db:.1} dB < 38 dB");
 }
@@ -3041,11 +3305,16 @@ fn shader_equiv_nystagmus_strength_1_0_psnr() {
     let amplitude = 0.1; // radius = 0.1 * 1.0 * 32 = 3.2px（実ブラー）
     let dir = 0.0;
     let u = nystagmus_uniforms(1.0, amplitude, dir, 32);
-    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir)
+        .unwrap()
+        .to_rgba8();
     // nystagmus.frag は astigmatism.frag と同一: 軸をそのままぼかし方向に使う
     let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 30.0, "nystagmus strength=1.0 dir=0: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "nystagmus strength=1.0 dir=0: PSNR {db:.1} dB < 30 dB"
+    );
     // identity 偽陽性排除: radius 3.2px の blur は gradient を実際に変える
     assert!(
         max_abs_rgb_diff(&cpu, &img.to_rgba8()) >= 2,
@@ -3060,7 +3329,9 @@ fn shader_equiv_nystagmus_direction_90_psnr() {
     let amplitude = 0.1;
     let dir = 90.0;
     let u = nystagmus_uniforms(1.0, amplitude, dir, 32);
-    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
     let db = psnr(&cpu, &gpu);
     assert!(db >= 30.0, "nystagmus dir=90: PSNR {db:.1} dB < 30 dB");
@@ -3085,7 +3356,9 @@ fn shader_equiv_nystagmus_radius_below_min_is_passthrough() {
     let amplitude = 0.001; // 0.001 * 1.0 * 32 = 0.032px < 0.5
     let u = nystagmus_uniforms(1.0, amplitude, 0.0, 32);
     assert!(u.radius_px < 0.5);
-    let cpu = nystagmus(img.clone(), 1.0, amplitude, 0.0).unwrap().to_rgba8();
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, 0.0)
+        .unwrap()
+        .to_rgba8();
     assert_eq!(
         cpu.as_raw(),
         img.to_rgba8().as_raw(),
@@ -3102,7 +3375,9 @@ fn shader_equiv_nystagmus_non_square_64x32_psnr() {
     let amplitude = 0.08;
     let dir = 0.0;
     let u = nystagmus_uniforms(1.0, amplitude, dir, 32); // min_dim = 32
-    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir).unwrap().to_rgba8();
+    let cpu = nystagmus(img.clone(), 1.0, amplitude, dir)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_astigmatism(&img.to_rgba8(), u.radius_px, u.direction_deg);
     let db = psnr(&cpu, &gpu);
     assert!(db >= 28.0, "nystagmus 64x32: PSNR {db:.1} dB < 28 dB");
@@ -3356,7 +3631,10 @@ fn shader_equiv_vertigo_large_with_blur_psnr() {
     let angle = vertigo_angle(1.0, time_t);
     let aspect = 128.0 / 96.0;
     let radius = vertigo_radius_px(1.0, 128, 96);
-    assert!(radius >= 0.5, "128x96 は blur が効くはず（radius={radius}）");
+    assert!(
+        radius >= 0.5,
+        "128x96 は blur が効くはず（radius={radius}）"
+    );
     let cpu = vertigo(img.clone(), 1.0, time_t).unwrap().to_rgba8();
     let gpu = sim_vertigo_glsl(&img.to_rgba8(), angle, aspect, radius);
     let db = psnr(&cpu, &gpu);
@@ -3389,7 +3667,10 @@ fn shader_equiv_bppv_rotation_square_psnr() {
     let cpu = bppv_rotation(img.clone(), 1.0, time_t).unwrap().to_rgba8();
     let gpu = sim_uv_rotation_glsl(&img.to_rgba8(), angle, 1.0);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 30.0, "bppv_rotation 32px square: PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "bppv_rotation 32px square: PSNR {db:.1} dB < 30 dB"
+    );
     assert!(
         psnr(&cpu, &img.to_rgba8()) < 45.0,
         "bppv_rotation が画像をほぼ変えていない（回転していない）"
@@ -3438,7 +3719,6 @@ fn shader_equiv_bppv_rotation_strength_0_0_is_identity() {
         "bppv_rotation strength=0.0 は恒等でなければならない"
     );
 }
-
 
 // ---------------------------------------------------------------------------
 // starbursts（光芒）— CPU↔GLSL を gather 型で統一（#124）
@@ -3593,7 +3873,15 @@ fn sim_starbursts_via_uniforms(
     ray_length_ratio: f32,
 ) -> RgbaImage {
     let (w, h) = img.dimensions();
-    let u = starbursts_uniforms(strength, threshold, dispersion, num_rays, ray_length_ratio, w, h);
+    let u = starbursts_uniforms(
+        strength,
+        threshold,
+        dispersion,
+        num_rays,
+        ray_length_ratio,
+        w,
+        h,
+    );
     sim_starbursts_glsl(
         img,
         u.strength,
@@ -3607,7 +3895,9 @@ fn sim_starbursts_via_uniforms(
 #[test]
 fn starbursts_strength_0_0_is_identity() {
     let img = color_chart_32();
-    let cpu = starbursts(img.clone(), 0.0, 8, 0.1, 0.5, 1.0).unwrap().to_rgba8();
+    let cpu = starbursts(img.clone(), 0.0, 8, 0.1, 0.5, 1.0)
+        .unwrap()
+        .to_rgba8();
     assert_eq!(
         cpu.as_raw(),
         img.to_rgba8().as_raw(),
@@ -3615,16 +3905,28 @@ fn starbursts_strength_0_0_is_identity() {
     );
     // GLSL ミラーも strength=0 で恒等。
     let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 0.0, 0.5, 1.0, 8, 0.1);
-    assert_eq!(gpu.as_raw(), img.to_rgba8().as_raw(), "GLSL も strength=0 で恒等");
+    assert_eq!(
+        gpu.as_raw(),
+        img.to_rgba8().as_raw(),
+        "GLSL も strength=0 で恒等"
+    );
 }
 
 #[test]
 fn starbursts_is_deterministic() {
     // 乱数を使わない決定論的フィルタ（seed なし）。同一入力で常に同一出力。
     let img = bright_point_on_dark(32, 32);
-    let a = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0).unwrap().to_rgba8();
-    let b = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0).unwrap().to_rgba8();
-    assert_eq!(a.as_raw(), b.as_raw(), "starbursts は決定論的でなければならない");
+    let a = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0)
+        .unwrap()
+        .to_rgba8();
+    let b = starbursts(img.clone(), 1.0, 8, 0.3, 0.5, 1.0)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        a.as_raw(),
+        b.as_raw(),
+        "starbursts は決定論的でなければならない"
+    );
     // GLSL ミラーも決定論的。
     let ga = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.5, 0.5, 8, 0.3);
     let gb = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.5, 0.5, 8, 0.3);
@@ -3636,13 +3938,21 @@ fn starbursts_strength_1_emits_rays_from_bright_point() {
     // 明部からレイが放射されること（gather 型でも光条が伸びる）。
     let img = bright_point_on_dark(48, 48);
     let input = img.to_rgba8();
-    let out = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0).unwrap().to_rgba8();
+    let out = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0)
+        .unwrap()
+        .to_rgba8();
     let d = max_abs_rgb_diff(&out, &input);
-    assert!(d >= 4, "CPU starbursts strength=1.0 がレイを放射していない (max RGB 差 {d})");
+    assert!(
+        d >= 4,
+        "CPU starbursts strength=1.0 がレイを放射していない (max RGB 差 {d})"
+    );
     // GLSL gather 版も明点から光条を放射する。
     let gpu = sim_starbursts_via_uniforms(&input, 1.0, 0.3, 0.0, 8, 0.4);
     let dg = max_abs_rgb_diff(&gpu, &input);
-    assert!(dg >= 4, "GLSL starbursts strength=1.0 がレイを放射していない (max RGB 差 {dg})");
+    assert!(
+        dg >= 4,
+        "GLSL starbursts strength=1.0 がレイを放射していない (max RGB 差 {dg})"
+    );
 }
 
 #[test]
@@ -3650,7 +3960,9 @@ fn shader_equiv_starbursts_white_strength_1_0() {
     // dispersion=0（白）。CPU scatter ↔ GLSL gather は同一タプル集合を訪れるため
     // 加算順序由来の f32 丸めを除き等価。bright point で光条が一致する。
     let img = bright_point_on_dark(48, 48);
-    let cpu = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0).unwrap().to_rgba8();
+    let cpu = starbursts(img.clone(), 1.0, 8, 0.4, 0.3, 0.0)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 0.0, 8, 0.4);
     let db = psnr(&cpu, &gpu);
     assert!(
@@ -3665,7 +3977,9 @@ fn shader_equiv_starbursts_rainbow_strength_1_0() {
     // 高々 1 本に限られる（加算の重なりが無い）。座標 round が CPU・sim とも f32::round と
     // bit 一致するので、CPU scatter と GLSL gather は bit 完全一致する（PSNR=∞）。
     let img = bright_point_on_dark(48, 48);
-    let cpu = starbursts(img.clone(), 1.0, 12, 0.4, 0.3, 1.0).unwrap().to_rgba8();
+    let cpu = starbursts(img.clone(), 1.0, 12, 0.4, 0.3, 1.0)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 1.0, 12, 0.4);
     let diff = cpu
         .as_raw()
@@ -3685,7 +3999,9 @@ fn shader_equiv_starbursts_rainbow_strength_1_0() {
 fn shader_equiv_starbursts_multi_source() {
     // 複数明部・中間 strength・カラー画像でも等価（光条が交差・重畳する難ケース）。
     let img = half_bright(48, 48);
-    let cpu = starbursts(img.clone(), 0.6, 6, 0.3, 0.4, 0.5).unwrap().to_rgba8();
+    let cpu = starbursts(img.clone(), 0.6, 6, 0.3, 0.4, 0.5)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 0.6, 0.4, 0.5, 6, 0.3);
     let db = psnr(&cpu, &gpu);
     assert!(
@@ -3698,10 +4014,15 @@ fn shader_equiv_starbursts_multi_source() {
 fn shader_equiv_starbursts_non_square() {
     // 非正方形でも min(W,H) ベースの ray_length_px 算出と座標規約が一致する。
     let img = bright_point_on_dark(64, 32);
-    let cpu = starbursts(img.clone(), 1.0, 8, 0.5, 0.3, 0.0).unwrap().to_rgba8();
+    let cpu = starbursts(img.clone(), 1.0, 8, 0.5, 0.3, 0.0)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_starbursts_via_uniforms(&img.to_rgba8(), 1.0, 0.3, 0.0, 8, 0.5);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 40.0, "starbursts non-square 64x32: CPU↔GLSL PSNR {db:.1} dB < 40 dB");
+    assert!(
+        db >= 40.0,
+        "starbursts non-square 64x32: CPU↔GLSL PSNR {db:.1} dB < 40 dB"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3777,11 +4098,14 @@ fn sim_cataract_glsl(img: &RgbaImage, strength: f32, seed: u32) -> RgbaImage {
             // #106: VIP-Sim 二段モデルの輝度・コントラスト低下（.frag / CPU と同一）
             const PIVOT: f32 = 0.5;
             const BRIGHTNESS_DROP: f32 = 0.1;
-            let nr = ((nr - PIVOT) * (1.0 - strength * (1.0 - 0.7)) + PIVOT - strength * BRIGHTNESS_DROP)
+            let nr = ((nr - PIVOT) * (1.0 - strength * (1.0 - 0.7)) + PIVOT
+                - strength * BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);
-            let ng = ((ng - PIVOT) * (1.0 - strength * (1.0 - 0.7)) + PIVOT - strength * BRIGHTNESS_DROP)
+            let ng = ((ng - PIVOT) * (1.0 - strength * (1.0 - 0.7)) + PIVOT
+                - strength * BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);
-            let nb = ((nb - PIVOT) * (1.0 - strength * (1.0 - 0.4)) + PIVOT - strength * BRIGHTNESS_DROP)
+            let nb = ((nb - PIVOT) * (1.0 - strength * (1.0 - 0.4)) + PIVOT
+                - strength * BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);
 
             // pixelPos = vTexCoord * uResolution - 0.5 = (x, y)（整数ピクセル座標）
@@ -3833,7 +4157,10 @@ fn shader_equiv_cataract_noise_hash_strength_0_5() {
     let cpu = cataract(img.clone(), 0.5, 42).unwrap().to_rgba8();
     let gpu = sim_cataract_glsl(&img.to_rgba8(), 0.5, 42);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 30.0, "cataract strength=0.5: CPU↔GLSL PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "cataract strength=0.5: CPU↔GLSL PSNR {db:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -3844,13 +4171,19 @@ fn shader_equiv_cataract_noise_hash_non_square() {
     let cpu = cataract(img.clone(), 1.0, 42).unwrap().to_rgba8();
     let gpu = sim_cataract_glsl(&img.to_rgba8(), 1.0, 42);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 30.0, "cataract non-square 64x32: CPU↔GLSL PSNR {db:.1} dB < 30 dB");
+    assert!(
+        db >= 30.0,
+        "cataract non-square 64x32: CPU↔GLSL PSNR {db:.1} dB < 30 dB"
+    );
 
     let img2 = gradient_32x64();
     let cpu2 = cataract(img2.clone(), 1.0, 42).unwrap().to_rgba8();
     let gpu2 = sim_cataract_glsl(&img2.to_rgba8(), 1.0, 42);
     let db2 = psnr(&cpu2, &gpu2);
-    assert!(db2 >= 30.0, "cataract non-square 32x64: CPU↔GLSL PSNR {db2:.1} dB < 30 dB");
+    assert!(
+        db2 >= 30.0,
+        "cataract non-square 32x64: CPU↔GLSL PSNR {db2:.1} dB < 30 dB"
+    );
 }
 
 #[test]
@@ -3861,7 +4194,10 @@ fn shader_equiv_cataract_noise_hash_seed_differs() {
     let a = cataract(img.clone(), 1.0, 1).unwrap().to_rgba8();
     let b = cataract(img.clone(), 1.0, 999).unwrap().to_rgba8();
     let db = psnr(&a, &b);
-    assert!(db < 60.0, "cataract: 異なる seed で同一出力（seed が効いていない疑い、PSNR {db:.1} dB）");
+    assert!(
+        db < 60.0,
+        "cataract: 異なる seed で同一出力（seed が効いていない疑い、PSNR {db:.1} dB）"
+    );
 
     // GLSL 側でも同 seed なら CPU と一致すること。
     let ga = sim_cataract_glsl(&img.to_rgba8(), 1.0, 1);
@@ -3921,7 +4257,10 @@ fn shader_equiv_glaucoma_arcuate_strength_1_0_psnr() {
         let cpu_out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         let db = psnr(&cpu_out, &gpu_sim);
-        assert!(db >= 30.0, "glaucoma {mode:?} strength=1.0: PSNR {db:.1} dB < 30 dB");
+        assert!(
+            db >= 30.0,
+            "glaucoma {mode:?} strength=1.0: PSNR {db:.1} dB < 30 dB"
+        );
     }
 }
 
@@ -3938,7 +4277,10 @@ fn shader_equiv_glaucoma_arcuate_strength_0_5_psnr() {
         let cpu_out = glaucoma(img.clone(), 0.5, mode).unwrap().to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         let db = psnr(&cpu_out, &gpu_sim);
-        assert!(db >= 30.0, "glaucoma {mode:?} strength=0.5: PSNR {db:.1} dB < 30 dB");
+        assert!(
+            db >= 30.0,
+            "glaucoma {mode:?} strength=0.5: PSNR {db:.1} dB < 30 dB"
+        );
     }
 }
 
@@ -3956,7 +4298,11 @@ fn shader_equiv_glaucoma_arcuate_strength_0_0_identity_psnr() {
         let cpu_out = glaucoma(img.clone(), 0.0, mode).unwrap().to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         // CPU は完全恒等、sim も完全恒等のはず → PSNR 無限大相当
-        assert_eq!(cpu_out.as_raw(), gpu_sim.as_raw(), "{mode:?} strength=0.0 は両者恒等");
+        assert_eq!(
+            cpu_out.as_raw(),
+            gpu_sim.as_raw(),
+            "{mode:?} strength=0.0 は両者恒等"
+        );
         assert_eq!(
             cpu_out.as_raw(),
             img.to_rgba8().as_raw(),
@@ -3979,7 +4325,10 @@ fn shader_equiv_glaucoma_arcuate_non_square_64x32_psnr() {
         let cpu_out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         let db = psnr(&cpu_out, &gpu_sim);
-        assert!(db >= 30.0, "glaucoma {mode:?} non-square 64×32: PSNR {db:.1} dB < 30 dB");
+        assert!(
+            db >= 30.0,
+            "glaucoma {mode:?} non-square 64×32: PSNR {db:.1} dB < 30 dB"
+        );
     }
 }
 
@@ -4006,8 +4355,12 @@ fn glaucoma_arcuate_superior_inferior_differ() {
     // 上方弧状と下方弧状は異なる領域を暗化する（極座標マスクの上下非対称性）。
     // CPU・sim 両方で上下が反転することを確認する。
     let img = solid_rgba(64, 64, [180, 180, 180, 255]);
-    let sup = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateSuperior).unwrap().to_rgba8();
-    let inf = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateInferior).unwrap().to_rgba8();
+    let sup = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateSuperior)
+        .unwrap()
+        .to_rgba8();
+    let inf = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateInferior)
+        .unwrap()
+        .to_rgba8();
     assert_ne!(
         sup.as_raw(),
         inf.as_raw(),
@@ -4033,7 +4386,9 @@ fn glaucoma_arcuate_superior_inferior_differ() {
 #[test]
 fn glaucoma_arcuate_strength_0_0_is_identity() {
     let img = solid_rgba(64, 64, [180, 180, 180, 255]);
-    let out = glaucoma(img.clone(), 0.0, GlaucomaMode::Biarcuate).unwrap().to_rgba8();
+    let out = glaucoma(img.clone(), 0.0, GlaucomaMode::Biarcuate)
+        .unwrap()
+        .to_rgba8();
     assert_eq!(
         out.as_raw(),
         img.to_rgba8().as_raw(),
@@ -4085,8 +4440,20 @@ fn sim_depth_aware_blur_glsl(
             let d = depth.get_pixel(x, y)[0] as f32 / 255.0;
             let delta = d - focus_depth;
             let radius_px = match kind {
-                0 => if delta < 0.0 { -delta * max_radius_px } else { 0.0 },
-                1 => if delta > 0.0 { delta * max_radius_px } else { 0.0 },
+                0 => {
+                    if delta < 0.0 {
+                        -delta * max_radius_px
+                    } else {
+                        0.0
+                    }
+                }
+                1 => {
+                    if delta > 0.0 {
+                        delta * max_radius_px
+                    } else {
+                        0.0
+                    }
+                }
                 _ => delta.abs() * max_radius_px,
             };
 
@@ -4152,7 +4519,11 @@ fn depth_aware_blur_glsl_focus_plane_is_sharp() {
     let img = checkerboard_32();
     let depth = solid_depth_32(0.5);
     let out = sim_depth_aware_blur_glsl(&img, &depth, 0.5, 8.0, 0);
-    assert_eq!(abs_diff_sum(&img, &out), 0, "focus plane must stay sharp (identity)");
+    assert_eq!(
+        abs_diff_sum(&img, &out),
+        0,
+        "focus plane must stay sharp (identity)"
+    );
 }
 
 #[test]
@@ -4169,7 +4540,11 @@ fn depth_aware_blur_glsl_myopia_blurs_far_not_near() {
     // 近方(depth>focus)は鮮明のまま
     let near = solid_depth_32(1.0); // focus 0.0 → delta = +1, Myopia は前方ボケなし
     let sharp = sim_depth_aware_blur_glsl(&img, &near, 0.0, 8.0, 0);
-    assert_eq!(abs_diff_sum(&img, &sharp), 0, "myopia must keep the near plane sharp");
+    assert_eq!(
+        abs_diff_sum(&img, &sharp),
+        0,
+        "myopia must keep the near plane sharp"
+    );
 }
 
 #[test]
@@ -4185,7 +4560,11 @@ fn depth_aware_blur_glsl_hyperopia_blurs_near_not_far() {
     // 遠方は鮮明
     let far = solid_depth_32(0.0); // focus 1.0 → delta = -1, Hyperopia は後方ボケなし
     let sharp = sim_depth_aware_blur_glsl(&img, &far, 1.0, 8.0, 1);
-    assert_eq!(abs_diff_sum(&img, &sharp), 0, "hyperopia must keep the far plane sharp");
+    assert_eq!(
+        abs_diff_sum(&img, &sharp),
+        0,
+        "hyperopia must keep the far plane sharp"
+    );
 }
 
 #[test]
@@ -4278,7 +4657,10 @@ fn shader_equiv_flickering_stars_strength_1_0() {
     let cpu = flickering_stars(img.clone(), 1.0, 42).unwrap().to_rgba8();
     let gpu = sim_flickering_stars_glsl(&img.to_rgba8(), 1.0, 42);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 40.0, "flickering_stars strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 40 dB");
+    assert!(
+        db >= 40.0,
+        "flickering_stars strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 40 dB"
+    );
 }
 
 #[test]
@@ -4288,7 +4670,10 @@ fn shader_equiv_flickering_stars_strength_0_5_non_square() {
     let cpu = flickering_stars(img.clone(), 0.5, 7).unwrap().to_rgba8();
     let gpu = sim_flickering_stars_glsl(&img.to_rgba8(), 0.5, 7);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 40.0, "flickering_stars 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 40 dB");
+    assert!(
+        db >= 40.0,
+        "flickering_stars 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 40 dB"
+    );
 }
 
 #[test]
@@ -4297,7 +4682,10 @@ fn shader_equiv_flickering_stars_seed_differs() {
     let img = gradient_32();
     let a = flickering_stars(img.clone(), 1.0, 1).unwrap().to_rgba8();
     let b = flickering_stars(img.clone(), 1.0, 999).unwrap().to_rgba8();
-    assert!(psnr(&a, &b) < 60.0, "flickering_stars: 異なる seed で同一出力（seed 不使用の疑い）");
+    assert!(
+        psnr(&a, &b) < 60.0,
+        "flickering_stars: 異なる seed で同一出力（seed 不使用の疑い）"
+    );
 }
 
 // ===========================================================================
@@ -4340,11 +4728,16 @@ fn shader_equiv_floaters_mask_blend_strength_1_0() {
     use sensus_core::vision::{floaters, floaters_mask};
     let img = gradient_32();
     let mask = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5, 1.0);
-    let cpu = floaters(img.clone(), 1.0, 0.8, 42, 0.5, 0.5, 1.0).unwrap().to_rgba8();
+    let cpu = floaters(img.clone(), 1.0, 0.8, 42, 0.5, 0.5, 1.0)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_floaters_glsl(&img.to_rgba8(), &mask, 1.0);
     let db = psnr(&cpu, &gpu);
     // 同一 u8 マスク・同一ブレンドなので bit 一致（PSNR=∞）。安全側で 50 dB。
-    assert!(db >= 50.0, "floaters strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 50 dB");
+    assert!(
+        db >= 50.0,
+        "floaters strength=1.0: CPU↔GLSL PSNR {db:.1} dB < 50 dB"
+    );
 }
 
 #[test]
@@ -4353,10 +4746,15 @@ fn shader_equiv_floaters_mask_blend_strength_0_5_non_square() {
     let img = gradient_64x32();
     let (w, h) = (img.width(), img.height());
     let mask = floaters_mask(w, h, 0.6, 7, 0.5, 0.5, 1.0);
-    let cpu = floaters(img.clone(), 0.5, 0.6, 7, 0.5, 0.5, 1.0).unwrap().to_rgba8();
+    let cpu = floaters(img.clone(), 0.5, 0.6, 7, 0.5, 0.5, 1.0)
+        .unwrap()
+        .to_rgba8();
     let gpu = sim_floaters_glsl(&img.to_rgba8(), &mask, 0.5);
     let db = psnr(&cpu, &gpu);
-    assert!(db >= 50.0, "floaters 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 50 dB");
+    assert!(
+        db >= 50.0,
+        "floaters 0.5 64x32: CPU↔GLSL PSNR {db:.1} dB < 50 dB"
+    );
 }
 
 #[test]
@@ -4365,10 +4763,20 @@ fn floaters_mask_is_strength_independent() {
     use sensus_core::vision::floaters_mask;
     let a = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5, 1.0);
     let b = floaters_mask(32, 32, 0.8, 42, 0.5, 0.5, 1.0);
-    assert_eq!(a.as_raw(), b.as_raw(), "floaters_mask must be deterministic");
+    assert_eq!(
+        a.as_raw(),
+        b.as_raw(),
+        "floaters_mask must be deterministic"
+    );
     // density 0 は全面透明（255）
     let empty = floaters_mask(32, 32, 0.0, 42, 0.5, 0.5, 1.0);
-    assert!(empty.as_raw().iter().all(|&v| v == 255), "density 0 → all transparent");
+    assert!(
+        empty.as_raw().iter().all(|&v| v == 255),
+        "density 0 → all transparent"
+    );
     // フローターがあれば 255 未満の画素が存在する
-    assert!(a.as_raw().iter().any(|&v| v < 255), "mask must contain floater pixels");
+    assert!(
+        a.as_raw().iter().any(|&v| v < 255),
+        "mask must contain floater pixels"
+    );
 }

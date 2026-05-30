@@ -51,15 +51,22 @@ fn cli_mpo_with_myopia_depth_filter_succeeds() {
 
     let status = cargo_run()
         .args([
-            "-i", input_path.to_str().unwrap(),
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--mpo", mpo_path.to_str().unwrap(),
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--mpo",
+            mpo_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(status.success(), "valid MPO + myopia-depth filter should succeed");
+    assert!(
+        status.success(),
+        "valid MPO + myopia-depth filter should succeed"
+    );
     assert!(output_path.exists(), "output file should be created");
 }
 
@@ -78,9 +85,12 @@ fn cli_mpo_without_input_succeeds() {
 
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--mpo", mpo_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--mpo",
+            mpo_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
@@ -108,11 +118,16 @@ fn cli_mpo_and_depth_together_returns_error() {
 
     let status = cargo_run()
         .args([
-            "-i", input_path.to_str().unwrap(),
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--mpo", mpo_path.to_str().unwrap(),
-            "--depth", depth_path.to_str().unwrap(),
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--mpo",
+            mpo_path.to_str().unwrap(),
+            "--depth",
+            depth_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
@@ -137,10 +152,14 @@ fn cli_mpo_without_depth_filter_returns_error() {
 
     let status = cargo_run()
         .args([
-            "-i", input_path.to_str().unwrap(),
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "protanopia",
-            "--mpo", mpo_path.to_str().unwrap(),
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "protanopia",
+            "--mpo",
+            mpo_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
@@ -166,10 +185,14 @@ fn cli_mpo_invalid_mpo_content_returns_error() {
 
     let status = cargo_run()
         .args([
-            "-i", input_path.to_str().unwrap(),
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--mpo", mpo_path.to_str().unwrap(),
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--mpo",
+            mpo_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();

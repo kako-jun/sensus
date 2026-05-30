@@ -38,29 +38,49 @@ fn depth_filter_composes_with_color_filter() {
 
     // 合成: protanopia → myopia-depth（#108 で hard error が解消され成功する）
     let s1 = run(&[
-        "-i", inp.to_str().unwrap(),
-        "--depth", depth.to_str().unwrap(),
-        "-o", out_compose.to_str().unwrap(),
-        "--filter", "protanopia", "--filter", "myopia-depth",
-        "-s", "1.0",
+        "-i",
+        inp.to_str().unwrap(),
+        "--depth",
+        depth.to_str().unwrap(),
+        "-o",
+        out_compose.to_str().unwrap(),
+        "--filter",
+        "protanopia",
+        "--filter",
+        "myopia-depth",
+        "-s",
+        "1.0",
     ]);
-    assert!(s1.status.success(), "compose should succeed: {}", String::from_utf8_lossy(&s1.stderr));
+    assert!(
+        s1.status.success(),
+        "compose should succeed: {}",
+        String::from_utf8_lossy(&s1.stderr)
+    );
     assert!(out_compose.exists());
 
     // depth のみ
     let s2 = run(&[
-        "-i", inp.to_str().unwrap(),
-        "--depth", depth.to_str().unwrap(),
-        "-o", out_depth_only.to_str().unwrap(),
-        "--filter", "myopia-depth",
-        "-s", "1.0",
+        "-i",
+        inp.to_str().unwrap(),
+        "--depth",
+        depth.to_str().unwrap(),
+        "-o",
+        out_depth_only.to_str().unwrap(),
+        "--filter",
+        "myopia-depth",
+        "-s",
+        "1.0",
     ]);
     assert!(s2.status.success());
 
     // protanopia が前段で効くので、合成結果は depth-only と異なるはず
     let a = image::open(&out_compose).unwrap().to_rgba8();
     let b = image::open(&out_depth_only).unwrap().to_rgba8();
-    assert_ne!(a.as_raw(), b.as_raw(), "composed output must differ from depth-only (color filter applied first)");
+    assert_ne!(
+        a.as_raw(),
+        b.as_raw(),
+        "composed output must differ from depth-only (color filter applied first)"
+    );
 }
 
 #[test]
@@ -74,12 +94,21 @@ fn two_depth_filters_are_rejected() {
 
     // depth フィルタ 2 つは不可（depth_aware_blur は単一 kind）
     let o = run(&[
-        "-i", inp.to_str().unwrap(),
-        "--depth", depth.to_str().unwrap(),
-        "-o", out.to_str().unwrap(),
-        "--filter", "myopia-depth", "--filter", "hyperopia-depth",
+        "-i",
+        inp.to_str().unwrap(),
+        "--depth",
+        depth.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--filter",
+        "myopia-depth",
+        "--filter",
+        "hyperopia-depth",
     ]);
     assert!(!o.status.success(), "two depth filters must be rejected");
     let stderr = String::from_utf8_lossy(&o.stderr);
-    assert!(stderr.contains("depth blur filter"), "error should mention depth blur filter: {stderr}");
+    assert!(
+        stderr.contains("depth blur filter"),
+        "error should mention depth blur filter: {stderr}"
+    );
 }

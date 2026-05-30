@@ -10,7 +10,13 @@ fn sensus_bin() -> PathBuf {
 }
 
 /// 16-bit PCM の 440 Hz サイン波 WAV を生成して path に書く。
-fn write_sine_wav(path: &std::path::Path, freq: f32, frames: usize, sample_rate: u32, channels: u16) {
+fn write_sine_wav(
+    path: &std::path::Path,
+    freq: f32,
+    frames: usize,
+    sample_rate: u32,
+    channels: u16,
+) {
     let spec = WavSpec {
         channels,
         sample_rate,
@@ -131,9 +137,15 @@ fn audio_without_hearing_filter_fails() {
         ])
         .output()
         .unwrap();
-    assert!(!output.status.success(), "--audio without --hearing must fail");
+    assert!(
+        !output.status.success(),
+        "--audio without --hearing must fail"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--hearing"), "error should mention --hearing: {stderr}");
+    assert!(
+        stderr.contains("--hearing"),
+        "error should mention --hearing: {stderr}"
+    );
 }
 
 #[test]

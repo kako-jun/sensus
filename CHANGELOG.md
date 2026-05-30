@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-30
+
+### Added
+
+- **feat: CLI から残り 5 つの vision フィルタを利用可能に（metamorphopsia / contrast-sensitivity / detail-loss / teichopsia / flickering-stars）**: core には実装済み・GLSL シェーダもあるのに CLI の `--filter` から選べなかった 5 フィルタを公開。併せて専用フラグを追加: `--size`（floaters サイズ倍率）/ `--dispersion`（starbursts 虹色度）/ `--cell-size`（detail-loss タイルサイズ）/ `--meta-freq` / `--meta-seed`（metamorphopsia）。`cargo test -p sensus --test cli` に新フィルタ疎通テストを追加。
+
+### Changed
+
+- **refactor: フィルタ固有パラメータを `Filter` enum payload に一元化し、`FilterStep` を `{filter, strength}` に簡約**: 従来は一部パラメータが `Filter` enum に、一部が `pipeline::FilterStep` のスカラフィールドに二重に存在し、CLI が両方へ値を入れていたため、enum を読むフィルタでは CLI 値が無視されていた（下記 B2 の根本原因）。`Cataract { seed }` / `Floaters { …, gaze_x, gaze_y }` / `Diplopia { offset_x, offset_y, ghost_strength }` / `Nystagmus { amplitude, direction_deg }` / `Metamorphopsia { freq, seed }` へパラメータを移動。`FilterStep::apply` は `crate::apply` に委譲するだけになり、**単体適用と pipeline 適用の挙動が常に一致**することを型で保証。`pipeline.rs:12` の設計メモ（「パラメータは enum 側のみ」）に実装を揃えた。
+
+### Fixed
+
+- **fix: (B2) `--axis` / `--side` / `--num-rays` / `--ray-length` / `--threshold` / `--seed` / `--density` 等の CLI フラグが pipeline まで届かず固定値が使われていた問題を修正**: `Filter::to_core` が enum payload にハードコードのデフォルトを詰めていたため、astigmatism の軸・hemianopia の側・starbursts の各パラメータ・floaters の seed/density 等が常に既定値で適用されていた。`to_core(&Cli)` が全パラメータを CLI フラグから構築するよう修正。回帰テスト `cli_axis_actually_changes_astigmatism_output`（axis=0 と 90 で出力が変わる）を追加。
+- **fix: (B1) `apply(Filter::Vertigo)` / `apply(Filter::BppvRotation)` が `time_t=0` 固定で恒等変換（無効果）になっていた問題を修正**: 静止画は時間軸を持てないため、効果がピークになる代表位相（`VERTIGO_STILL_TIME_S` / `BPPV_STILL_TIME_S`）で 1 フレームを描くようにした。`Experience::MENIERE` / `LABYRINTHITIS` / `BPPV` の視覚側もこれで実際に回転する。回帰テスト `bppv_and_vertigo_are_not_identity_through_apply` を追加。
+- **fix: `cargo fmt --check` が `crates/cli/src/audio.rs` / `main.rs` で失敗していた整形ずれを修正**。
+
 ### Changed
 
 - **chore: kako-jun/sensus#113 v0.1-0.2 コア独立レビュー実施 — 色覚関数の strength 正規化を共通化**: 5 ラウンドレビュー（#68-#90）が未カバーだった v0.1-0.2 コア（色覚行列・視野マスク・初代 hearing DSP・stereo/MPO/XMP パーサ・SAD 深度推定）を correctness 観点で精査。**致命的なバグは検出されず**（パーサは bounds-checked、SAD は overflow なし、色覚・マスクは linear 空間で clamp 済み）。唯一の整合性所見として、色覚関数（`apply_machado_matrix` / `achromatopsia`）が `normalize_strength` 相当の NaN/clamp 処理をインラインで重複していたのを、#120 で `pub(crate)` 化した `normalize_strength` に統一。挙動は不変（`achromatopsia_nan_strength_returns_identity` 等で確認）。
@@ -49,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **feat: kako-jun/sensus#106 cataract に輝度・コントラスト低下を追加（VIP-Sim 二段モデルの未移植分）**: これまで黄変マトリクス + 白濁ノイズのみで、白内障の霞み感の核である輝度・コントラスト低下が移植されていなかった。VIP-Sim の BrightnessContrast 段に倣い、linear sRGB 空間で pivot 0.5 中心の per-channel コントラスト収縮（ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）+ severity 比例の輝度低下を追加。`c_ch = 1 - s*(1 - coeff_ch)` で strength=0 のとき恒等。**CPU `vision::cataract` / `cataract.frag` / `sim_cataract_glsl` の 3 箇所に同一演算で実装し、既存の CPU↔GLSL 等価テスト（PSNR ≥ 30 dB）を維持**。効果アサート `cataract_reduces_brightness_and_contrast`（白黒 1×1 の輝度差が圧縮されることを検証）。
 
-- **feat: kako-jun/sensus#105 聴覚フィルタ + AudioPipeline を CLI から利用可能に（`--audio` / WAV）**: 聴覚モジュール全体（15 フィルタ）と `AudioPipeline` が CLI から一切叩けず、Cargo.toml の description が "hearing loss" を宣伝しながら binary では到達不可だった矛盾を解消。
+- **feat: kako-jun/sensus#105 聴覚フィルタ + AudioPipeline を CLI から利用可能に（`--audio` / WAV）**: 聴覚モジュール全体（14 フィルタ）と `AudioPipeline` が CLI から一切叩けず、Cargo.toml の description が "hearing loss" を宣伝しながら binary では到達不可だった矛盾を解消。
   - `--audio <in.wav> --hearing <filter>... -o <out.wav>`: WAV を読み、`--hearing` の聴覚フィルタを `AudioPipeline` で順に適用して WAV 出力。`--hearing` は複数指定でチェーン可。パラメータ付きフィルタ用に `--freq`（tinnitus/sudden-hearing-loss/misophonia）と `--semitones`（pitch-shift）を追加。
   - WAV I/O は `hound` で実装（`crates/cli/src/audio.rs`）。整数/浮動小数 PCM を正規化 f32 で読み、出力時に入力の bit 深度・形式へ戻す。チャンネル数は適用後バッファに追従（diplacusis の mono→stereo を保つ）。**mp3/flac 等の広域デコードは非対象**。
   - `--audio` は `--input`/`--filter`/`--pipe`/`--mpo`/`--portrait` と排他。`--hearing` 無し・`-o` 無しは明示エラー。
@@ -530,6 +546,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLAUDE.md` (Japanese, AI-facing internal notes). (#1)
 - MIT license. (#1)
 
+[Unreleased]: https://github.com/kako-jun/sensus/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kako-jun/sensus/releases/tag/v0.5.0
 [0.4.0]: https://github.com/kako-jun/sensus/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kako-jun/sensus/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kako-jun/sensus/releases/tag/v0.2.0
