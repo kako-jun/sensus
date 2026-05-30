@@ -589,6 +589,13 @@ same math. A GPU-free software equivalence test suite (`#17`) asserts that
 CPU and shader outputs agree within ≤ 2/255 per channel (matrix filters) or
 PSNR ≥ 30 dB (blur / directional filters).
 
+> **Known limitation** — the 1D directional-blur shaders (`nystagmus`,
+> `astigmatism`) cap their per-pixel kernel at `RMAX = 15` taps, while the CPU
+> blur radius is unbounded. They diverge once the blur radius exceeds ~15 px
+> (`nystagmus`: default amplitude on images wider than ~500 px; `astigmatism`:
+> only above ~1363 px). The CPU / CLI path is unaffected. A fixed-tap rewrite
+> of these two shaders is tracked as a follow-up.
+
 ## Medical notes (when to see a doctor)
 
 sensus pairs each filter with a "when to see a doctor" note so the simulation
@@ -611,7 +618,8 @@ doubles as an early-warning primer. The urgency vocabulary matches the
 | `contrast_sensitivity`, `detail_loss`, `eye_strain` | None | Often lighting/fatigue related; persistent change → eye exam. |
 | `dry_eye` | None / ⚠️ | Usually benign; persistent pain or vision change → consult. |
 | `starbursts` | ⚠️ early consultation | New night-time halos can accompany cataract or refractive error. |
-| `glaucoma` | ⚠️ early consultation | Painless peripheral loss; early detection preserves the field. |
+| `glaucoma`, `tunnel_vision` | ⚠️ early consultation | Painless peripheral / tunnel field loss; early detection (glaucoma, retinitis pigmentosa) preserves the field. |
+| `photophobia` | None / ⚠️ | Often benign light sensitivity; sudden severe photophobia with eye pain / headache → evaluate (iritis, migraine). |
 | `macular_degeneration`, `metamorphopsia` | ⚠️ early consultation | Central distortion/blur; early treatment slows progression. |
 | `cataract` | ⚠️ early consultation | Progressive clouding; rapid change warrants an exam. |
 | `night-blindness` (`nyctalopia`) | ⚠️ early consultation | Rapid worsening may mean vitamin-A deficiency / RP. |

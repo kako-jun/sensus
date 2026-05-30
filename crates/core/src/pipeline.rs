@@ -226,6 +226,54 @@ mod tests {
         assert_eq!(via_pipeline, direct);
     }
 
+    /// パラメータ付きバリアントでも Pipeline::apply() == crate::apply()。
+    /// （パラメータが payload から正しく伝わることの byte-exact 保証。）
+    #[test]
+    fn parameterized_step_matches_direct_apply() {
+        let make = || {
+            let mut img = RgbImage::new(48, 48);
+            for (x, y, px) in img.enumerate_pixels_mut() {
+                *px = image::Rgb([(x * 5) as u8, (y * 5) as u8, 90]);
+            }
+            DynamicImage::ImageRgb8(img)
+        };
+        for filter in [
+            Filter::Astigmatism { axis_deg: 45.0 },
+            Filter::Diplopia {
+                offset_x: 0.05,
+                offset_y: 0.03,
+                ghost_strength: 0.6,
+            },
+            Filter::Nystagmus {
+                amplitude: 0.08,
+                direction_deg: 30.0,
+            },
+            Filter::Floaters {
+                seed: 3,
+                density: 0.7,
+                size: 1.5,
+                gaze_x: 0.3,
+                gaze_y: 0.8,
+            },
+            Filter::Metamorphopsia { freq: 6.0, seed: 9 },
+        ] {
+            let via_pipeline = Pipeline::new()
+                .push(FilterStep::new(filter, 0.9))
+                .apply(make())
+                .unwrap()
+                .to_rgba8()
+                .into_raw();
+            let direct = crate::apply(filter, make(), 0.9)
+                .unwrap()
+                .to_rgba8()
+                .into_raw();
+            assert_eq!(
+                via_pipeline, direct,
+                "pipeline must match direct apply for {filter:?}"
+            );
+        }
+    }
+
     /// A→B と B→A で結果が異なることを確認する（順序依存性のテスト）。
     #[test]
     fn two_step_order_matters() {

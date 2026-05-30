@@ -18,6 +18,12 @@ uniform vec2  uTexelSize;      // vec2(1.0/width, 1.0/height)
 in vec2 vTexCoord;
 out vec4 fragColor;
 
+// RMAX=15 はカーネル半径（タップ）の上限。CPU `ellipse_blur` は半径無制限なので、
+// `uRadiusPx > 15` では GLSL が CPU より弱くぼけ、両者は乖離する。
+// nystagmus の半径は `amplitude × strength × min(W,H)` で、既定 amplitude=0.03 では
+// min(W,H) ≳ 500 px で 15 px を超える（astigmatism は 0.011×min なので ≳1363 px）。
+// 大半径で CPU↔GLSL の厳密一致が要るなら、per-pixel ボックスではなく
+// 軸方向の固定タップ数サンプリングへ書き換えること（別 issue）。
 const int RMAX = 15;
 const float B_RADIUS = 0.5;
 
