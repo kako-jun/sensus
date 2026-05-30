@@ -42,12 +42,7 @@ fn pipe_two_frames_output_two_jpegs() {
         .spawn()
         .expect("failed to spawn sensus");
 
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(&two_frames)
-        .unwrap();
+    child.stdin.take().unwrap().write_all(&two_frames).unwrap();
 
     let output = child.wait_with_output().unwrap();
     assert!(

@@ -1,8 +1,8 @@
 # sensus overview
 
-`sensus` simulates sensory perception — primarily vision, with hearing on
-the roadmap — by applying perceptual filters to ordinary media buffers.
-The goal is twofold:
+`sensus` simulates sensory perception — vision and hearing — by applying
+perceptual filters to ordinary media buffers (images and audio). The goal
+is twofold:
 
 1. **Empathy & education** — let sighted / hearing users *experience*
    what a given condition might look or sound like.
@@ -10,9 +10,9 @@ The goal is twofold:
    guidance ("if your real vision starts looking like this, see a doctor")
    so the simulation doubles as a self-screening reminder.
 
-Filters take and return `image::DynamicImage` (and, for hearing,
-PCM-style audio buffers in a later phase). Video is supported by calling
-the same per-frame API in a loop.
+Vision filters take and return `image::DynamicImage`; hearing filters take
+and return PCM-style audio buffers (`hearing::AudioBuffer`). Video is
+supported by calling the same per-frame API in a loop.
 
 ## Crate layout
 
@@ -33,9 +33,9 @@ sensus/
     ├── core/
     │   ├── Cargo.toml      # crate-type = ["rlib"]
     │   └── src/
-    │       ├── lib.rs
-    │       ├── vision.rs    # color vision, refraction, visual field, light, depth-aware blur, diplopia, nystagmus, starbursts
-    │       ├── hearing.rs   # hearing loss, pitch shift, balance
+    │       ├── lib.rs       # Filter / HearingFilter enums, apply(), Experience, Urgency
+    │       ├── vision.rs    # color vision, refraction, visual field, light, balance/vertigo, eye fatigue, depth-aware blur, diplopia, nystagmus, starbursts, metamorphopsia, contrast, detail-loss, teichopsia, flickering-stars
+    │       ├── hearing.rs   # 14 hearing filters (loss, tinnitus, pitch, APD, Ménière, labyrinthitis, …)
     │       ├── shaders.rs   # GLSL ES 3.00 shader sources + uniform structs
     │       ├── shaders/     # *.frag shader source files (included via include_str!)
     │       ├── stereo.rs    # MPO stereo split + SAD disparity → depth map
@@ -73,11 +73,12 @@ fn filter(img: DynamicImage, /* filter-specific params */, strength: f32) -> Dyn
 
 | Module | Phase | Issues | Filters |
 |---|---|---|---|
-| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #56, #57, #58, #59 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, depth-aware blur, diplopia, nystagmus, starbursts, eye_strain, dry_eye, contrast_sensitivity, detail_loss, teichopsia, flickering_stars |
-| `hearing` | 4 | #7, #8, #9 | hearing loss, pitch shift, balance / vertigo |
+| `vision` | 1–5 | #2, #3, #4, #5, #6, #19, #29, #36, #37, #55, #56, #57, #58, #59 | color vision deficiency, tetrachromacy, refraction, visual field defects, light / transparency, balance / vertigo, eye fatigue / dry eye, depth-aware blur, diplopia, nystagmus, starbursts, metamorphopsia, contrast_sensitivity, detail_loss, teichopsia, flickering_stars |
+| `hearing` | 4 | #7, #8, #9, #102, #103, #104 | 14 hearing filters: hearing loss, tinnitus, pitch shift, diplacusis, APD, misophonia, Ménière, labyrinthitis, … (audio buffers) |
+| `lib` (`apply`, `Experience`, `Urgency`) | 4 | #103, #104 | dispatch facade + composite vision+hearing experiences with `Urgency` classification |
 | `stereo` | 6 | #31, #32 | MPO stereo photography → depth map (`split_mpo`, `stereo_to_depth`); Android XMP Depth extraction (`read_xmp_depth`) |
-| `pipeline` | 4 | #10 | filter composition ✅ |
-| `shaders` | 5 | #16 | GLSL ES 3.00 shader sources + uniform structs for all visual filters |
+| `pipeline` | 4 | #10, #105 | vision filter composition (`Pipeline`) + hearing chain (`AudioPipeline`) ✅ |
+| `shaders` | 5 | #16, #107, #134 | GLSL ES 3.00 shader sources + uniform structs for all visual filters |
 
 ## Pipeline (Phase 4, #10)
 
@@ -139,7 +140,8 @@ arcs) seen as a migraine aura.
 - Inner scotoma (distance < 0.2): darkened by `strength × 0.7`
 - `strength = 0.0` → identity; `strength = 1.0` → full effect
 
-> **医学的注記**: 偏頭痛の前兆として 20〜30 分続く。初めて経験する場合は眼科・神経内科を受診。
+> **Medical note** (⚠️ early consultation): typically a migraine aura lasting
+> 20–30 min. On a first-ever episode, see an ophthalmologist / neurologist.
 
 ## Flickering Stars filter (#59)
 
@@ -150,7 +152,24 @@ by additively blending random white blob points onto the image.
 - Each point is a 2 px rectangular blob with additive luminance 0.5–1.0
 - `strength = 0.0` → identity (zero points); `strength = 1.0` → 200 white blobs
 
-> **医学的注記**: 急激な光点の増加・カーテン状の視野欠損を伴う場合は網膜剥離の前兆。即受診。
+> **Medical note** (🚨 emergency): a sudden surge of flashes with a
+> curtain-like field loss can signal retinal detachment — seek care immediately.
+
+## Metamorphopsia filter (#55)
+
+`metamorphopsia(img, strength, freq, seed)` simulates the wavy/warped vision
+of macular distortion by displacing each pixel along a smooth pseudo-random
+vector field.
+
+- `freq`: spatial frequency of the distortion field (higher = finer ripples).
+  `apply(Filter::Metamorphopsia { freq, seed })` and the CLI default to `4.0`.
+- `seed`: LCG seed for the distortion field, so successive video frames stay
+  coherent (CLI `--meta-seed`, default `0`).
+- `strength = 0.0` → identity; `strength = 1.0` → maximum displacement.
+
+> **Medical note** (⚠️ early consultation): new or worsening straight-line
+> distortion (an Amsler-grid finding) can indicate macular disease (AMD,
+> macular edema) — see an ophthalmologist.
 
 ## Auditory Processing Disorder (APD) (Issue #37)
 
@@ -354,7 +373,9 @@ The pixel multiplier is `1.0 - strength × fade`.
 | `ArcuateInferior` | Inferior Bjerrum scotoma (lower arcuate defect) |
 | `Biarcuate` | Both superior and inferior arcuate defects (advanced glaucoma) |
 
-> **Note (S-4)**: 弧状暗点モード（ArcuateSuperior / ArcuateInferior / Biarcuate）は右眼視点を基準として実装されています。左眼の場合は視神経乳頭のオフセット方向が逆になります。
+> **Note (S-4)**: the arcuate-scotoma modes (`ArcuateSuperior` /
+> `ArcuateInferior` / `Biarcuate`) are implemented for a right-eye viewpoint.
+> For the left eye the optic-disc offset direction is mirrored.
 
 ### macular_degeneration
 
@@ -406,11 +427,13 @@ aberrations of the eye's optical medium, all in linear sRGB space.
 - **cataract**: yellowing via Pokorny et al. (1987) / van Norren & Vos (1974)
   chromatic matrix applied in linear sRGB, plus 32×32 bilinear-interpolated
   scatter noise (LCG-based, spatially correlated).
-  ⚠️ 即受診 — 急激な視力低下・視野変化は眼科受診推奨。
+  ⚠️ Medical note (early consultation): rapid loss of acuity or field change
+  warrants an eye exam.
 - **photophobia**: extracts pixels above BT.709 luminance threshold 0.5,
   applies disk blur, and adds the result back as bloom.
 - **nyctalopia**: desaturates via BT.709 lerp (×0.8) and darkens (×0.7).
-  ⚠️ 早期受診 — 夜盲の急激な悪化はビタミンA欠乏・網膜色素変性の可能性。
+  ⚠️ Medical note (early consultation): rapidly worsening night blindness may
+  indicate vitamin-A deficiency or retinitis pigmentosa.
 - **floaters**: places smoothstep-edged blobs at deterministic positions
   derived from a seed and gaze offset, and multiplies them into the image.
 
@@ -426,7 +449,8 @@ simulation beyond spatial field defects and optical blur.
   the ghost at opacity `ghost_strength × strength` in linear sRGB.
   Simulates double vision from strabismus or cranial nerve palsy.
   CLI: `--offset-x`, `--offset-y`, `--ghost-strength`.
-  🚨 即救急 — 突然の複視は動眼神経麻痺・脳幹梗塞の可能性。
+  🚨 Medical note (emergency): sudden-onset double vision can signal oculomotor
+  nerve palsy or brainstem infarction — seek care immediately.
 - **nystagmus**: applies 1D directional blur (`amplitude × strength ×
   min(W,H)` px radius, `direction_deg` in degrees) as a static snapshot of
   the motion blur caused by involuntary oscillatory eye movement.
@@ -539,15 +563,19 @@ and returns a buffer; no audio device I/O.
   channel count.
 - **`BiquadFilter`**: second-order IIR building block (Butterworth
   approximation) used by all hearing filters.
-- **11 hearing filters**: `hearing_loss`, `sudden_hearing_loss`,
-  `noise_induced_hearing_loss`, `tinnitus`, `hyperacusis`, `paracusis`,
-  `amusia`, `dysmelodia`, `pitch_shift_semitones`, `diplacusis`,
-  `auditory_processing_disorder`, returned as processed `AudioBuffer`.
-  All are stateless over frames — callers supply a fresh buffer per chunk.
+- **14 hearing filters**: `hearing_loss`, `sudden_hearing_loss`,
+  `noise_induced_hearing_loss`, `tinnitus`, `hyperacusis`, `misophonia`,
+  `paracusis`, `amusia`, `dysmelodia`, `pitch_shift_semitones`, `diplacusis`,
+  `auditory_processing_disorder`, `meniere`, `labyrinthitis`, returned as
+  processed `AudioBuffer`. All are stateless over frames — callers supply a
+  fresh buffer per chunk. Dispatched via `apply_hearing` / `HearingFilter`,
+  or chained via `AudioPipeline`.
 - **3 vestibular–visual filters** added to `vision.rs`: `vertigo` (rotating
   radial warp), `bppv_rotation` (brief rotational jerk), `vestibular_neuritis`
   (sustained horizontal tilt). These are image-space effects; no audio I/O.
-  🚨 即救急 — 突然の激しいめまいは脳卒中との鑑別が必要（`vestibular_neuritis`）。
+  Because a still image has no time axis, `apply()` renders these at a
+  representative peak phase (`VERTIGO_STILL_TIME_S` / `BPPV_STILL_TIME_S`);
+  animation is the GLSL shader's `time` uniform's job.
 
 ## GLSL ES 3.00 shader source API (Phase 5, #16)
 
@@ -559,7 +587,49 @@ compatibility with Flutter's `FragmentProgram` API.
 The CPU implementation is the normative specification; shaders replicate the
 same math. A GPU-free software equivalence test suite (`#17`) asserts that
 CPU and shader outputs agree within ≤ 2/255 per channel (matrix filters) or
-PSNR ≥ 30 dB (blur / directional filters). — sensus is consumed by native apps; a wasm build adds
+PSNR ≥ 30 dB (blur / directional filters).
+
+## Medical notes (when to see a doctor)
+
+sensus pairs each filter with a "when to see a doctor" note so the simulation
+doubles as an early-warning primer. The urgency vocabulary matches the
+[`Urgency`](../crates/core/src/lib.rs) enum used by `Experience`:
+
+- **Emergency** (🚨) — possible stroke / retinal-detachment / acute sign; seek
+  care immediately.
+- **Early consultation** (⚠️) — see a specialist soon; early treatment changes
+  the outcome.
+- **None** — typically congenital, refractive, or benign; no urgency by itself.
+
+> These notes are general awareness guidance, **not** medical advice or a
+> diagnosis. A simulated effect is not a symptom.
+
+| Filter(s) | Urgency | Note |
+|---|---|---|
+| `protanopia`, `deuteranopia`, `tritanopia`, `achromatopsia`, `tetrachromacy` | None | Color vision type is usually congenital and stable. |
+| `myopia`, `hyperopia`, `presbyopia`, `astigmatism` | None | Refractive — corrected with lenses; routine eye exams. |
+| `contrast_sensitivity`, `detail_loss`, `eye_strain` | None | Often lighting/fatigue related; persistent change → eye exam. |
+| `dry_eye` | None / ⚠️ | Usually benign; persistent pain or vision change → consult. |
+| `starbursts` | ⚠️ early consultation | New night-time halos can accompany cataract or refractive error. |
+| `glaucoma` | ⚠️ early consultation | Painless peripheral loss; early detection preserves the field. |
+| `macular_degeneration`, `metamorphopsia` | ⚠️ early consultation | Central distortion/blur; early treatment slows progression. |
+| `cataract` | ⚠️ early consultation | Progressive clouding; rapid change warrants an exam. |
+| `night-blindness` (`nyctalopia`) | ⚠️ early consultation | Rapid worsening may mean vitamin-A deficiency / RP. |
+| `floaters` | ⚠️ early consultation | A *sudden* surge with flashes → rule out retinal tear. |
+| `teichopsia` | ⚠️ early consultation | Usually migraine aura; first-ever episode → evaluate. |
+| `nystagmus` | ⚠️ early consultation | New-onset (non-congenital) involuntary motion → evaluate. |
+| `vertigo`, `bppv_rotation` | None / ⚠️ | BPPV is benign positional; recurrent/severe → evaluate. |
+| `hemianopia` | 🚨 emergency | Sudden half-field loss is a stroke until proven otherwise. |
+| `diplopia` | 🚨 emergency | Sudden double vision → nerve palsy / brainstem stroke. |
+| `flickering_stars` (photopsia) | 🚨 emergency | Surge of flashes + curtain → retinal detachment. |
+| `vestibular_neuritis` | 🚨 emergency | Sudden severe vertigo needs stroke differentiation. |
+| `sudden_hearing_loss` | 🚨 emergency | Sudden sensorineural loss is an otologic emergency. |
+| `meniere`, `labyrinthitis` | ⚠️ early consultation | Vertigo + hearing change → ENT evaluation. |
+| `tinnitus`, `hyperacusis`, `misophonia`, `paracusis`, `amusia`, `dysmelodia`, `pitch_shift`, `diplacusis`, APD, `noise_induced_hearing_loss`, `hearing_loss` | None / ⚠️ | Often chronic/benign; sudden onset or one-sided → consult. |
+
+## Out of scope / Non-goals
+
+- **WebAssembly** — sensus is consumed by native apps; a wasm build adds
   maintenance cost without a clear consumer.
 - **Real-time camera feeds inside this crate** — capture and display are
   the host application's responsibility. sensus only transforms buffers.

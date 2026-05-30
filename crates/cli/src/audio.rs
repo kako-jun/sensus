@@ -16,8 +16,7 @@ use sensus_core::hearing::AudioBuffer;
 ///
 /// 元 spec は出力時に bit 深度・サンプル形式を保つために返す。
 pub fn read_wav(path: &Path) -> Result<(AudioBuffer, WavSpec), String> {
-    let reader =
-        WavReader::open(path).map_err(|e| format!("failed to open WAV {path:?}: {e}"))?;
+    let reader = WavReader::open(path).map_err(|e| format!("failed to open WAV {path:?}: {e}"))?;
     let spec = reader.spec();
 
     let samples: Vec<f32> = match spec.sample_format {
@@ -57,8 +56,8 @@ pub fn write_wav(path: &Path, buf: &AudioBuffer, src_spec: WavSpec) -> Result<()
         bits_per_sample: src_spec.bits_per_sample,
         sample_format: src_spec.sample_format,
     };
-    let mut writer =
-        WavWriter::create(path, out_spec).map_err(|e| format!("failed to create WAV {path:?}: {e}"))?;
+    let mut writer = WavWriter::create(path, out_spec)
+        .map_err(|e| format!("failed to create WAV {path:?}: {e}"))?;
 
     match src_spec.sample_format {
         SampleFormat::Float => {

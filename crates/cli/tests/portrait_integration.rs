@@ -35,8 +35,16 @@ fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(CHARS[(n >> 18) as usize] as char);
         out.push(CHARS[((n >> 12) & 0x3F) as usize] as char);
-        out.push(if chunk.len() > 1 { CHARS[((n >> 6) & 0x3F) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { CHARS[(n & 0x3F) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            CHARS[((n >> 6) & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            CHARS[(n & 0x3F) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -111,14 +119,20 @@ fn cli_portrait_with_myopia_depth_filter_succeeds() {
 
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--portrait", portrait_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--portrait",
+            portrait_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(status.success(), "valid portrait JPEG + myopia-depth should succeed");
+    assert!(
+        status.success(),
+        "valid portrait JPEG + myopia-depth should succeed"
+    );
     assert!(output_path.exists(), "output file should be created");
 }
 
@@ -137,14 +151,20 @@ fn cli_portrait_without_input_succeeds() {
 
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--portrait", portrait_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--portrait",
+            portrait_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(status.success(), "--portrait without --input should succeed");
+    assert!(
+        status.success(),
+        "--portrait without --input should succeed"
+    );
     assert!(output_path.exists(), "output file should be created");
 }
 
@@ -167,15 +187,22 @@ fn cli_portrait_and_mpo_together_returns_error() {
     // --portrait と --mpo の同時指定は clap が conflicts_with でエラーにする
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--mpo", mpo_path.to_str().unwrap(),
-            "--portrait", portrait_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--mpo",
+            mpo_path.to_str().unwrap(),
+            "--portrait",
+            portrait_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(!status.success(), "--portrait and --mpo together should fail with clap conflicts_with error");
+    assert!(
+        !status.success(),
+        "--portrait and --mpo together should fail with clap conflicts_with error"
+    );
 }
 
 // ---------------------------------------------------------------
@@ -196,15 +223,22 @@ fn cli_portrait_and_depth_together_returns_error() {
 
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--portrait", portrait_path.to_str().unwrap(),
-            "--depth", depth_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--portrait",
+            portrait_path.to_str().unwrap(),
+            "--depth",
+            depth_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(!status.success(), "--portrait and --depth together should fail");
+    assert!(
+        !status.success(),
+        "--portrait and --depth together should fail"
+    );
 }
 
 // ---------------------------------------------------------------
@@ -222,14 +256,20 @@ fn cli_portrait_without_depth_filter_returns_error() {
 
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "protanopia",
-            "--portrait", portrait_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "protanopia",
+            "--portrait",
+            portrait_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(!status.success(), "--portrait with non-depth filter should fail");
+    assert!(
+        !status.success(),
+        "--portrait with non-depth filter should fail"
+    );
 }
 
 // ---------------------------------------------------------------
@@ -247,12 +287,18 @@ fn cli_portrait_invalid_jpeg_returns_error() {
 
     let status = cargo_run()
         .args([
-            "-o", output_path.to_str().unwrap(),
-            "--filter", "myopia-depth",
-            "--portrait", portrait_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--filter",
+            "myopia-depth",
+            "--portrait",
+            portrait_path.to_str().unwrap(),
         ])
         .status()
         .unwrap();
 
-    assert!(!status.success(), "portrait JPEG without GDepth:Data should fail");
+    assert!(
+        !status.success(),
+        "portrait JPEG without GDepth:Data should fail"
+    );
 }

@@ -20,25 +20,19 @@ const EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH: f32 = 1.5;
 /// Machado 2009 severity = 1.0 行列（行優先: row0col0, row0col1, row0col2, ...）。
 /// vision.rs の PROTANOPIA 定数と同じ値。
 pub const PROTANOPIA_MATRIX: [f32; 9] = [
-    0.152286, 1.052583, -0.204868,
-    0.114503, 0.786281,  0.099216,
-   -0.003882, -0.048116,  1.051998,
+    0.152286, 1.052583, -0.204868, 0.114503, 0.786281, 0.099216, -0.003882, -0.048116, 1.051998,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
 /// vision.rs の DEUTERANOPIA 定数と同じ値。
 pub const DEUTERANOPIA_MATRIX: [f32; 9] = [
-    0.367322, 0.860646, -0.227968,
-    0.280085, 0.672501,  0.047413,
-   -0.011820, 0.042940,  0.968881,
+    0.367322, 0.860646, -0.227968, 0.280085, 0.672501, 0.047413, -0.011820, 0.042940, 0.968881,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
 /// vision.rs の TRITANOPIA 定数と同じ値。
 pub const TRITANOPIA_MATRIX: [f32; 9] = [
-    1.255528, -0.076749, -0.178779,
-   -0.078411,  0.930809,  0.147602,
-    0.004733,  0.691367,  0.303900,
+    1.255528, -0.076749, -0.178779, -0.078411, 0.930809, 0.147602, 0.004733, 0.691367, 0.303900,
 ];
 
 // ---------------------------------------------------------------------------
@@ -441,7 +435,10 @@ pub fn achromatopsia_uniforms(strength: f32) -> LumaUniforms {
 pub fn myopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * MYOPIA_MAX_RADIUS_RATIO * image_min_dim as f32;
-    BlurUniforms { strength, radius_px }
+    BlurUniforms {
+        strength,
+        radius_px,
+    }
 }
 
 /// hyperopia の uniform を計算する。
@@ -450,7 +447,10 @@ pub fn myopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 pub fn hyperopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * HYPEROPIA_MAX_RADIUS_RATIO * image_min_dim as f32;
-    BlurUniforms { strength, radius_px }
+    BlurUniforms {
+        strength,
+        radius_px,
+    }
 }
 
 /// presbyopia の uniform を計算する。
@@ -459,7 +459,10 @@ pub fn hyperopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 pub fn presbyopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * PRESBYOPIA_MAX_RADIUS_RATIO * image_min_dim as f32;
-    BlurUniforms { strength, radius_px }
+    BlurUniforms {
+        strength,
+        radius_px,
+    }
 }
 
 /// astigmatism の uniform を計算する。
@@ -469,10 +472,13 @@ pub fn presbyopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 ///   vision::astigmatism() と同じ規約で、**ぼかし方向 = axis_deg + 90°**。
 ///   シェーダ (`astigmatism.frag`) の `uAxisDeg` uniform にはぼかし方向を渡す。
 ///   呼び出し元は vision.rs と同じ「シャープ方向」で渡せばよい。
-pub fn astigmatism_uniforms(strength: f32, image_min_dim: u32, axis_deg: f32) -> AstigmatismUniforms {
+pub fn astigmatism_uniforms(
+    strength: f32,
+    image_min_dim: u32,
+    axis_deg: f32,
+) -> AstigmatismUniforms {
     let strength = crate::vision::normalize_strength(strength);
-    let radius_px =
-        strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
+    let radius_px = strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
     // vision.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
     let blur_axis_deg = axis_deg + 90.0;
     AstigmatismUniforms {
@@ -629,7 +635,11 @@ pub fn glaucoma_uniforms(
 /// macular_degeneration の uniform を計算する。
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使用。
-pub fn macular_degeneration_uniforms(strength: f32, width: u32, height: u32) -> FieldOfVisionUniforms {
+pub fn macular_degeneration_uniforms(
+    strength: f32,
+    width: u32,
+    height: u32,
+) -> FieldOfVisionUniforms {
     let strength = crate::vision::normalize_strength(strength);
     FieldOfVisionUniforms {
         strength,
@@ -752,7 +762,11 @@ pub fn tetrachromacy_uniforms(strength: f32) -> TetrachromacyUniforms {
 }
 
 /// vestibular_neuritis の uniform を計算する。
-pub fn vestibular_neuritis_uniforms(strength: f32, width: u32, height: u32) -> VestibularNeuritisUniforms {
+pub fn vestibular_neuritis_uniforms(
+    strength: f32,
+    width: u32,
+    height: u32,
+) -> VestibularNeuritisUniforms {
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * 0.04 * width as f32;
     let shift_texel = strength.clamp(0.0, 1.0) * 0.05;
@@ -791,7 +805,12 @@ pub fn vertigo_uniforms(strength: f32, time: f32, width: u32, height: u32) -> Ve
 /// bppv_rotation の uniform を計算する。
 ///
 /// `width`, `height`: 画像サイズ（ピクセル）。aspect 補正に使う。
-pub fn bppv_rotation_uniforms(strength: f32, time: f32, width: u32, height: u32) -> BppvRotationUniforms {
+pub fn bppv_rotation_uniforms(
+    strength: f32,
+    time: f32,
+    width: u32,
+    height: u32,
+) -> BppvRotationUniforms {
     let strength = crate::vision::normalize_strength(strength);
     BppvRotationUniforms {
         strength,
@@ -1012,9 +1031,15 @@ mod tests {
     fn astigmatism_uniforms_blur_axis_is_sharp_plus_90() {
         // vision.rs 規約: axis_deg はシャープ方向。ぼかし方向 = axis_deg + 90°
         let u = astigmatism_uniforms(1.0, 1000, 45.0);
-        assert!((u.axis_deg - 135.0).abs() < 1e-4, "45° シャープ → 135° ぼかし");
+        assert!(
+            (u.axis_deg - 135.0).abs() < 1e-4,
+            "45° シャープ → 135° ぼかし"
+        );
         let u2 = astigmatism_uniforms(1.0, 1000, 90.0);
-        assert!((u2.axis_deg - 180.0).abs() < 1e-4, "90° シャープ → 180° ぼかし");
+        assert!(
+            (u2.axis_deg - 180.0).abs() < 1e-4,
+            "90° シャープ → 180° ぼかし"
+        );
     }
 
     #[test]
@@ -1077,10 +1102,22 @@ mod tests {
     #[test]
     fn glaucoma_uniforms_mode_mapping() {
         use crate::vision::GlaucomaMode;
-        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Vignette).mode, 0);
-        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::ArcuateSuperior).mode, 1);
-        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::ArcuateInferior).mode, 2);
-        assert_eq!(glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Biarcuate).mode, 3);
+        assert_eq!(
+            glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Vignette).mode,
+            0
+        );
+        assert_eq!(
+            glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::ArcuateSuperior).mode,
+            1
+        );
+        assert_eq!(
+            glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::ArcuateInferior).mode,
+            2
+        );
+        assert_eq!(
+            glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Biarcuate).mode,
+            3
+        );
     }
 
     #[test]
@@ -1141,7 +1178,13 @@ mod tests {
         // max_radius_px = ratio * min(w,h) = 0.023 * 100
         assert!((u.max_radius_px - 2.3).abs() < 1e-5);
         assert!((u.texel_size[0] - 0.01).abs() < 1e-6);
-        assert_eq!(depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::Hyperopia, 100, 200).kind, 1);
-        assert_eq!(depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::DepthOfField, 100, 200).kind, 2);
+        assert_eq!(
+            depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::Hyperopia, 100, 200).kind,
+            1
+        );
+        assert_eq!(
+            depth_aware_blur_uniforms(0.5, 0.023, DepthBlurKind::DepthOfField, 100, 200).kind,
+            2
+        );
     }
 }

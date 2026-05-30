@@ -10,10 +10,10 @@ accessibility demos, educational tools, and apps like
 
 ## Status
 
-**v0.4.0** — stable release on [crates.io](https://crates.io/crates/sensus).
+**v0.5.0** — published on [crates.io](https://crates.io/crates/sensus).
 All vision filters through Phase 4 (color vision, refraction, visual field,
 light/transparency, balance/vertigo, eye fatigue, and more) are implemented,
-plus 15 hearing filters (usable from the CLI via `--audio`). See
+plus 14 hearing filters (usable from the CLI via `--audio`). See
 [`docs/roadmap.md`](docs/roadmap.md) for the full phase tracker.
 
 ## Filters
@@ -48,9 +48,12 @@ plus 15 hearing filters (usable from the CLI via `--audio`). See
 | `eye-strain`            | ✅ implemented | 4 (#36) | Contrast loss, vignette, slight blur |
 | `dry-eye`               | ✅ implemented | 4 (#36) | Tear-film tile distortion |
 
-Additional vision filters available through the library `Filter` enum:
-`metamorphopsia` (#55), `contrast_sensitivity` (#56), `detail_loss` (#57),
-`teichopsia` (#58), and `flickering_stars`.
+Additional vision filters (library `Filter` enum **and** CLI `--filter`):
+`metamorphopsia` (#55), `contrast-sensitivity` (#56), `detail-loss` (#57),
+`teichopsia` (#58), and `flickering-stars` (#59). The library function names
+use underscores (`contrast_sensitivity`, `detail_loss`, `flickering_stars`);
+the CLI flag names and the `night-blindness` / `nyctalopia` pair follow the
+kebab-case ↔ snake-case mapping clap derives.
 
 Depth-aware refraction is also available **CLI-side only** via
 `--filter myopia-depth` / `hyperopia-depth` / `depth-of-field` combined with
@@ -58,7 +61,7 @@ Depth-aware refraction is also available **CLI-side only** via
 
 ### Hearing (library + CLI)
 
-15 hearing filters operate on audio buffers (#7–#9, #102–#104): `hearing_loss`,
+14 hearing filters operate on audio buffers (#7–#9, #102–#104): `hearing_loss`,
 `sudden_hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`,
 `hyperacusis`, `misophonia`, `paracusis`, `amusia`, `dysmelodia`,
 `pitch_shift_semitones`, `diplacusis`, `auditory_processing_disorder` (APD),
@@ -141,9 +144,20 @@ Flags:
 | `--freq`           | Frequency (Hz) for `--hearing tinnitus` / `sudden-hearing-loss` / `misophonia`. Default `4000`. |
 | `--semitones`      | Semitones for `--hearing pitch-shift` (negative = lower). Default `0.0`. |
 | `-s`, `--strength` | Strength `0.0 – 1.0`. `0.0` keeps the original; `1.0` is full effect. Default `1.0`. |
-| `--axis`           | Astigmatism cylinder axis in degrees `0.0 – 180.0`. Only used with `--filter astigmatism`. Default `90.0` (with-the-rule: vertical lines sharp, horizontal blurred). |
+| `--axis`           | Astigmatism cylinder axis in degrees `0.0 – 180.0` (astigmatism only). Default `90.0` (with-the-rule: vertical lines sharp, horizontal blurred). |
+| `--seed`           | Random seed for stochastic filters (`cataract`, `floaters`, `flickering-stars`). Default `0`. |
+| `--density`, `--gaze-x`, `--gaze-y`, `--size` | `floaters`: blob density `0–1`, gaze position `0–1`, and size multiplier `0.1–5.0`. |
+| `--side`           | `hemianopia` side: `0.0` = left field lost, `1.0` = right field lost. |
+| `--offset-x`, `--offset-y`, `--ghost-strength` | `diplopia` ghost-image offsets (`min(W,H)` ratio) and ghost strength. |
+| `--amplitude`, `--direction-deg` | `nystagmus` motion amplitude (`min(W,H)` ratio) and direction in degrees. |
+| `--num-rays`, `--ray-length`, `--threshold`, `--dispersion` | `starbursts`: ray count, ray length (`min(W,H)` ratio), brightness threshold, and chromatic dispersion (`0` = white, `1` = rainbow). |
+| `--cell-size`      | `detail-loss` pixelation tile size in pixels (`>= 1`; `1` = no effect). Default `8`. |
+| `--meta-freq`, `--meta-seed` | `metamorphopsia` distortion spatial frequency and field seed. |
+| `--depth`, `--mpo`, `--portrait`, `--focus` | Depth-map sources and focus depth for the `*-depth` / `depth-of-field` filters. |
 
-Run `sensus --help` for the full list of filter names.
+Per-filter parameter flags only affect their own filter; passing one to an
+unrelated single filter prints a warning and is otherwise ignored.
+Run `sensus --help` for the full list of filter names and flags.
 
 ## Library usage
 
@@ -153,7 +167,7 @@ get a `DynamicImage` out.
 ```toml
 # Cargo.toml
 [dependencies]
-sensus-core = "0.4"
+sensus-core = "0.5"
 ```
 
 ```rust
@@ -169,9 +183,10 @@ fn examples(img: DynamicImage) -> sensus_core::Result<()> {
     let _astig  = vision::astigmatism(img.clone(), 0.5, 45.0)?; // axis in degrees
 
     // Or via the dispatching facade (handy when the filter is dynamic).
-    // `apply()` always uses the default 90° axis for astigmatism — call
-    // `vision::astigmatism()` directly if you need a custom axis.
-    let _shifted = apply(Filter::Protanopia, img, 1.0)?;
+    // Filter-specific parameters travel in the enum variant, so `apply()`
+    // honours them (e.g. the astigmatism axis below):
+    let _shifted = apply(Filter::Protanopia, img.clone(), 1.0)?;
+    let _astig2  = apply(Filter::Astigmatism { axis_deg: 45.0 }, img, 1.0)?;
     Ok(())
 }
 ```

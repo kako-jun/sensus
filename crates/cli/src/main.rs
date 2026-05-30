@@ -8,7 +8,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
-use sensus_core::{pipeline::{FilterStep, Pipeline}, stereo::{split_mpo, stereo_to_depth, read_xmp_depth}, vision::{depth_aware_blur, DepthBlurKind}, AudioPipeline, Error as CoreError, Filter as CoreFilter, HearingFilter};
+use sensus_core::{
+    pipeline::{FilterStep, Pipeline},
+    stereo::{read_xmp_depth, split_mpo, stereo_to_depth},
+    vision::{depth_aware_blur, DepthBlurKind},
+    AudioPipeline, Error as CoreError, Filter as CoreFilter, HearingFilter,
+};
 use thiserror::Error;
 
 mod audio;
@@ -57,6 +62,12 @@ enum Filter {
     // Phase 4: 眼精疲労・ドライアイ (Issue #36)
     EyeStrain,
     DryEye,
+    // Phase N: 変視症・コントラスト感度低下・ディテールロス・閃輝暗点 (Issue #55-#59)
+    Metamorphopsia,
+    ContrastSensitivity,
+    DetailLoss,
+    Teichopsia,
+    FlickeringStars,
     // Phase N: 深度マップ対応距離依存ぼけ (Issue #19)
     MyopiaDepth,
     HyperopiaDepth,
@@ -65,7 +76,10 @@ enum Filter {
 
 impl Filter {
     fn is_depth_filter(self) -> bool {
-        matches!(self, Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField)
+        matches!(
+            self,
+            Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField
+        )
     }
 
     fn depth_kind(self) -> Option<DepthBlurKind> {
@@ -77,8 +91,12 @@ impl Filter {
         }
     }
 
-    /// Map the CLI-facing enum (clap derive) to the core enum.
-    fn to_core(self) -> CoreFilter {
+    /// Map the CLI-facing enum (clap derive) to the core enum, pulling
+    /// filter-specific parameters from the parsed `cli` flags.
+    ///
+    /// すべてのフィルタ固有パラメータは core `Filter` の payload に詰める。
+    /// pipeline / apply はこの payload だけを読むため、CLI フラグが無視されることはない。
+    fn to_core(self, cli: &Cli) -> CoreFilter {
         match self {
             Filter::Protanopia => CoreFilter::Protanopia,
             Filter::Deuteranopia => CoreFilter::Deuteranopia,
@@ -87,24 +105,54 @@ impl Filter {
             Filter::Tetrachromacy => CoreFilter::Tetrachromacy,
             Filter::Myopia => CoreFilter::Myopia,
             Filter::Hyperopia => CoreFilter::Hyperopia,
-            Filter::Astigmatism => CoreFilter::Astigmatism { axis_deg: 90.0 },
+            Filter::Astigmatism => CoreFilter::Astigmatism { axis_deg: cli.axis },
             Filter::Presbyopia => CoreFilter::Presbyopia,
-            Filter::Glaucoma => CoreFilter::Glaucoma { mode: sensus_core::vision::GlaucomaMode::Vignette },
+            Filter::Glaucoma => CoreFilter::Glaucoma {
+                mode: sensus_core::vision::GlaucomaMode::Vignette,
+            },
             Filter::MacularDegeneration => CoreFilter::MacularDegeneration,
-            Filter::Hemianopia => CoreFilter::Hemianopia { side: 0.0 },
+            Filter::Hemianopia => CoreFilter::Hemianopia { side: cli.side },
             Filter::TunnelVision => CoreFilter::TunnelVision,
-            Filter::Cataract => CoreFilter::Cataract,
-            Filter::Floaters => CoreFilter::Floaters { seed: 0, density: 0.5, size: 1.0 },
+            Filter::Cataract => CoreFilter::Cataract { seed: cli.seed },
+            Filter::Floaters => CoreFilter::Floaters {
+                seed: cli.seed,
+                density: cli.density,
+                size: cli.size,
+                gaze_x: cli.gaze_x,
+                gaze_y: cli.gaze_y,
+            },
             Filter::Photophobia => CoreFilter::Photophobia,
             Filter::NightBlindness => CoreFilter::NightBlindness,
             Filter::Vertigo => CoreFilter::Vertigo,
             Filter::BppvRotation => CoreFilter::BppvRotation,
             Filter::VestibularNeuritis => CoreFilter::VestibularNeuritis,
-            Filter::Diplopia => CoreFilter::Diplopia,
-            Filter::Nystagmus => CoreFilter::Nystagmus,
-            Filter::Starbursts => CoreFilter::Starbursts { num_rays: 6, ray_length_ratio: 0.1, threshold: 0.8, dispersion: 0.0 },
+            Filter::Diplopia => CoreFilter::Diplopia {
+                offset_x: cli.offset_x,
+                offset_y: cli.offset_y,
+                ghost_strength: cli.ghost_strength,
+            },
+            Filter::Nystagmus => CoreFilter::Nystagmus {
+                amplitude: cli.amplitude,
+                direction_deg: cli.direction_deg,
+            },
+            Filter::Starbursts => CoreFilter::Starbursts {
+                num_rays: cli.num_rays,
+                ray_length_ratio: cli.ray_length,
+                threshold: cli.threshold,
+                dispersion: cli.dispersion,
+            },
             Filter::EyeStrain => CoreFilter::EyeStrain,
             Filter::DryEye => CoreFilter::DryEye,
+            Filter::Metamorphopsia => CoreFilter::Metamorphopsia {
+                freq: cli.meta_freq,
+                seed: cli.meta_seed,
+            },
+            Filter::ContrastSensitivity => CoreFilter::ContrastSensitivity,
+            Filter::DetailLoss => CoreFilter::DetailLoss {
+                cell_size: cli.cell_size,
+            },
+            Filter::Teichopsia => CoreFilter::Teichopsia,
+            Filter::FlickeringStars => CoreFilter::FlickeringStars { seed: cli.seed },
             Filter::MyopiaDepth | Filter::HyperopiaDepth | Filter::DepthOfField => {
                 // depth フィルタは pipeline を通さないため、ここには来ない
                 unreachable!("depth filters must be handled separately")
@@ -163,7 +211,9 @@ impl Hearing {
             Hearing::Paracusis => HearingFilter::Paracusis,
             Hearing::Amusia => HearingFilter::Amusia,
             Hearing::Dysmelodia => HearingFilter::Dysmelodia,
-            Hearing::PitchShift => HearingFilter::PitchShift { semitones: cli.semitones },
+            Hearing::PitchShift => HearingFilter::PitchShift {
+                semitones: cli.semitones,
+            },
             Hearing::Diplacusis => HearingFilter::Diplacusis,
             Hearing::AuditoryProcessingDisorder => HearingFilter::AuditoryProcessingDisorder,
             Hearing::Meniere => HearingFilter::Meniere,
@@ -213,6 +263,11 @@ struct Cli {
     /// Gaze Y position in 0.0..=1.0 (0=top, 1=bottom). Only used with --filter floaters.
     #[arg(long, default_value = "0.5")]
     gaze_y: f32,
+
+    /// Floater size multiplier (0.1..=5.0). 1.0 = default blob radius / thread width.
+    /// Only used with --filter floaters.
+    #[arg(long, default_value = "1.0", value_parser = parse_floater_size)]
+    size: f32,
 
     /// Hemianopia side: 0.0 = left field lost, 1.0 = right field lost.
     /// Only used with --filter hemianopia.
@@ -269,6 +324,25 @@ struct Cli {
     /// Starbursts brightness threshold (0.0..=1.0). Default: 0.8
     #[arg(long, default_value = "0.8", value_parser = parse_ratio)]
     threshold: f32,
+
+    /// Starbursts chromatic dispersion (0.0..=1.0). 0.0 = white rays, 1.0 = full rainbow.
+    /// Only used with --filter starbursts. Default: 0.0
+    #[arg(long, default_value = "0.0", value_parser = parse_ratio)]
+    dispersion: f32,
+
+    /// Detail-loss tile size in pixels (>= 1; 1 = no effect). Only used with --filter detail-loss.
+    /// Default: 8
+    #[arg(long, default_value = "8")]
+    cell_size: u32,
+
+    /// Metamorphopsia distortion spatial frequency. Only used with --filter metamorphopsia.
+    /// Default: 4.0
+    #[arg(long, default_value = "4.0", value_parser = parse_meta_freq)]
+    meta_freq: f32,
+
+    /// Metamorphopsia distortion-field seed. Only used with --filter metamorphopsia. Default: 0
+    #[arg(long, default_value = "0")]
+    meta_seed: u64,
 
     /// Read JPEG frames from stdin and write filtered JPEG frames to stdout (ffmpeg pipe mode).
     /// Cannot be combined with --input.
@@ -327,6 +401,29 @@ fn parse_signed_ratio(s: &str) -> Result<f32, String> {
     Ok(v)
 }
 
+/// Parse `--size` (floater size multiplier) in `0.1..=5.0`.
+/// core 側も同じ範囲に clamp するが (#110)、誤入力を早期に弾く。
+fn parse_floater_size(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if !v.is_finite() || !(0.1..=5.0).contains(&v) {
+        return Err(format!("size must be in 0.1..=5.0, got {v}"));
+    }
+    Ok(v)
+}
+
+/// Parse `--meta-freq` (metamorphopsia spatial frequency). 有限かつ正の値。
+fn parse_meta_freq(s: &str) -> Result<f32, String> {
+    let v: f32 = s
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+    if !v.is_finite() || v <= 0.0 {
+        return Err(format!("meta-freq must be finite and > 0.0, got {v}"));
+    }
+    Ok(v)
+}
+
 /// Parse the `--focus` argument and reject values outside `0.0..=1.0` or NaN.
 fn parse_focus(s: &str) -> Result<f32, String> {
     let v: f32 = s
@@ -357,7 +454,9 @@ fn parse_freq(s: &str) -> Result<f32, String> {
         .parse()
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if !v.is_finite() || v <= 0.0 || v > 20000.0 {
-        return Err(format!("freq must be in 0.0 (exclusive)..=20000.0 Hz, got {v}"));
+        return Err(format!(
+            "freq must be in 0.0 (exclusive)..=20000.0 Hz, got {v}"
+        ));
     }
     Ok(v)
 }
@@ -368,7 +467,9 @@ fn parse_semitones(s: &str) -> Result<f32, String> {
         .parse()
         .map_err(|e: std::num::ParseFloatError| e.to_string())?;
     if !v.is_finite() || !(-48.0..=48.0).contains(&v) {
-        return Err(format!("semitones must be finite and in -48.0..=48.0, got {v}"));
+        return Err(format!(
+            "semitones must be finite and in -48.0..=48.0, got {v}"
+        ));
     }
     Ok(v)
 }
@@ -477,6 +578,40 @@ fn main() -> ExitCode {
     }
 }
 
+/// 単一フィルタ指定時に、そのフィルタが使わないパラメータフラグが
+/// 明示的に変更されていれば警告する（best-effort な UX 補助。挙動には影響しない）。
+fn warn_unused_flags(cli: &Cli, core_filter: CoreFilter) {
+    if !matches!(core_filter, CoreFilter::Astigmatism { .. }) && cli.axis != 90.0 {
+        eprintln!(
+            "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
+        );
+    }
+    let uses_seed = matches!(
+        core_filter,
+        CoreFilter::Cataract { .. }
+            | CoreFilter::Floaters { .. }
+            | CoreFilter::FlickeringStars { .. }
+    );
+    if !uses_seed && cli.seed != 0 {
+        eprintln!(
+            "sensus: warning: --seed is only used with --filter cataract / floaters / flickering-stars (ignored for {core_filter:?})"
+        );
+    }
+    let uses_floater_params = matches!(core_filter, CoreFilter::Floaters { .. });
+    if !uses_floater_params
+        && (cli.density != 0.5 || cli.gaze_x != 0.5 || cli.gaze_y != 0.5 || cli.size != 1.0)
+    {
+        eprintln!(
+            "sensus: warning: --density/--gaze-x/--gaze-y/--size are only used with --filter floaters (ignored for {core_filter:?})"
+        );
+    }
+    if !matches!(core_filter, CoreFilter::Hemianopia { .. }) && cli.side != 0.0 {
+        eprintln!(
+            "sensus: warning: --side is only used with --filter hemianopia (ignored for {core_filter:?})"
+        );
+    }
+}
+
 fn run(cli: Cli) -> Result<(), RunError> {
     // --audio モード: WAV を読み、聴覚フィルタチェーンを適用して WAV に書き出す
     if let Some(audio_path) = cli.audio.clone() {
@@ -511,14 +646,20 @@ fn run(cli: Cli) -> Result<(), RunError> {
             path: mpo_path.clone(),
             source,
         })?;
-        let (left, right) = split_mpo(&bytes)
-            .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
+        let (left, right) =
+            split_mpo(&bytes).map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
         let depth_img = stereo_to_depth(&left, &right)
             .map_err(|e| RunError::MpoError(format!("sensus: {e}")))?;
         // #108: depth 以外のフィルタを左目画像に先に適用してから depth blur
         let base = apply_non_depth_filters(left, &cli)?;
-        let out = depth_aware_blur(base, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
-            .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
+        let out = depth_aware_blur(
+            base,
+            &depth_img,
+            cli.focus,
+            cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO,
+            kind,
+        )
+        .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
             path: out_path.clone(),
@@ -566,8 +707,14 @@ fn run(cli: Cli) -> Result<(), RunError> {
 
         // #108: depth 以外のフィルタを先に適用してから depth blur
         let base = apply_non_depth_filters(source_img, &cli)?;
-        let out = depth_aware_blur(base, &depth_map, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
-            .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
+        let out = depth_aware_blur(
+            base,
+            &depth_map,
+            cli.focus,
+            cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO,
+            kind,
+        )
+        .map_err(|e| RunError::PortraitError(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
             path: out_path.clone(),
@@ -608,8 +755,14 @@ fn run(cli: Cli) -> Result<(), RunError> {
         })?;
         // #108: depth 以外のフィルタを先に適用してから depth blur で合成
         let base = apply_non_depth_filters(img, &cli)?;
-        let out = depth_aware_blur(base, &depth_img, cli.focus, cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO, kind)
-            .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
+        let out = depth_aware_blur(
+            base,
+            &depth_img,
+            cli.focus,
+            cli.strength * DEPTH_BLUR_MAX_RADIUS_RATIO,
+            kind,
+        )
+        .map_err(|e| RunError::Pipeline(format!("sensus: {e}")))?;
         let out_path = cli.output.as_ref().unwrap();
         return out.save(out_path).map_err(|source| RunError::OutputSave {
             path: out_path.clone(),
@@ -620,49 +773,11 @@ fn run(cli: Cli) -> Result<(), RunError> {
     // Build pipeline from --filter list (must not be empty; clap enforces num_args=1..)
     let mut pipeline = Pipeline::new();
     for f in &cli.filter {
-        let core_filter = f.to_core();
-        let mut step = FilterStep::new(core_filter, cli.strength);
-        step.axis = cli.axis;
-        step.seed = cli.seed;
-        step.density = cli.density;
-        step.gaze_x = cli.gaze_x;
-        step.gaze_y = cli.gaze_y;
-        step.side = cli.side;
-        step.offset_x = cli.offset_x;
-        step.offset_y = cli.offset_y;
-        step.ghost_strength = cli.ghost_strength;
-        step.amplitude = cli.amplitude;
-        step.direction_deg = cli.direction_deg;
-        step.num_rays = cli.num_rays;
-        step.ray_length_ratio = cli.ray_length;
-        step.threshold = cli.threshold;
-        pipeline = pipeline.push(step);
+        let core_filter = f.to_core(&cli);
+        pipeline = pipeline.push(FilterStep::new(core_filter, cli.strength));
     }
     if cli.filter.len() == 1 {
-        let core_filter = cli.filter[0].to_core();
-        if !matches!(core_filter, CoreFilter::Astigmatism { .. }) && cli.axis != 90.0 {
-            eprintln!(
-                "sensus: warning: --axis is only used with --filter astigmatism (ignored for {core_filter:?})"
-            );
-        }
-        let uses_seed = matches!(core_filter, CoreFilter::Cataract | CoreFilter::Floaters { .. });
-        let uses_floater_params = matches!(core_filter, CoreFilter::Floaters { .. });
-        if !uses_seed && cli.seed != 0 {
-            eprintln!(
-                "sensus: warning: --seed is only used with --filter cataract or floaters (ignored for {core_filter:?})"
-            );
-        }
-        if !uses_floater_params && (cli.density != 0.5 || cli.gaze_x != 0.5 || cli.gaze_y != 0.5) {
-            eprintln!(
-                "sensus: warning: --density/--gaze-x/--gaze-y are only used with --filter floaters (ignored for {core_filter:?})"
-            );
-        }
-        let uses_side = matches!(core_filter, CoreFilter::Hemianopia { .. });
-        if !uses_side && cli.side != 0.0 {
-            eprintln!(
-                "sensus: warning: --side is only used with --filter hemianopia (ignored for {core_filter:?})"
-            );
-        }
+        warn_unused_flags(&cli, cli.filter[0].to_core(&cli));
     }
 
     let result = pipeline.apply(img);
@@ -670,11 +785,10 @@ fn run(cli: Cli) -> Result<(), RunError> {
     match result {
         Ok(out) => {
             let out_path = cli.output.as_ref().unwrap();
-            out.save(out_path)
-                .map_err(|source| RunError::OutputSave {
-                    path: out_path.clone(),
-                    source,
-                })?;
+            out.save(out_path).map_err(|source| RunError::OutputSave {
+                path: out_path.clone(),
+                source,
+            })?;
             Ok(())
         }
         Err(CoreError::Image(err)) => Err(RunError::InputOpen {
@@ -695,7 +809,8 @@ fn run_audio(cli: &Cli, audio_path: &Path) -> Result<(), RunError> {
     }
     if !cli.filter.is_empty() {
         return Err(RunError::AudioError(
-            "sensus: --audio (hearing) cannot be combined with --filter (image filters)".to_string(),
+            "sensus: --audio (hearing) cannot be combined with --filter (image filters)"
+                .to_string(),
         ));
     }
     let out_path = cli.output.as_ref().ok_or_else(|| {
@@ -727,23 +842,8 @@ fn apply_filters_to_image(
 ) -> Result<image::DynamicImage, RunError> {
     let mut pipeline = Pipeline::new();
     for f in &cli.filter {
-        let core_filter = f.to_core();
-        let mut step = FilterStep::new(core_filter, cli.strength);
-        step.axis = cli.axis;
-        step.seed = cli.seed;
-        step.density = cli.density;
-        step.gaze_x = cli.gaze_x;
-        step.gaze_y = cli.gaze_y;
-        step.side = cli.side;
-        step.offset_x = cli.offset_x;
-        step.offset_y = cli.offset_y;
-        step.ghost_strength = cli.ghost_strength;
-        step.amplitude = cli.amplitude;
-        step.direction_deg = cli.direction_deg;
-        step.num_rays = cli.num_rays;
-        step.ray_length_ratio = cli.ray_length;
-        step.threshold = cli.threshold;
-        pipeline = pipeline.push(step);
+        let core_filter = f.to_core(cli);
+        pipeline = pipeline.push(FilterStep::new(core_filter, cli.strength));
     }
     pipeline
         .apply(img)
@@ -767,23 +867,8 @@ fn apply_non_depth_filters(
     // 非 depth フィルタだけで Pipeline を組む。空なら Pipeline::apply は恒等。
     let mut pipeline = Pipeline::new();
     for f in cli.filter.iter().filter(|f| !f.is_depth_filter()) {
-        let core_filter = f.to_core();
-        let mut step = FilterStep::new(core_filter, cli.strength);
-        step.axis = cli.axis;
-        step.seed = cli.seed;
-        step.density = cli.density;
-        step.gaze_x = cli.gaze_x;
-        step.gaze_y = cli.gaze_y;
-        step.side = cli.side;
-        step.offset_x = cli.offset_x;
-        step.offset_y = cli.offset_y;
-        step.ghost_strength = cli.ghost_strength;
-        step.amplitude = cli.amplitude;
-        step.direction_deg = cli.direction_deg;
-        step.num_rays = cli.num_rays;
-        step.ray_length_ratio = cli.ray_length;
-        step.threshold = cli.threshold;
-        pipeline = pipeline.push(step);
+        let core_filter = f.to_core(cli);
+        pipeline = pipeline.push(FilterStep::new(core_filter, cli.strength));
     }
     pipeline
         .apply(img)
@@ -834,7 +919,7 @@ fn split_jpeg_frames(data: &[u8]) -> Vec<&[u8]> {
         }
         let frame_start = i;
         i += 2; // SOI を消費
-        // マーカーを走査して EOI (FFD9) を探す
+                // マーカーを走査して EOI (FFD9) を探す
         'frame: loop {
             // 0xFF を探す
             while i < data.len() && data[i] != 0xFF {

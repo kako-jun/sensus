@@ -55,13 +55,14 @@ sensus/
 
 - **WASM ターゲットは持たない** — sensus の主クライアントは universal-experience（Flutter の native）。Web GUI はやらない方針なので、wasm32 用の getrandom 等の追加依存は避ける
 - **入出力は `image::DynamicImage` で統一** — orber と同じ規約。動画はフレーム単位で同関数を呼ぶ
-- **CLI は scaffold（#1）では未実装メッセージで `exit(2)`** — Phase 1（#2）で `--filter deuteranopia` から実装を埋める
+- **CLI の終了コードは成功 0 / 失敗 1 の 2 値**（#111 で旧 scaffold の未実装 `exit(2)` 経路を削除済み。全 `Filter` バリアントは実装済みで `apply()` の match は網羅的）
 - **色覚特性は linear sRGB + Machado 2009 severity=1.0 行列 + linear blend** — gamma 適用済み sRGB に直接行列を掛けない。中間 strength は linear 空間で補間する。`achromatopsia` だけは LMS 経路を捨てて BT.709 photopic luminance（NTSC 用 BT.601 ではない）でグレースケール化する
-- **焦点・屈折 (Phase 2 / #4) は disk blur (pillbox) を linear sRGB で適用** — Gaussian は採用しない（defocus の点像は瞳孔 = 円の投影 = circle of confusion であり Gaussian ではない）。strength → 画素半径の換算前提は「Smith-Helmholtz `θ_diameter ≈ pupil(m) × |D|`、radius = θ/2」「視距離 50 cm / 画像 FOV 30° ≈ 0.5236 rad」「`min(W,H)` 比率で myopia 2.3% / hyperopia 1.5% / presbyopia 1.1% / astigmatism 1.1% (ボケ軸のみ)」。境界は edge replication、内側は per-row span + horizontal prefix sum で `O(W·H·kernel_height)` に抑える。astigmatism は **1D directional blur (純粋 cylinder lens の line spread function)** で実装 — `axis_deg` は **シャープ方向 (cylinder lens 軸)** を指す医学的慣習で、ボケ方向は `axis_deg + 90°`。短軸は `MIN_BLUR_RADIUS_PX = 0.5 px` で sub-pixel に縮退し、1 行の directional box filter として動作。`apply()` ファサードは既定軸 90°、軸を変えたい場合は `vision::astigmatism()` を直接呼ぶ。臨床合併乱視は #10 pipeline で myopia + astigmatism を合成する想定
+- **焦点・屈折 (Phase 2 / #4) は disk blur (pillbox) を linear sRGB で適用** — Gaussian は採用しない（defocus の点像は瞳孔 = 円の投影 = circle of confusion であり Gaussian ではない）。strength → 画素半径の換算前提は「Smith-Helmholtz `θ_diameter ≈ pupil(m) × |D|`、radius = θ/2」「視距離 50 cm / 画像 FOV 30° ≈ 0.5236 rad」「`min(W,H)` 比率で myopia 2.3% / hyperopia 1.5% / presbyopia 1.1% / astigmatism 1.1% (ボケ軸のみ)」。境界は edge replication、内側は per-row span + horizontal prefix sum で `O(W·H·kernel_height)` に抑える。astigmatism は **1D directional blur (純粋 cylinder lens の line spread function)** で実装 — `axis_deg` は **シャープ方向 (cylinder lens 軸)** を指す医学的慣習で、ボケ方向は `axis_deg + 90°`。短軸は `MIN_BLUR_RADIUS_PX = 0.5 px` で sub-pixel に縮退し、1 行の directional box filter として動作。軸は `Filter::Astigmatism { axis_deg }` の payload で渡し（v0.5.0 で全パラメータを enum に一元化）、`apply()` / pipeline / CLI `--axis` のどれもこの軸を尊重する。CLI のデフォルトは 90°。臨床合併乱視は #10 pipeline で myopia + astigmatism を合成する想定
 - **フィルタは純粋関数** — 内部 RNG 状態を持たない。乱数が必要な場合は `seed` パラメータを明示的に受け取る（飛蚊症など）
 - **`strength` は 0.0..=1.0 に正規化** — 0.0 = 元画像、1.0 = フル効果
 - **clap derive を採用** — 引数定義はコード生成で簡潔に。`Filter` enum を `ValueEnum` で公開する
-- **医学的注記をドキュメントに付ける** — 各フィルタに「こうなったらすぐ病院へ」を併記。エンタメ + 早期発見の二重価値（vision: 半盲突発 = 即救急、飛蚊症急増 = 即受診、緑内障 / 黄斑変性 = 早期受診）
+- **医学的注記をドキュメントに付ける** — 各フィルタに「こうなったらすぐ病院へ」を併記。エンタメ + 早期発見の二重価値。緊急度は `Urgency` enum の 3 段（None / EarlyConsultation ⚠️ / Emergency 🚨）に統一し、`docs/overview.md`「Medical notes」表を正本とする（例: 半盲突発・突然の複視 = Emergency、緑内障 / 黄斑変性 = EarlyConsultation）
+- **フィルタ固有パラメータは `Filter` enum payload に一元化**（v0.5.0）— `FilterStep` は `{filter, strength}` のみ。`apply()` と `pipeline` は同じ enum payload を読むので単体適用と pipeline 適用は常に一致する。CLI は `Filter::to_core(&Cli)` でフラグから payload を構築する
 - **味覚 / 嗅覚 / 触覚はスコープ外** — 汎用デジタル出力経路がないため。sensus は視覚 + 聴覚に絞る
 - **release は GitHub Release のみ自動化** — crates.io publish はタグ駆動にせず `/publish` スキルから手動で発火する
 
