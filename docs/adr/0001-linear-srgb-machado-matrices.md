@@ -68,9 +68,9 @@ linear space, and the result is gamma-encoded back to sRGB
 ## References
 
 - `docs/overview.md` — "Color vision algorithm (Phase 1, #2)".
-- `crates/core/src/vision.rs` — module docstring (`## protanopia / deuteranopia
-  / tritanopia`, `# 色空間`) and `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA`
-  const definitions; `apply_machado_matrix`.
+- `crates/core/src/vision/mod.rs` — module docstring (`## protanopia / deuteranopia
+  / tritanopia`, `# 色空間`); `crates/core/src/vision/color.rs` — `PROTANOPIA` /
+  `DEUTERANOPIA` / `TRITANOPIA` const definitions and `apply_machado_matrix`.
 - `CLAUDE.md` — "主要な設計判断": *色覚特性は linear sRGB + Machado 2009
   severity=1.0 行列*.
 - [`matrix-provenance.md`](matrix-provenance.md).

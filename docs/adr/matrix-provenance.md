@@ -14,7 +14,7 @@ path).
 
 ## Scope
 
-| Constant (in `crates/core/src/vision.rs`) | Kind | Source |
+| Constant (in `crates/core/src/vision/color.rs`) | Kind | Source |
 |---|---|---|
 | `PROTANOPIA` | 3×3 CVD matrix, severity = 1.0 | Machado 2009 |
 | `DEUTERANOPIA` | 3×3 CVD matrix, severity = 1.0 | Machado 2009 |
@@ -44,7 +44,7 @@ deficiency. Each is the `3×3` operator that maps **linear sRGB → simulated
 linear sRGB** (the cone-space physiology is already pre-multiplied into this
 matrix — see ADR-0001; there is no separate LMS step).
 
-These are the exact values currently in `crates/core/src/vision.rs`:
+These are the exact values currently in `crates/core/src/vision/color.rs`:
 
 **`PROTANOPIA`** (type-1, L-cone deficiency)
 
@@ -129,17 +129,17 @@ The constants above are pinned against the source by a known-answer test (KAT),
 introduced in **#156**: `crates/core/tests/color_kat.rs`.
 
 The KAT is deliberately built to avoid tautology — it does **not** import the
-`vision.rs` consts:
+`vision/color.rs` consts:
 
 - The source matrices are **re-typed as independent literals** in the test
   (`SRC_PROTANOPIA` / `SRC_DEUTERANOPIA` / `SRC_TRITANOPIA`) with the DOI in a
   comment. These are a physically separate copy of the published values, so if
-  the `vision.rs` const drifts, the test's expectation and the implementation's
+  the `vision/color.rs` const drifts, the test's expectation and the implementation's
   output diverge and the KAT fails.
 - The BT.709 weights are likewise re-typed independently (`BT709` in the test).
 - The gamma round-trip, matrix multiply, blend, and 8-bit packing are
   **re-implemented inside the test** (a reference pipeline), so the test does
-  not call any `vision.rs` private function.
+  not call any `vision/` private function.
 - A handful of cases are additionally pinned with **offline-computed golden u8
   literals** (`golden_*` tests, exact equality), catching pipeline regressions
   as well as matrix drift.
@@ -157,7 +157,7 @@ A future proposal to change any value in this spec **must**:
 
 1. Identify the new source and cite it (DOI / URL), and apply the tie-break rule
    in §1 if it disagrees with the existing source.
-2. Update the const in `crates/core/src/vision.rs` **and** its derivation
+2. Update the const in `crates/core/src/vision/color.rs` **and** its derivation
    comment.
 3. Update this spec (the value table, the source, and the tie-break note).
 4. Update the **independent** literal copy in `crates/core/tests/color_kat.rs`
@@ -170,7 +170,7 @@ that keeps this spec, the code, and the tests in agreement.
 
 ## References
 
-- `crates/core/src/vision.rs` — `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA` /
+- `crates/core/src/vision/color.rs` — `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA` /
   `LUMA_R/G/B` consts and their derivation comments.
 - `crates/core/tests/color_kat.rs` — `SRC_*`, `BT709`, reference pipeline,
   `golden_*`, and `cross_check_*` tests.

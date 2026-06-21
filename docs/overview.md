@@ -34,7 +34,7 @@ sensus/
     │   ├── Cargo.toml      # crate-type = ["rlib"]
     │   └── src/
     │       ├── lib.rs       # Filter / HearingFilter enums, apply(), Experience, Urgency
-    │       ├── vision.rs    # color vision, refraction, visual field, light, balance/vertigo, eye fatigue, depth-aware blur, diplopia, nystagmus, starbursts, metamorphopsia, contrast, detail-loss, teichopsia, flickering-stars
+    │       ├── vision/      # 28 vision filters split by domain (color/refraction/field/light/motion/fatigue/phenomena) + common helpers; mod.rs re-exports all as vision::*
     │       ├── hearing.rs   # 14 hearing filters (loss, tinnitus, pitch, APD, Ménière, labyrinthitis, …)
     │       ├── shaders.rs   # GLSL ES 3.00 shader sources + uniform structs
     │       ├── shaders/     # *.frag shader source files (included via include_str!)

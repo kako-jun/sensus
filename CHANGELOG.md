@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **internal: split `vision` god-file into submodules (behavior unchanged)**: 約 5892 行に 28 フィルタが同居していた `crates/core/src/vision.rs` を、症状領域ごとの `vision/` サブモジュール（`color` / `refraction` / `field` / `light` / `motion` / `fatigue` / `phenomena`）＋クロスドメイン共有ヘルパー `common` に分割。`vision/mod.rs` が全公開アイテムを `pub use` で再エクスポートし、`crate::vision::*` の解決パスは分割前と完全に一致する（`lib.rs` の `apply()` / tests / CLI / universal-experience(FFI) の参照は不変）。純粋な移動リファクタで、ロジック・定数・数値・seed 既定・丸めは一切変更していない。298 unit test / KAT / shader_equivalence / CLI integration の全テストが緑であることを確認。
+
+### Added
+
+- **`vision::srgb_to_linear` / `vision::linear_to_srgb` are now public utilities**: GLSL の `srgbToLinear` / `linearToSrgb` と同一式の sRGB ⇄ linear gamma 変換を公開 util 化。`tests/shader_equivalence.rs` が private に持っていた同一式の重複定義を削除し、CPU 正本（`sensus_core::vision`）を参照するよう統合した（Issue #157）。
+
 ## [0.5.0] - 2026-05-30
 
 ### Added
