@@ -30,11 +30,12 @@ Simulation of Color Vision Deficiency"**, *IEEE Transactions on Visualization
 and Computer Graphics (TVCG)*.
 DOI: [10.1109/TVCG.2009.113](https://doi.org/10.1109/TVCG.2009.113).
 
-Public mirrors of the same numeric values:
+Corroborating references:
 
-- Author's supplementary page:
+- Author's supplementary page (carries the same severity-1.0 matrices verbatim):
   <https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html>
-- DaltonLens project: <https://daltonlens.org/>
+- DaltonLens project (independent analysis / reimplementation of the
+  Machado-family model; corroborates the values): <https://daltonlens.org/>
 
 ### Which cells
 
@@ -84,9 +85,9 @@ documented in ADR-0001 and ADR-0002.
 
 ### Tie-break rule when sources disagree
 
-The published paper, the author's supplementary page, and the DaltonLens public
-data **carry identical values**, so no tie-break was required for the current
-matrices. The standing rule, should a future source disagree:
+The published paper and the author's supplementary page **carry identical
+values**, and the DaltonLens analysis corroborates them, so no tie-break was
+required for the current matrices. The standing rule, should a future source disagree:
 
 1. The **IEEE TVCG paper / author's supplementary page is the primary source.**
    If a redistributor's value differs, the original takes precedence.
