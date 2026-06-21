@@ -11,7 +11,7 @@ from the code.
 `sensus` is the upstream source of truth for the perceptual simulation math.
 Before this directory existed, the design rationale was scattered across
 `CLAUDE.md` notes, `docs/overview.md` prose, and derivation comments in
-`crates/core/src/vision.rs`. The ADRs here promote that scattered reasoning into
+the `crates/core/src/vision/` modules. The ADRs here promote that scattered reasoning into
 formal, dated, individually-citable records. The scattered prose remains as a
 quick summary; **the ADRs are authoritative when they disagree.**
 

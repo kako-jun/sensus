@@ -71,8 +71,9 @@ cone matrix.
 - `docs/overview.md` — "Color vision algorithm": *the filter computes the CIE
   photopic luminance Y = 0.2126·R + 0.7152·G + 0.0722·B (BT.709 primaries,
   linear) … BT.601 luma … is not used*.
-- `crates/core/src/vision.rs` — module docstring (`## achromatopsia`,
-  `BT.601 … は使わない`); `LUMA_R` / `LUMA_G` / `LUMA_B` consts; `achromatopsia`.
+- `crates/core/src/vision/mod.rs` — module docstring (`## achromatopsia`,
+  `BT.601 … は使わない`); `crates/core/src/vision/color.rs` — `LUMA_R` / `LUMA_G` /
+  `LUMA_B` consts and `achromatopsia`.
 - `CLAUDE.md` — "主要な設計判断": *achromatopsia だけは LMS 経路を捨てて
   BT.709 photopic luminance（NTSC 用 BT.601 ではない）でグレースケール化する*.
 - [`matrix-provenance.md`](matrix-provenance.md) — provenance of the BT.709

@@ -63,8 +63,9 @@ spread function of a pure cylinder lens; see also `docs/overview.md`
 
 - `docs/overview.md` — refraction section (`circle of confusion (CoC)` … *uses
   disk blur for physical correctness*) and "Diopter → pixel-radius mapping".
-- `crates/core/src/vision.rs` — module docstring (`Gaussian は実際の defocus
-  blur ではないため採用しない …`); `MYOPIA_MAX_RADIUS_RATIO` and sibling
-  derivation comments; `MIN_BLUR_RADIUS_PX`.
+- `crates/core/src/vision/mod.rs` — module docstring (`Gaussian は実際の defocus
+  blur ではないため採用しない …`); `crates/core/src/vision/refraction.rs` —
+  `MYOPIA_MAX_RADIUS_RATIO` and sibling derivation comments;
+  `crates/core/src/vision/common.rs` — `MIN_BLUR_RADIUS_PX`.
 - `CLAUDE.md` — "主要な設計判断": *焦点・屈折 (Phase 2 / #4) は disk blur
   (pillbox) を linear sRGB で適用 — Gaussian は採用しない*.

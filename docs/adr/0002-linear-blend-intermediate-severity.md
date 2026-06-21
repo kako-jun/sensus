@@ -69,9 +69,9 @@ grayscale target — see ADR-0004).
 - `docs/overview.md` — "Color vision algorithm (Phase 1, #2)": *applies the
   published severity = 1.0 matrix and uses `lerp(original, simulated, strength)`
   in linear space*.
-- `crates/core/src/vision.rs` — module docstring (`中間 strength は Machado 自身
-  が示唆する通り … DaltonLens 等で広く採用されている方式`); blend step in
-  `apply_machado_matrix` and `achromatopsia`.
+- `crates/core/src/vision/mod.rs` — module docstring (`中間 strength は Machado 自身
+  が示唆する通り … DaltonLens 等で広く採用されている方式`); `crates/core/src/vision/color.rs` —
+  blend step in `apply_machado_matrix` and `achromatopsia`.
 - `CLAUDE.md` — "主要な設計判断": *中間 strength は linear 空間で補間する*.
 - `crates/core/tests/color_kat.rs` — `cross_check_protanopia_mid_strength`,
   `cross_check_deuteranopia_mid_strength` (pins the blend at `strength = 0.5`).

@@ -69,7 +69,7 @@ later phases, each tracked by its own Issue in `roadmap.md`.
 - `docs/roadmap.md` — phase table: Phase 1 = 色覚特性
   (protanopia / deuteranopia / tritanopia / achromatopsia), #2; tetrachromacy is
   a separate Phase 1+, #3.
-- `crates/core/src/vision.rs` — module docstring: *Phase 1 (Issue #2) では色覚
+- `crates/core/src/vision/mod.rs` — module docstring: *Phase 1 (Issue #2) では色覚
   特性 4 種を実装する*.
 - `docs/overview.md` — "Color vision algorithm (Phase 1, #2)" and "Tetrachromacy
   algorithm (Phase 1+, #3)" (the *Fundamental limitation*: a physically exact
