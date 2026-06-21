@@ -5,15 +5,32 @@
 //!
 //! - `shader_equivalence.rs` は CPU↔GLSL の **自己整合** (PSNR≥30dB) を見るが、
 //!   両者が同じ式から同時に壊れたら検出できない。
-//! - core の unit test は大半が boundary (strength=0 で identity / clamp /
-//!   NaN / alpha 保持) で、「出典由来の期待 RGB と一致するか」を固定していない。
+//! - `vision.rs` の unit test には散発的な実値テストが数本ある
+//!   (`*_matches_machado_2009` 系 4 本)が、boundary (strength=0 で identity /
+//!   clamp / NaN / alpha 保持) が中心で、全色覚 × 複数入力色の体系的な網羅は無い。
 //!
-//! 本ファイルはその欠けた軸 ——「行列定数が 1 要素でも変わったら落ちる」KAT ——
-//! を足す。**既存の boundary test には一切触らない**。
+//! 本ファイルは「出典由来の期待 RGB と一致するか」を体系化した KAT を足す。
+//! 既存の散発的な実値テストに対し、本ファイルは
+//!   (1) 出典をコードから独立に書き写したリテラルで検証し、
+//!   (2) 全色覚 (protanopia / deuteranopia / tritanopia / achromatopsia) ×
+//!       複数入力色を体系的に網羅し、
+//!   (3) nyctalopia の閉形式も固定する、
+//! 点で体系化している。**既存の boundary / 実値 test には一切触らない**。
+//!
+//! # 検出できるドリフトの大きさ (誇張しない)
+//!
+//! KAT の価値は「コードの行列定数が変わったら落ちる」ことにあるが、本テストは
+//! **8bit 量子化出力 (u8) に対する検証** である。したがって捕捉できるのは:
+//!
+//! - 丸め後の出力 u8 を動かす大きさの行列ドリフト。golden アンカーは厳密一致
+//!   (`assert_eq!`) なので、出力を 1/255 でも動かすドリフトを捕捉する。
+//!   非飽和の中間色を含めることで、おおむね係数 0.001〜0.004 以上の変化なら
+//!   どこかの色で出力 u8 に表れる (飽和チャンネルはドリフトを隠すため、
+//!   検出感度は入力色に依存する)。
+//! - 出力 u8 を変えない sub-u8 の浮動小数ドリフト (係数 4〜6 桁目の微小変化で
+//!   全色の丸め結果が不変なもの) は、**設計上検出対象外**。u8 量子化の本質的限界。
 //!
 //! # トートロジー回避 (最重要)
-//!
-//! KAT の価値は「コードの行列定数が変わったら落ちる」ことにある。したがって:
 //!
 //! - **コードの `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA` const を import /
 //!   参照しない**。自己参照は常に緑になり無意味。
@@ -23,10 +40,7 @@
 //!   2. ガンマ往復・行列積・blend・pack を **このファイル内で再実装** した参照
 //!      パイプラインで期待値を計算する (`vision.rs` の private fn を使わない)。
 //!   3. 主要ケースはさらに **オフライン計算済みの u8 リテラル golden 値** でも
-//!      固定する (パイプライン退行も捕捉)。
-//!
-//! コードの const が 1 要素でも変われば、実出力が「独立リテラル参照」と乖離して
-//! 落ちる。
+//!      厳密一致で固定する (パイプライン退行も捕捉)。
 //!
 //! # 出典
 //!
@@ -45,8 +59,9 @@ use sensus_core::vision::{achromatopsia, deuteranopia, nyctalopia, protanopia, t
 //
 // ⚠️ これは出典から **独立に書き写した** コピーであり、vision.rs の const とは
 // 物理的に別物。これを vision.rs から import すると自己参照 (トートロジー) に
-// なるため、絶対にしない。コードの const が 1 要素でも変われば、ここを基準に
-// 計算した期待値と実出力が乖離して KAT が落ちる ——それが本テストの存在意義。
+// なるため、絶対にしない。コードの const がドリフトして丸め後の出力 u8 を動かせば、
+// ここを基準に計算した期待値と実出力が乖離して KAT が落ちる ——それが本テストの
+// 存在意義 (sub-u8 の微小ドリフトは u8 量子化により検出対象外)。
 // =====================================================================
 
 /// Protanopia (1 型 2 色覚) severity=1.0 行列 — Machado 2009。
@@ -191,6 +206,13 @@ fn assert_close(actual: [u8; 3], expected: [u8; 3], tol: i32, ctx: &str) {
     }
 }
 
+/// golden アンカー用: u8 出力が **厳密一致** することを assert する。
+/// ±1 を許さないことで、丸め後の出力を 1/255 でも動かすドリフトを捕捉する
+/// (最大感度)。
+fn assert_exact(actual: [u8; 3], expected: [u8; 3], ctx: &str) {
+    assert_eq!(actual, expected, "{ctx}");
+}
+
 /// 入力の代表 5 + 補助 4 色。
 const RED: [u8; 3] = [255, 0, 0];
 const GREEN: [u8; 3] = [0, 255, 0];
@@ -201,6 +223,18 @@ const CYAN: [u8; 3] = [0, 255, 255];
 const MAGENTA: [u8; 3] = [255, 0, 255];
 const YELLOW: [u8; 3] = [255, 255, 0];
 const GRAY128: [u8; 3] = [128, 128, 128];
+
+/// チャンネルが飽和 (0/255) しにくい非飽和中間色。飽和チャンネルは行列ドリフトを
+/// 隠す (clamp で吸収される) ので、こうした中間色を回すと小さな係数変化が
+/// 出力 u8 に表れて検出感度が上がる。
+const WARM_MID: [u8; 3] = [180, 120, 60];
+const COOL_MID: [u8; 3] = [90, 140, 200];
+
+/// cross-check で回す入力色 (代表 5 + 補助 4 + 非飽和中間 2 = 11 色)。
+/// 飽和色は不変条件・clamp 経路を、非飽和中間色は係数ドリフトの検出力を担う。
+const COLORS: &[[u8; 3]] = &[
+    RED, GREEN, BLUE, WHITE, BLACK, CYAN, MAGENTA, YELLOW, GRAY128, WARM_MID, COOL_MID,
+];
 
 /// f32 丸め境界を吸収する許容差。
 const TOL: i32 = 1;
@@ -218,48 +252,43 @@ fn golden_protanopia_severity1() {
     // red(255,0,0): linear R のみが赤行 [0.152286,1.052583,-0.204868] で混色され、
     //   sr=0.152286*1.0=0.152..→l2s≈0.428→109、sg=0.114503→l2s≈0.373→95、
     //   sb=-0.003882<0→clamp 0→0。アンカー (109,95,0) と一致する。
-    assert_close(
+    assert_exact(
         out_pixel(protanopia(pixel_image(RED), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [109, 95, 0],
-        TOL,
         "protanopia red",
     );
     // green(0,255,0): sr=1.052583→飽和→255、sg=0.786281→229、sb=-0.048116→0。
-    assert_close(
+    assert_exact(
         out_pixel(protanopia(pixel_image(GREEN), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [255, 229, 0],
-        TOL,
         "protanopia green",
     );
     // blue(0,0,255): sr=-0.204868→0、sg=0.099216→89、sb=1.051998→飽和→255。
-    assert_close(
+    assert_exact(
         out_pixel(protanopia(pixel_image(BLUE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 89, 255],
-        TOL,
         "protanopia blue",
     );
     // white: 行和がほぼ 1 (≈1.000001/1.0/1.0) → 不変条件 ≈白。
-    assert_close(
+    assert_exact(
         out_pixel(protanopia(pixel_image(WHITE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [255, 255, 255],
-        TOL,
         "protanopia white",
     );
     // black: 全 0 → 不変条件 黒。
-    assert_close(
+    assert_exact(
         out_pixel(protanopia(pixel_image(BLACK), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 0, 0],
-        TOL,
         "protanopia black",
     );
 }
@@ -267,44 +296,39 @@ fn golden_protanopia_severity1() {
 #[test]
 fn golden_deuteranopia_severity1() {
     // 出典行列 SRC_DEUTERANOPIA を f64 参照パイプラインで通したオフライン値。
-    assert_close(
+    assert_exact(
         out_pixel(deuteranopia(pixel_image(RED), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [163, 144, 0],
-        TOL,
         "deuteranopia red",
     );
-    assert_close(
+    assert_exact(
         out_pixel(deuteranopia(pixel_image(GREEN), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [239, 214, 58],
-        TOL,
         "deuteranopia green",
     );
-    assert_close(
+    assert_exact(
         out_pixel(deuteranopia(pixel_image(BLUE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 61, 251],
-        TOL,
         "deuteranopia blue",
     );
-    assert_close(
+    assert_exact(
         out_pixel(deuteranopia(pixel_image(WHITE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [255, 255, 255],
-        TOL,
         "deuteranopia white",
     );
-    assert_close(
+    assert_exact(
         out_pixel(deuteranopia(pixel_image(BLACK), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 0, 0],
-        TOL,
         "deuteranopia black",
     );
 }
@@ -312,44 +336,39 @@ fn golden_deuteranopia_severity1() {
 #[test]
 fn golden_tritanopia_severity1() {
     // 出典行列 SRC_TRITANOPIA を f64 参照パイプラインで通したオフライン値。
-    assert_close(
+    assert_exact(
         out_pixel(tritanopia(pixel_image(RED), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [255, 0, 15],
-        TOL,
         "tritanopia red",
     );
-    assert_close(
+    assert_exact(
         out_pixel(tritanopia(pixel_image(GREEN), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 247, 217],
-        TOL,
         "tritanopia green",
     );
-    assert_close(
+    assert_exact(
         out_pixel(tritanopia(pixel_image(BLUE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 107, 150],
-        TOL,
         "tritanopia blue",
     );
-    assert_close(
+    assert_exact(
         out_pixel(tritanopia(pixel_image(WHITE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [255, 255, 255],
-        TOL,
         "tritanopia white",
     );
-    assert_close(
+    assert_exact(
         out_pixel(tritanopia(pixel_image(BLACK), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 0, 0],
-        TOL,
         "tritanopia black",
     );
 }
@@ -359,50 +378,45 @@ fn golden_achromatopsia_strength1() {
     // strength=1.0 で完全グレースケール (R==G==B)。BT.709 luminance を
     // linear で取り l2s した値。red/green/blue の luma 差が見える。
     let red = out_pixel(achromatopsia(pixel_image(RED), 1.0).unwrap());
-    assert_close(
+    assert_exact(
         red[..3].try_into().unwrap(),
         [127, 127, 127],
-        TOL,
         "achromatopsia red",
     );
     assert_eq!(red[0], red[1], "achromatopsia red: R==G");
     assert_eq!(red[1], red[2], "achromatopsia red: G==B");
 
     let green = out_pixel(achromatopsia(pixel_image(GREEN), 1.0).unwrap());
-    assert_close(
+    assert_exact(
         green[..3].try_into().unwrap(),
         [220, 220, 220],
-        TOL,
         "achromatopsia green",
     );
     assert_eq!(green[0], green[1], "achromatopsia green: R==G");
     assert_eq!(green[1], green[2], "achromatopsia green: G==B");
 
     let blue = out_pixel(achromatopsia(pixel_image(BLUE), 1.0).unwrap());
-    assert_close(
+    assert_exact(
         blue[..3].try_into().unwrap(),
         [76, 76, 76],
-        TOL,
         "achromatopsia blue",
     );
     assert_eq!(blue[0], blue[1], "achromatopsia blue: R==G");
     assert_eq!(blue[1], blue[2], "achromatopsia blue: G==B");
 
     // 不変条件: 白→白、黒→黒 (grayscale でも変わらない)。
-    assert_close(
+    assert_exact(
         out_pixel(achromatopsia(pixel_image(WHITE), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [255, 255, 255],
-        TOL,
         "achromatopsia white",
     );
-    assert_close(
+    assert_exact(
         out_pixel(achromatopsia(pixel_image(BLACK), 1.0).unwrap())[..3]
             .try_into()
             .unwrap(),
         [0, 0, 0],
-        TOL,
         "achromatopsia black",
     );
 }
@@ -418,17 +432,15 @@ fn invariant_white_black_all_filters() {
     ];
     for (name, f) in filters {
         let white = out_pixel(f(pixel_image(WHITE), 1.0).unwrap());
-        assert_close(
+        assert_exact(
             white[..3].try_into().unwrap(),
             [255, 255, 255],
-            TOL,
             &format!("{name} white invariant"),
         );
         let black = out_pixel(f(pixel_image(BLACK), 1.0).unwrap());
-        assert_close(
+        assert_exact(
             black[..3].try_into().unwrap(),
             [0, 0, 0],
-            TOL,
             &format!("{name} black invariant"),
         );
     }
@@ -442,12 +454,9 @@ fn invariant_white_black_all_filters() {
 // コードの const が 1 要素でも変われば参照側と乖離して落ちる。
 // =====================================================================
 
-/// 9 色全部を出典行列 cross-check する共通ルーチン。
+/// 全 cross-check 色を出典行列で検証する共通ルーチン。
 fn cross_check_matrix(name: &str, src: &[[f64; 3]; 3], apply: StrengthFilter) {
-    let colors = [
-        RED, GREEN, BLUE, WHITE, BLACK, CYAN, MAGENTA, YELLOW, GRAY128,
-    ];
-    for c in colors {
+    for &c in COLORS {
         let expected = reference_matrix_pixel(src, c, 1.0);
         let actual = out_pixel(apply(pixel_image(c), 1.0).unwrap());
         assert_close(
@@ -476,10 +485,7 @@ fn cross_check_tritanopia() {
 
 #[test]
 fn cross_check_achromatopsia() {
-    let colors = [
-        RED, GREEN, BLUE, WHITE, BLACK, CYAN, MAGENTA, YELLOW, GRAY128,
-    ];
-    for c in colors {
+    for &c in COLORS {
         let expected = reference_achromatopsia_pixel(c, 1.0);
         let actual = out_pixel(achromatopsia(pixel_image(c), 1.0).unwrap());
         assert_close(
@@ -491,21 +497,33 @@ fn cross_check_achromatopsia() {
     }
 }
 
-/// 中間 strength でも参照 (linear blend) と一致することを確認する
-/// (blend 段が出典どおりであることを固定。strength=0.5)。
-#[test]
-fn cross_check_protanopia_mid_strength() {
-    let colors = [RED, GREEN, BLUE, CYAN, MAGENTA, YELLOW, GRAY128];
-    for c in colors {
-        let expected = reference_matrix_pixel(&SRC_PROTANOPIA, c, 0.5);
-        let actual = out_pixel(protanopia(pixel_image(c), 0.5).unwrap());
+/// 中間 strength の cross-check 共通ルーチン (strength=0.5)。
+///
+/// blend 段 `n = v + (s - v) * strength` は 4 色覚 (protanopia / deuteranopia /
+/// tritanopia / achromatopsia) で **共通のコードパス**。したがって本来は 1 種で
+/// blend の正しさは担保できるが、共通 blend が「別の行列」を通しても正しく効くこと
+/// を念のため 2 種 (protanopia / deuteranopia) で固定する。
+fn cross_check_mid_strength(name: &str, src: &[[f64; 3]; 3], apply: StrengthFilter) {
+    for &c in COLORS {
+        let expected = reference_matrix_pixel(src, c, 0.5);
+        let actual = out_pixel(apply(pixel_image(c), 0.5).unwrap());
         assert_close(
             actual[..3].try_into().unwrap(),
             expected,
             TOL,
-            &format!("protanopia s=0.5 cross-check color {c:?}"),
+            &format!("{name} s=0.5 cross-check color {c:?}"),
         );
     }
+}
+
+#[test]
+fn cross_check_protanopia_mid_strength() {
+    cross_check_mid_strength("protanopia", &SRC_PROTANOPIA, protanopia);
+}
+
+#[test]
+fn cross_check_deuteranopia_mid_strength() {
+    cross_check_mid_strength("deuteranopia", &SRC_DEUTERANOPIA, deuteranopia);
 }
 
 /// alpha が色覚変換で保持されることを KAT 文脈でも確認する

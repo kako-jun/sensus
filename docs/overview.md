@@ -594,8 +594,17 @@ test suite (`crates/core/tests/color_kat.rs`, `#156`) fixes *source-consistency*
 it asserts that the color-vision output matches values derived independently from
 the published [Machado 2009][machado] severity-1.0 matrices — the reference
 matrices and gamma pipeline are re-typed in the test, never imported from the
-implementation. This catches a single drifted matrix coefficient even if the CPU
-and shader paths drift together (which the equivalence test alone cannot detect).
+implementation. This catches a matrix coefficient that drifts together across the
+CPU and shader paths (which the equivalence test alone cannot detect), even when
+both stay self-consistent.
+
+Because the KAT verifies the **8-bit quantized output**, its sensitivity has a
+floor: it catches any drift large enough to move a rounded output channel
+(golden anchors use exact equality, so a drift that shifts a single channel by
+1/255 fails; including non-saturated mid-tone inputs surfaces coefficient changes
+of roughly 0.001–0.004 in at least one color). Sub-u8 floating-point drift that
+leaves every rounded channel unchanged is **out of scope by design** — the
+intrinsic limit of an 8-bit-output check.
 
 > **Known limitation** — the 1D directional-blur shaders (`nystagmus`,
 > `astigmatism`) cap their per-pixel kernel at `RMAX = 15` taps, while the CPU
