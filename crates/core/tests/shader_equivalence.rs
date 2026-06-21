@@ -31,34 +31,18 @@ use sensus_core::shaders::{
 };
 use sensus_core::vision::{
     achromatopsia, astigmatism, bppv_rotation, deuteranopia, diplopia, dry_eye, eye_strain,
-    glaucoma, hemianopia, hyperopia, macular_degeneration, metamorphopsia, myopia, nyctalopia,
-    nystagmus, photophobia, presbyopia, protanopia, starbursts, tetrachromacy, tritanopia,
-    tunnel_vision, vertigo, vestibular_neuritis, GlaucomaMode,
+    glaucoma, hemianopia, hyperopia, linear_to_srgb, macular_degeneration, metamorphopsia, myopia,
+    nyctalopia, nystagmus, photophobia, presbyopia, protanopia, srgb_to_linear, starbursts,
+    tetrachromacy, tritanopia, tunnel_vision, vertigo, vestibular_neuritis, GlaucomaMode,
 };
 
 // ---------------------------------------------------------------------------
 // ソフトウェアシミュレータ（GLSL 数学を Rust で再現）
 // ---------------------------------------------------------------------------
 
-/// sRGB → linear sRGB（GLSL `srgbToLinear` と同じ式）
-#[inline]
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// linear sRGB → sRGB（GLSL `linearToSrgb` と同じ式）
-#[inline]
-fn linear_to_srgb(c: f32) -> f32 {
-    if c <= 0.0031308 {
-        c * 12.92
-    } else {
-        1.055 * c.powf(1.0 / 2.4) - 0.055
-    }
-}
+// sRGB ⇄ linear sRGB の gamma 変換は CPU 正本（`sensus_core::vision`）の公開 util を
+// 使う。GLSL `srgbToLinear` / `linearToSrgb` と同一式であり、ここで重複定義しない
+// （Issue #157 で二重定義を統合）。
 
 /// 色覚フィルタシェーダ（protanopia.frag / deuteranopia.frag / tritanopia.frag）を
 /// ソフトウェアシミュレートする。
