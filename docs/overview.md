@@ -589,6 +589,14 @@ same math. A GPU-free software equivalence test suite (`#17`) asserts that
 CPU and shader outputs agree within ≤ 2/255 per channel (matrix filters) or
 PSNR ≥ 30 dB (blur / directional filters).
 
+That suite fixes *self-consistency* (CPU == shader). A separate known-answer
+test suite (`crates/core/tests/color_kat.rs`, `#156`) fixes *source-consistency*:
+it asserts that the color-vision output matches values derived independently from
+the published [Machado 2009][machado] severity-1.0 matrices — the reference
+matrices and gamma pipeline are re-typed in the test, never imported from the
+implementation. This catches a single drifted matrix coefficient even if the CPU
+and shader paths drift together (which the equivalence test alone cannot detect).
+
 > **Known limitation** — the 1D directional-blur shaders (`nystagmus`,
 > `astigmatism`) cap their per-pixel kernel at `RMAX = 15` taps, while the CPU
 > blur radius is unbounded. They diverge once the blur radius exceeds ~15 px
