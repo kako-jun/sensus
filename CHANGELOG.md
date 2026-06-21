@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **internal: split CLI `main.rs` into `arguments` / `filter_mapping` / `depth_resolver` modules (behavior unchanged)**: 約 963 行の `crates/cli/src/main.rs` に同居していた clap 引数定義・CLI→core 変換・depth blur 統合・オーケストレーションを責務ごとに分割。`arguments`（`Cli` struct / `Filter`・`Hearing` ValueEnum / `parse_*` バリデータ）、`filter_mapping`（`Filter::to_core` 等の core enum 変換 / `warn_unused_flags`）、`depth_resolver`（`depth_kinds` / `apply_filters_to_image` / `apply_non_depth_filters` / `DEPTH_BLUR_MAX_RADIUS_RATIO`）へ純粋移動し、`main.rs` には `main` / `run` / `run_audio` / `run_pipe` / `split_jpeg_frames` / `RunError` を残置。clap 属性・default・help・value_parser・mapping・depth 計算・seed 既定はすべて不変で、`sensus --help` の出力はバイト等価。CLI 統合テスト（cli / pipe / depth_compose / mpo / portrait / audio）と workspace 全テストが緑であることを確認（Issue #159）。
 - **internal: split `vision` god-file into submodules (behavior unchanged)**: 約 5892 行に 28 フィルタが同居していた `crates/core/src/vision.rs` を、症状領域ごとの `vision/` サブモジュール（`color` / `refraction` / `field` / `light` / `motion` / `fatigue` / `phenomena`）＋クロスドメイン共有ヘルパー `common` に分割。`vision/mod.rs` が全公開アイテムを `pub use` で再エクスポートし、`crate::vision::*` の解決パスは分割前と完全に一致する（`lib.rs` の `apply()` / tests / CLI / universal-experience(FFI) の参照は不変）。純粋な移動リファクタで、ロジック・定数・数値・seed 既定・丸めは一切変更していない。298 unit test / KAT / shader_equivalence / CLI integration の全テストが緑であることを確認。
 
 ### Added
