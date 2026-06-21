@@ -43,7 +43,11 @@ sensus/
     └── cli/
         ├── Cargo.toml      # [[bin]] name = "sensus"
         └── src/
-            └── main.rs     # clap-based CLI entry point
+            ├── main.rs          # orchestration / I/O: main, run, run_audio, run_pipe, RunError
+            ├── arguments.rs     # clap Cli struct + Filter/Hearing ValueEnums + parse_* validators
+            ├── filter_mapping.rs # CLI enum → core enum mapping + warn_unused_flags
+            ├── depth_resolver.rs # depth blur integration + pipeline apply helpers
+            └── audio.rs         # WAV ↔ AudioBuffer I/O (hearing mode)
 ```
 
 WebAssembly is **not** a target — sensus is consumed by native apps
