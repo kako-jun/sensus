@@ -53,6 +53,8 @@ sensus/
 
 ## 主要な設計判断
 
+> formal な ADR（問題 / 選択肢 / 選定理由 / トレードオフ）は `docs/adr/` を正本とする。以下は散在サマリ。行列の出自は `docs/adr/matrix-provenance.md`。
+
 - **WASM ターゲットは持たない** — sensus の主クライアントは universal-experience（Flutter の native）。Web GUI はやらない方針なので、wasm32 用の getrandom 等の追加依存は避ける
 - **入出力は `image::DynamicImage` で統一** — orber と同じ規約。動画はフレーム単位で同関数を呼ぶ
 - **CLI の終了コードは成功 0 / 失敗 1 の 2 値**（#111 で旧 scaffold の未実装 `exit(2)` 経路を削除済み。全 `Filter` バリアントは実装済みで `apply()` の match は網羅的）

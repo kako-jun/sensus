@@ -211,6 +211,14 @@ Color vision deficiency simulation uses the
   sRGB content.
 - Preserves the alpha channel.
 
+The rationale for these choices (linear sRGB, direct Machado matrices, linear
+blend, BT.709 photopic luminance) is recorded canonically in
+[`adr/`](adr/) — see [ADR-0001](adr/0001-linear-srgb-machado-matrices.md),
+[ADR-0002](adr/0002-linear-blend-intermediate-severity.md), and
+[ADR-0004](adr/0004-achromatopsia-bt709-photopic.md). The provenance of the
+matrices and luminance coefficients is in
+[`adr/matrix-provenance.md`](adr/matrix-provenance.md).
+
 [machado]: https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html
 [doi]: https://doi.org/10.1109/TVCG.2009.113
 
@@ -256,7 +264,9 @@ defocus using a **disk (pillbox) blur** in linear sRGB space:
   the aperture, so the impulse response of a defocused eye is the shape
   of the pupil — a uniform-density disk to first approximation. Gaussian
   blur is a good *de-noising* prior but is **not** what a defocused eye
-  produces; sensus uses disk blur for physical correctness.
+  produces; sensus uses disk blur for physical correctness. The rationale is
+  recorded canonically in
+  [ADR-0003](adr/0003-disk-blur-not-gaussian.md).
 - All four filters operate in **linear sRGB** (decode → blur → re-encode).
   Convolving gamma-encoded sRGB darkens midtones and is wrong.
 - Alpha is preserved (the filter affects color only).
