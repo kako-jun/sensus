@@ -4,33 +4,33 @@
 //! # 設計
 //!
 //! - シェーダ文字列は `include_str!` でバイナリに埋め込む。
-//! - uniform 計算は `vision.rs` の CPU 実装と完全に同じ定数・式を使う。
+//! - uniform 計算は `vision/` の CPU 実装と完全に同じ定数・式を使う。
 //! - strength は 0.0..=1.0 の範囲を前提とし、範囲外の値は呼び出し元で clamp すること。
 
-// vision.rs の定数と同じ値（radius_px 計算の共通化）
+// vision/refraction.rs の定数と同じ値（radius_px 計算の共通化）
 const MYOPIA_MAX_RADIUS_RATIO: f32 = 0.023;
 const HYPEROPIA_MAX_RADIUS_RATIO: f32 = 0.015;
 const PRESBYOPIA_MAX_RADIUS_RATIO: f32 = 0.011;
 const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
-// vision.rs の PHOTOPHOBIA_BLOOM_RADIUS_RATIO と同じ値（bloom 半径 = ratio * min(W,H) * strength）
+// vision/light.rs の PHOTOPHOBIA_BLOOM_RADIUS_RATIO と同じ値（bloom 半径 = ratio * min(W,H) * strength）
 const PHOTOPHOBIA_BLOOM_RADIUS_RATIO: f32 = 0.05;
-// vision.rs eye_strain の disk blur 半径係数（半径 = strength * 1.5 px、画像サイズ非依存）
+// vision/fatigue.rs eye_strain の disk blur 半径係数（半径 = strength * 1.5 px、画像サイズ非依存）
 const EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH: f32 = 1.5;
 
 /// Machado 2009 severity = 1.0 行列（行優先: row0col0, row0col1, row0col2, ...）。
-/// vision.rs の PROTANOPIA 定数と同じ値。
+/// vision/color.rs の PROTANOPIA 定数と同じ値。
 pub const PROTANOPIA_MATRIX: [f32; 9] = [
     0.152286, 1.052583, -0.204868, 0.114503, 0.786281, 0.099216, -0.003882, -0.048116, 1.051998,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
-/// vision.rs の DEUTERANOPIA 定数と同じ値。
+/// vision/color.rs の DEUTERANOPIA 定数と同じ値。
 pub const DEUTERANOPIA_MATRIX: [f32; 9] = [
     0.367322, 0.860646, -0.227968, 0.280085, 0.672501, 0.047413, -0.011820, 0.042940, 0.968881,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
-/// vision.rs の TRITANOPIA 定数と同じ値。
+/// vision/color.rs の TRITANOPIA 定数と同じ値。
 pub const TRITANOPIA_MATRIX: [f32; 9] = [
     1.255528, -0.076749, -0.178779, -0.078411, 0.930809, 0.147602, 0.004733, 0.691367, 0.303900,
 ];
@@ -471,7 +471,7 @@ pub fn presbyopia_uniforms(strength: f32, image_min_dim: u32) -> BlurUniforms {
 /// `axis_deg`: **シャープ方向**の軸角度（度数法。0°=水平, 90°=垂直）。
 ///   vision::astigmatism() と同じ規約で、**ぼかし方向 = axis_deg + 90°**。
 ///   シェーダ (`astigmatism.frag`) の `uAxisDeg` uniform にはぼかし方向を渡す。
-///   呼び出し元は vision.rs と同じ「シャープ方向」で渡せばよい。
+///   呼び出し元は vision/refraction.rs と同じ「シャープ方向」で渡せばよい。
 pub fn astigmatism_uniforms(
     strength: f32,
     image_min_dim: u32,
@@ -479,7 +479,7 @@ pub fn astigmatism_uniforms(
 ) -> AstigmatismUniforms {
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
-    // vision.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
+    // vision/refraction.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
     let blur_axis_deg = axis_deg + 90.0;
     AstigmatismUniforms {
         strength,
@@ -1029,7 +1029,7 @@ mod tests {
 
     #[test]
     fn astigmatism_uniforms_blur_axis_is_sharp_plus_90() {
-        // vision.rs 規約: axis_deg はシャープ方向。ぼかし方向 = axis_deg + 90°
+        // vision/refraction.rs 規約: axis_deg はシャープ方向。ぼかし方向 = axis_deg + 90°
         let u = astigmatism_uniforms(1.0, 1000, 45.0);
         assert!(
             (u.axis_deg - 135.0).abs() < 1e-4,
