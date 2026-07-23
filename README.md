@@ -148,6 +148,7 @@ Flags:
 | `--seed`           | Random seed for stochastic filters (`cataract`, `floaters`, `flickering-stars`). Default `0`. |
 | `--density`, `--gaze-x`, `--gaze-y`, `--size` | `floaters`: blob density `0–1`, gaze position `0–1`, and size multiplier `0.1–5.0`. |
 | `--side`           | `hemianopia` side: `0.0` = left field lost, `1.0` = right field lost. |
+| `--field-loss-mode` | `glaucoma` / `macular-degeneration` / `hemianopia` / `tunnel-vision` expression mode: `darken` (default, fade to black) or `blur` (disk blur + desaturation, never black; CPU only for now). |
 | `--offset-x`, `--offset-y`, `--ghost-strength` | `diplopia` ghost-image offsets (`min(W,H)` ratio) and ghost strength. |
 | `--amplitude`, `--direction-deg` | `nystagmus` motion amplitude (`min(W,H)` ratio) and direction in degrees. |
 | `--num-rays`, `--ray-length`, `--threshold`, `--dispersion` | `starbursts`: ray count, ray length (`min(W,H)` ratio), brightness threshold, and chromatic dispersion (`0` = white, `1` = rainbow). |

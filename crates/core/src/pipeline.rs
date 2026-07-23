@@ -159,6 +159,7 @@ mod tests {
             .push(FilterStep::new(
                 Filter::Glaucoma {
                     mode: crate::vision::GlaucomaMode::Vignette,
+                    field_loss_mode: crate::vision::FieldLossMode::Darken,
                 },
                 0.8,
             ));
@@ -256,6 +257,12 @@ mod tests {
                 gaze_y: 0.8,
             },
             Filter::Metamorphopsia { freq: 6.0, seed: 9 },
+            // #171 FieldLossMode::Blur も payload 経由で pipeline/direct apply が
+            // 一致することを確認する（PR #180 レビュー should3）。
+            Filter::Glaucoma {
+                mode: crate::vision::GlaucomaMode::Vignette,
+                field_loss_mode: crate::vision::FieldLossMode::Blur,
+            },
         ] {
             let via_pipeline = Pipeline::new()
                 .push(FilterStep::new(filter, 0.9))
@@ -291,6 +298,7 @@ mod tests {
             .push(FilterStep::new(
                 Filter::Glaucoma {
                     mode: crate::vision::GlaucomaMode::Vignette,
+                    field_loss_mode: crate::vision::FieldLossMode::Darken,
                 },
                 1.0,
             ))
@@ -303,6 +311,7 @@ mod tests {
             .push(FilterStep::new(
                 Filter::Glaucoma {
                     mode: crate::vision::GlaucomaMode::Vignette,
+                    field_loss_mode: crate::vision::FieldLossMode::Darken,
                 },
                 1.0,
             ))

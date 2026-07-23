@@ -8,6 +8,9 @@
 use crate::Result;
 use image::{DynamicImage, RgbaImage};
 
+// mask_mapped_blur_desaturate (#171) が彩度低下の luma 計算に使う BT.709 係数。
+use super::{LUMA_B, LUMA_G, LUMA_R};
+
 /// sRGB (0.0..=1.0) → linear sRGB の標準ガンマ解除。
 #[inline]
 pub fn srgb_to_linear(c: f32) -> f32 {
@@ -281,6 +284,156 @@ pub(crate) fn radius_from_strength(img: &DynamicImage, strength: f32, max_ratio:
     }
     let min_dim = img.width().min(img.height()) as f32;
     s * max_ratio * min_dim
+}
+
+// ---------------------------------------------------------------
+// #171: FieldLossMode::Blur 共用ヘルパー — mask 値map→半径map blur
+// ---------------------------------------------------------------
+
+/// mask 値（0.0..=1.0, 0=無傷 1=完全欠損）を disk blur 半径のスケールとして
+/// 解釈し、8-bin 逐次 blur + 線形補間で近似的に半径マップ付き blur を適用する
+/// （`refraction::depth_aware_blur` と同じ 8-bin 方式。O(W×H×kernel) の
+/// per-pixel 畳み込みを避ける）。
+///
+/// `depth_aware_blur` とはビン→半径の対応が異なる: そちらは深度の対称性から
+/// ビン中心 (bin+0.5)/N を使うが、本関数は mask=0.0 のとき半径 0（完全に
+/// 無変化）を保証したいため、ビン 0 = 半径 0・ビン (N-1) = `max_radius_px`
+/// となる等間隔割り付けを使う。
+///
+/// mask 値に応じて彩度低下も適用する（linear 空間で luma 方向へブレンド、
+/// `desaturate_max` は mask=1.0 における最大低下率）。alpha は元画像から
+/// 変更せず保持する。
+///
+/// > **既知の dead zone（#178）**: `MIN_BLUR_RADIUS_PX`（0.5px）は「ぼけを
+/// > 適用するか」の閾値だが、`build_ellipse_spans` は半径 1.0px 未満だと
+/// > dx=±1 が有効にならず原点のみの縮退カーネル（実質 no-op）を返す。
+/// > 中間ビンの半径が `[0.5, 1.0)` px に落ちると「ぼけ有効」判定なのに
+/// > 出力が入力と一致する。本関数は `FIELD_LOSS_MAX_RADIUS_RATIO=0.125` の
+/// > とき `radius(bin=1) = max_radius_px / 7 = 0.125/7 × min(W,H)` なので、
+/// > `min(W,H)` がおよそ `[28, 56)` px の画像でビン 1 がこの dead zone に
+/// > 入りうる（この基盤を使う全フィルタ共通の既存問題であり本関数固有では
+/// > ない。同 Issue で解決すること）。
+pub(crate) fn mask_mapped_blur_desaturate(
+    rgba: &RgbaImage,
+    mask: &[f32],
+    max_radius_px: f32,
+    desaturate_max: f32,
+) -> RgbaImage {
+    let width = rgba.width();
+    let height = rgba.height();
+    let (linear, alpha) = rgba_to_linear_planes(rgba);
+    debug_assert_eq!(
+        mask.len(),
+        linear.len(),
+        "mask length must match pixel count"
+    );
+
+    const N_BINS: usize = 8;
+    // bin 0 = 半径 0（mask=0 は無変化を保証）, bin (N_BINS-1) = max_radius_px。
+    let mut bin_radius = [0.0_f32; N_BINS];
+    for (bin, radius) in bin_radius.iter_mut().enumerate() {
+        *radius = (bin as f32 / (N_BINS - 1) as f32) * max_radius_px;
+    }
+
+    let npx = linear.len();
+    let mut out_linear: Vec<[f32; 3]> = linear.clone();
+
+    // 隣接 2 ビンを逐次処理して線形補間する（depth_aware_blur と同じ構成）。
+    for floor_bin in 0..(N_BINS - 1) {
+        let ceil_bin = floor_bin + 1;
+
+        let pair_used = mask.iter().any(|&m| {
+            let mc = m.clamp(0.0, 1.0);
+            let scaled = mc * (N_BINS - 1) as f32;
+            (scaled.floor() as usize).min(N_BINS - 1) == floor_bin
+        });
+        if !pair_used {
+            continue;
+        }
+
+        let blur_floor = if bin_radius[floor_bin] < MIN_BLUR_RADIUS_PX {
+            linear.clone()
+        } else {
+            ellipse_blur(
+                &linear,
+                width,
+                height,
+                bin_radius[floor_bin],
+                bin_radius[floor_bin],
+                0.0,
+            )
+        };
+        let blur_ceil = if bin_radius[ceil_bin] < MIN_BLUR_RADIUS_PX {
+            linear.clone()
+        } else {
+            ellipse_blur(
+                &linear,
+                width,
+                height,
+                bin_radius[ceil_bin],
+                bin_radius[ceil_bin],
+                0.0,
+            )
+        };
+
+        for idx in 0..npx {
+            let mc = mask[idx].clamp(0.0, 1.0);
+            let scaled = mc * (N_BINS - 1) as f32;
+            let bf = (scaled.floor() as usize).min(N_BINS - 1);
+            if bf == floor_bin {
+                let t = scaled.fract();
+                let f = blur_floor[idx];
+                let c = blur_ceil[idx];
+                out_linear[idx] = [
+                    lerp(f[0], c[0], t),
+                    lerp(f[1], c[1], t),
+                    lerp(f[2], c[2], t),
+                ];
+            }
+        }
+    }
+
+    // 最終ビン（mask=1.0 ちょうど）: scaled = N_BINS-1 → fract = 0 → 上のループの
+    // どの floor_bin にも一致しない（depth_aware_blur と同じ理由）ので別処理する。
+    {
+        let blur_last = if bin_radius[N_BINS - 1] < MIN_BLUR_RADIUS_PX {
+            linear.clone()
+        } else {
+            ellipse_blur(
+                &linear,
+                width,
+                height,
+                bin_radius[N_BINS - 1],
+                bin_radius[N_BINS - 1],
+                0.0,
+            )
+        };
+        for idx in 0..npx {
+            let mc = mask[idx].clamp(0.0, 1.0);
+            let scaled = mc * (N_BINS - 1) as f32;
+            let bf = (scaled.floor() as usize).min(N_BINS - 1);
+            if bf == N_BINS - 1 {
+                out_linear[idx] = blur_last[idx];
+            }
+        }
+    }
+
+    // 彩度低下: mask に応じて luma 方向へブレンド（黒には落とさない）。
+    for idx in 0..npx {
+        let mc = mask[idx].clamp(0.0, 1.0);
+        let desat_t = mc * desaturate_max;
+        if desat_t > 0.0 {
+            let px = out_linear[idx];
+            let luma = LUMA_R * px[0] + LUMA_G * px[1] + LUMA_B * px[2];
+            out_linear[idx] = [
+                lerp(px[0], luma, desat_t),
+                lerp(px[1], luma, desat_t),
+                lerp(px[2], luma, desat_t),
+            ];
+        }
+    }
+
+    linear_planes_to_rgba(&out_linear, &alpha, width, height)
 }
 
 // ---------------------------------------------------------------

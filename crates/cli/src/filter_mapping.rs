@@ -5,9 +5,22 @@
 //! に写し、フィルタ固有パラメータを `Cli` フラグから payload に詰める。併せて、
 //! 単一フィルタ指定時に使われないフラグを警告する [`warn_unused_flags`] を持つ。
 
-use sensus_core::{vision::DepthBlurKind, Filter as CoreFilter, HearingFilter};
+use sensus_core::{
+    vision::DepthBlurKind, vision::FieldLossMode as CoreFieldLossMode, Filter as CoreFilter,
+    HearingFilter,
+};
 
-use crate::arguments::{Cli, Filter, Hearing};
+use crate::arguments::{Cli, FieldLossMode, Filter, Hearing};
+
+impl FieldLossMode {
+    /// CLI-facing `FieldLossMode` を core の `vision::FieldLossMode` に写す。
+    pub(crate) fn to_core(self) -> CoreFieldLossMode {
+        match self {
+            FieldLossMode::Darken => CoreFieldLossMode::Darken,
+            FieldLossMode::Blur => CoreFieldLossMode::Blur,
+        }
+    }
+}
 
 impl Filter {
     pub(crate) fn is_depth_filter(self) -> bool {
@@ -44,10 +57,18 @@ impl Filter {
             Filter::Presbyopia => CoreFilter::Presbyopia,
             Filter::Glaucoma => CoreFilter::Glaucoma {
                 mode: sensus_core::vision::GlaucomaMode::Vignette,
+                field_loss_mode: cli.field_loss_mode.to_core(),
             },
-            Filter::MacularDegeneration => CoreFilter::MacularDegeneration,
-            Filter::Hemianopia => CoreFilter::Hemianopia { side: cli.side },
-            Filter::TunnelVision => CoreFilter::TunnelVision,
+            Filter::MacularDegeneration => CoreFilter::MacularDegeneration {
+                field_loss_mode: cli.field_loss_mode.to_core(),
+            },
+            Filter::Hemianopia => CoreFilter::Hemianopia {
+                side: cli.side,
+                field_loss_mode: cli.field_loss_mode.to_core(),
+            },
+            Filter::TunnelVision => CoreFilter::TunnelVision {
+                field_loss_mode: cli.field_loss_mode.to_core(),
+            },
             Filter::Cataract => CoreFilter::Cataract { seed: cli.seed },
             Filter::Floaters => CoreFilter::Floaters {
                 seed: cli.seed,
@@ -145,6 +166,19 @@ pub(crate) fn warn_unused_flags(cli: &Cli, core_filter: CoreFilter) {
     {
         eprintln!(
             "sensus: warning: --density/--gaze-x/--gaze-y/--size are only used with --filter floaters (ignored for {core_filter:?})"
+        );
+    }
+    let uses_field_loss_mode = matches!(
+        core_filter,
+        CoreFilter::Glaucoma { .. }
+            | CoreFilter::MacularDegeneration { .. }
+            | CoreFilter::Hemianopia { .. }
+            | CoreFilter::TunnelVision { .. }
+    );
+    if !uses_field_loss_mode && matches!(cli.field_loss_mode, crate::arguments::FieldLossMode::Blur)
+    {
+        eprintln!(
+            "sensus: warning: --field-loss-mode is only used with --filter glaucoma / macular-degeneration / hemianopia / tunnel-vision (ignored for {core_filter:?})"
         );
     }
     if !matches!(core_filter, CoreFilter::Hemianopia { .. }) && cli.side != 0.0 {

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **feat: 視野欠損4フィルタ（glaucoma / macular_degeneration / hemianopia / tunnel_vision）に `FieldLossMode::Blur`（暗転→ぼかし+彩度低下）を追加**: 緑内障・黄斑変性の患者の多くは暗点を「黒い影」でなく「ぼやけ・埋められた感じ」として知覚するという医学的知見に基づき、既存の暗転係数 m（0=無傷, 1=完全欠損）を disk blur 半径スケールとして再解釈する `FieldLossMode::Blur` を `Darken`（既定・後方互換）と並ぶオプションとして追加。`vision::common::mask_mapped_blur_desaturate`（`depth_aware_blur` と同じ 8-bin 逐次 blur + 線形補間方式）で半径マップ付き blur を適用し、完全欠損部は最大ボケ + 彩度低下（linear 空間で luma 方向へ最大 50%）に留めて黒には落とさない。CLI に `--field-loss-mode <darken|blur>`（既定 darken）を追加し4フィルタで共用。GLSL シェーダは現状 `Darken` のみ対応（`Blur` は CPU 先行、フォローアップ課題）。既定 `Darken` は既存 golden・KAT・shader_equivalence（PSNR）全テスト不変（Issue #171）。
 - **`vision::srgb_to_linear` / `vision::linear_to_srgb` are now public utilities**: GLSL の `srgbToLinear` / `linearToSrgb` と同一式の sRGB ⇄ linear gamma 変換を公開 util 化。`tests/shader_equivalence.rs` が private に持っていた同一式の重複定義を削除し、CPU 正本（`sensus_core::vision`）を参照するよう統合した（Issue #157）。
 
 ### Fixed

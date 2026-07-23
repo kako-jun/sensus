@@ -465,6 +465,53 @@ preserved centre and sharper transition:
 
 At `strength = 1.0` only the single central pixel escapes darkening.
 
+### FieldLossMode: Darken vs. Blur (#171)
+
+All four filters above take a `FieldLossMode` payload alongside their other
+parameters:
+
+| Mode | Description |
+|---|---|
+| `Darken` (default) | Fades the lost region toward black (`multiplier → 0`). Backward-compatible; golden tests pin this path byte-for-byte. |
+| `Blur` | Reinterprets the same 0.0..=1.0 mask coefficient `m` (0 = intact, 1 = fully lost) as a **disk-blur radius scale** instead of a darkening multiplier, and additionally desaturates toward luma. Never drops to black. |
+
+> **Medical note**: many glaucoma and macular-degeneration patients do not
+> perceive their scotoma as a black patch — the visual system tends to
+> "fill in" the missing area, and the reported experience is closer to a
+> **blur or dropout of detail** than to darkness. `FieldLossMode::Blur`
+> approximates this (loosely modelled on the VIP-Sim `myFieldLoss.cs`
+> mipmap approach, which drops resolution instead of luminance in the
+> lost region) while `Darken` remains the default for continuity with
+> existing renders and golden tests.
+
+`Blur` implementation notes:
+
+- Reuses the disk-blur primitive (`vision::common::ellipse_blur`, prefix-sum
+  based) through a new shared helper, `mask_mapped_blur_desaturate`, which
+  applies the same 8-bin sequential-blur-plus-lerp technique as
+  `depth_aware_blur` (see the focus/refraction section above) — but with
+  bin 0 = radius 0 and the last bin = `max_radius_px`, so `m = 0.0` pixels
+  are guaranteed untouched.
+- Max blur radius: `FIELD_LOSS_MAX_RADIUS_RATIO = 0.125` × `min(W, H)`.
+  Field loss is an *information* loss, not an optical defocus, so it isn't
+  derived from the Smith-Helmholtz diopter formula the refraction filters
+  use; the ratio instead approximates "roughly one VIP-Sim lowest-mip tile"
+  of blur radius (see the constant's doc comment in `vision/field.rs` for
+  the full derivation).
+- Fully-lost pixels (`m = 1.0`) are also desaturated toward luma (BT.709) by
+  up to `FIELD_LOSS_DESATURATE_MAX = 0.5` in linear space, scaled by `m`.
+  Luminance itself is preserved by this blend (the BT.709 weights sum to
+  1.0), so the region dims only through the accompanying blur, never
+  through the desaturation step — this is how brightness is kept away from
+  black even at `m = 1.0`.
+- CLI: `--field-loss-mode <darken|blur>` (default `darken`), shared by
+  `--filter glaucoma / macular-degeneration / hemianopia / tunnel-vision`.
+- **GLSL status**: the `.frag` shaders (`glaucoma.frag`,
+  `macular_degeneration.frag`, `hemianopia.frag`, `tunnel_vision.frag`)
+  only implement `Darken` today. `Blur` is CPU-only; the shader work was
+  scoped out of #171 as a follow-up (tracked for a future issue) rather
+  than blocking the CPU-side feature.
+
 ### Medical urgency notes
 
 - 🚨 **hemianopia** (sudden onset): possible stroke — call emergency services immediately.
