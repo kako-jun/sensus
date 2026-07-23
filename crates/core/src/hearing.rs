@@ -277,10 +277,27 @@ pub fn noise_induced_hearing_loss(buf: AudioBuffer, strength: f32) -> AudioBuffe
     sudden_hearing_loss(buf, strength, 4000.0)
 }
 
+/// tinnitus の正弦波周波数を Nyquist 未満に clamp する。
+///
+/// `low_pass_biquad` 等の biquad 系フィルタと同じ `[1.0, fs * 0.4999]` 規約
+/// （`sample_rate == 0` は 44100 Hz にフォールバック）。低サンプルレート
+/// (例 8kHz) と既定 freq (4000Hz = Nyquist ちょうど) の組み合わせでは、
+/// clamp なしだと `sin(2π・(fs/2)・n/fs) = sin(nπ) = 0` が全サンプルで成立し
+/// 耳鳴りトーンが無音化してしまう（エイリアシングの退化ケース）。
+fn tinnitus_clamped_freq_hz(freq_hz: f32, sample_rate: u32) -> f32 {
+    let fs = if sample_rate == 0 {
+        44100.0
+    } else {
+        sample_rate as f32
+    };
+    freq_hz.clamp(1.0, fs * 0.4999)
+}
+
 /// 耳鳴り（tinnitus）シミュレーション。
 ///
 /// 指定周波数の正弦波を音声にミックスする。
-/// `freq_hz`: 耳鳴りの周波数（典型的に 4000-8000 Hz）。
+/// `freq_hz`: 耳鳴りの周波数（典型的に 4000-8000 Hz）。サンプルレートに対する
+/// Nyquist 未満に clamp される（[`tinnitus_clamped_freq_hz`] 参照）。
 pub fn tinnitus(buf: AudioBuffer, strength: f32, freq_hz: f32) -> AudioBuffer {
     let s = strength.clamp(0.0, 1.0);
     if s == 0.0 {
@@ -290,6 +307,7 @@ pub fn tinnitus(buf: AudioBuffer, strength: f32, freq_hz: f32) -> AudioBuffer {
     let ch = buf.channels as usize;
     let frames = buf.frames();
     let mut out = buf.samples.clone();
+    let freq_hz = tinnitus_clamped_freq_hz(freq_hz, buf.sample_rate);
 
     // 正弦波を全チャンネルにミックス
     for frame in 0..frames {
@@ -782,6 +800,52 @@ mod tests {
         let rms: f32 =
             (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
         assert!(rms > 0.0, "tinnitus should add signal to silence");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #169: tinnitus 周波数の Nyquist clamp
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tinnitus_clamped_freq_hz_respects_nyquist() {
+        // fs=8000 の Nyquist=4000。既定 freq=4000 は biquad と同じ規約
+        // (fs * 0.4999) で 3999.2 まで clamp される。
+        let clamped = tinnitus_clamped_freq_hz(4000.0, 8000);
+        assert!(
+            (clamped - 3999.2).abs() < 1e-2,
+            "expected ~3999.2, got {clamped}"
+        );
+    }
+
+    #[test]
+    fn tinnitus_clamped_freq_hz_unchanged_for_normal_sample_rate() {
+        // 44.1kHz 素材では既定 freq (4000/200Hz) は Nyquist (22050) に対して
+        // 十分低いため clamp されず不変。
+        let clamped = tinnitus_clamped_freq_hz(4000.0, 44100);
+        assert!((clamped - 4000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tinnitus_clamped_freq_hz_zero_sample_rate_falls_back_to_44100() {
+        // biquad 系 (low_pass_biquad 等) と同じ sample_rate=0 → 44100 フォールバック。
+        let clamped = tinnitus_clamped_freq_hz(4000.0, 0);
+        assert!((clamped - 4000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tinnitus_does_not_degenerate_to_silence_at_low_sample_rate_nyquist() {
+        // clamp なしだと sr=8000 + freq=4000 (ちょうど Nyquist) は
+        // sin(2π・4000・n/8000) = sin(nπ) = 0 が全サンプルで成立し、
+        // 耳鳴りトーンが実質無音化する（エイリアシングの退化ケース）。
+        // clamp 後は Nyquist よりわずかに低い周波数になるため、非ゼロの音が乗る。
+        let buf = silence(2000, 8000, 1);
+        let out = tinnitus(buf, 1.0, 4000.0);
+        let rms: f32 =
+            (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
+        assert!(
+            rms > 0.01,
+            "clamped tinnitus tone should be audible at fs=8000, freq=4000 (Nyquist); rms={rms}"
+        );
     }
 
     #[test]
