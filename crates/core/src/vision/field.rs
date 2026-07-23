@@ -428,6 +428,10 @@ pub fn macular_degeneration(
             Ok(DynamicImage::ImageRgba8(out_rgba))
         }
         // Blur（#171）: `t`（Darken 分岐と同じ式）を disk blur 半径スケールとして使う。
+        // `t` 単体は空間的な広がり（inner_r/outer_r）にしか strength を反映しない
+        // （中心は strength によらず常に t=1）ため、他 3 フィルタ（glaucoma /
+        // hemianopia / tunnel_vision）に合わせて `t * strength` で強度も
+        // マスクに乗せる（PR #180 レビュー must1: strength 無視のバグ修正）。
         FieldLossMode::Blur => {
             let mut mask = vec![0.0_f32; (width * height) as usize];
             for y in 0..height {
@@ -445,7 +449,7 @@ pub fn macular_degeneration(
                         1.0 - u * u * (3.0 - 2.0 * u)
                     };
 
-                    mask[(y * width + x) as usize] = t;
+                    mask[(y * width + x) as usize] = t * strength;
                 }
             }
             let max_radius_px = FIELD_LOSS_MAX_RADIUS_RATIO * width.min(height) as f32;
