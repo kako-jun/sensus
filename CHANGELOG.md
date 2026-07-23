@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vision::srgb_to_linear` / `vision::linear_to_srgb` are now public utilities**: GLSL の `srgbToLinear` / `linearToSrgb` と同一式の sRGB ⇄ linear gamma 変換を公開 util 化。`tests/shader_equivalence.rs` が private に持っていた同一式の重複定義を削除し、CPU 正本（`sensus_core::vision`）を参照するよう統合した（Issue #157）。
 
+### Fixed
+
+- **fix: teichopsia の saw 波が `f32::fract()` の trunc() ベース挙動で負値を取り、上半分（uy<0）のジグザグリングが加算光の意図に反して暗化していた問題を修正**: `angle/PI*8` が負（atan2 の -π..0 域）のとき `f32::fract()` は `self - self.trunc()` で負を返すため saw ∈ (-1,1) になっていた。GLSL 組込 `fract()`（`x - floor(x)`、常に非負）と同じ挙動になるよう `rem_euclid(1.0)` に置換。`tests/shader_equivalence.rs` の CPU⇄GLSL 等価性テスト用ソフトウェアミラー `sim_teichopsia` も同じ `f32::fract()` バグを複製しており、実体の `.frag`（正しい GLSL fract()）とは乖離したまま等価性テストが通過していたため同時是正。回帰テスト `teichopsia_upper_half_ring_never_darker_than_input`（上半分リング全域で出力が入力以上）を追加（Issue #168）。
+
 ## [0.5.0] - 2026-05-30
 
 ### Added
