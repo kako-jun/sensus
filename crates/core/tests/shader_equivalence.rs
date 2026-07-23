@@ -2029,7 +2029,9 @@ fn sim_teichopsia(img: &RgbaImage, strength: f32) -> RgbaImage {
                 (rl * dark, gl * dark, bl * dark)
             } else if dist <= 0.5 {
                 let angle = ua_y.atan2(ua_x);
-                let saw = (angle / PI * 8.0).fract();
+                // GLSL の fract()（x - floor(x)）は負入力でも常に非負を返す。
+                // rem_euclid(1.0) はその実装と厳密に一致する（#168）。
+                let saw = (angle / PI * 8.0).rem_euclid(1.0);
                 let ring_t = (dist - 0.2) / 0.3;
                 let fade = (ring_t * (1.0 - ring_t) * 4.0).clamp(0.0, 1.0);
                 let brightness = saw * strength * fade * 0.6;
