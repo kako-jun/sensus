@@ -2563,10 +2563,18 @@ fn shader_equiv_detail_loss_with_cell_size_strength_half_psnr() {
     );
 }
 
-/// kako-jun/sensus#167 review (PR #175, should): strength=1.0 の出力が「タイル中心色の
+/// kako-jun/sensus#167 review (PR #175, should→must): strength=1.0 の出力が「タイル中心色の
 /// 生 byte をそのまま代入する（gamma 変換も blend もしない）」旧実装相当と byte 一致することを、
 /// **core の実装関数を期待値計算に使い回さず**テスト内で独立に再実装した legacy ロジックで固定する
 /// （非トートロジー流儀）。
+///
+/// PR #175 再レビュー (must): 当初 `color_chart_32()`（16×16 単色ブロック4枚）を入力にしていたが、
+/// cell_size=8 は 16 の約数のため全タイルが単色ブロック内に収まり、タイル内の全画素で
+/// `orig == tile` になる。この場合 lerp の引数順が反転していても `lerp(a,a,s) == a` で
+/// 結果が変わらず、テストが blend 実装の破壊を検出できず退化する（レビュアーがミューテーション
+/// で実証）。`gradient_32()`（画素値がタイル内で連続的に変化する）に差し替え、さらに
+/// 「タイル内に `orig != tile` の画素が存在する」ことを前提アサートで固定し、将来また
+/// 単色寄りの入力に差し替えられて退化するのを防ぐ。
 #[test]
 fn apply_detail_loss_cell_size_8_strength_1_is_byte_identity_with_legacy() {
     use sensus_core::vision::detail_loss_with_cell_size;
@@ -2608,8 +2616,20 @@ fn apply_detail_loss_cell_size_8_strength_1_is_byte_identity_with_legacy() {
         out
     }
 
-    let img = color_chart_32();
-    let legacy = legacy_pixelate(&img.to_rgba8(), 8);
+    let img = gradient_32();
+    let orig = img.to_rgba8();
+    let legacy = legacy_pixelate(&orig, 8);
+
+    // 前提アサート: タイル内に orig != tile な画素が実際に存在すること。
+    // これが崩れる入力（単色ブロック等）に差し替えられると本テストは blend 実装の
+    // 破壊を検出できなくなるため、退化を早期に検知するガードとして明示する。
+    assert_ne!(
+        legacy.as_raw(),
+        orig.as_raw(),
+        "precondition: gradient_32 の cell_size=8 タイル内には orig != tile の画素が\
+         存在するはず（さもないと本テストは lerp 実装の破壊を検出できず退化する）"
+    );
+
     let out = detail_loss_with_cell_size(img.clone(), 1.0, 8)
         .unwrap()
         .to_rgba8();
