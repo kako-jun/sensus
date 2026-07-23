@@ -59,7 +59,7 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     // sensus はこれと異なり pivot を 0.5 に固定し、輝度低下も
     // `-0.1*severity` の減算オフセットとする——原典よりずっとマイルドな
     // 実装であり、原典の忠実移植ではない（挙動は本修正で変更しない。
-    // 挙動変更の提案は #171 で別管理）。
+    // 挙動変更の提案は #174 で別管理）。
     const CATARACT_PIVOT: f32 = 0.5;
     const CATARACT_BRIGHTNESS_DROP: f32 = 0.1;
 
@@ -146,17 +146,10 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let nb = b + (yb - b) * strength;
 
             // VIP-Sim 二段モデルの**再解釈**（#106）: severity 比例の輝度・コントラスト低下。
-            // 白内障の霞み感の核。pivot 0.5 を中心にコントラストを per-channel 収縮させ
-            // （ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）、全体輝度を僅かに下げる。
-            // c_ch = 1 - s*(1 - coeff_ch) で strength=0 のとき恒等。CPU/GLSL/sim で同一演算。
-            //
-            // 原典との差分: VIP-Sim 原典（一次出典 `myBrightnessContrastGamma.shader`:
-            // `color *= _BCG.x; color = (color - coeff) * _BCG.y + coeff`）は brightness を
-            // `×(1-severity)` の乗算（severity=1 で全消灯）とし、コントラスト pivot は
-            // ContrastCoeff そのもの (0.7, 0.7, 0.4) を用いる。sensus は pivot を 0.5 に
-            // 固定し、輝度低下も `-0.1*severity` の減算オフセットとする点で原典より
-            // ずっとマイルドな再解釈である（挙動は本修正で変更しない。挙動変更の提案は
-            // #171 で別管理）。
+            // 白内障の霞み感の核。c_ch = 1 - s*(1 - coeff_ch) で strength=0 のとき恒等。
+            // CPU/GLSL/sim で同一演算。原典との差分・出典・pivot/brightness の詳細は
+            // 上記 CATARACT_PIVOT / CATARACT_BRIGHTNESS_DROP 定義のコメント参照
+            // （挙動変更の提案は #174 で別管理）。
             let nr = ((nr - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7)) + CATARACT_PIVOT
                 - strength * CATARACT_BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);

@@ -255,8 +255,10 @@ the "Heuristic matrices" section of
    used to locate likely metameric pairs (the matrix's third, `S`, row is
    present but unused).
 3. Compute the metameric indicator `delta = M − L`.
-4. **Baseline branch** (always computed first): red–green opponent
-   exaggeration `rg = R − G`, scaled by `strength`:
+4. **Baseline branch** (always computed first *in the CPU reference
+   implementation*; the GLSL shader instead takes an equivalent if/else,
+   computing only one branch per pixel): red–green opponent exaggeration
+   `rg = R − G`, scaled by `strength`:
    - `R_out = R + strength × rg × k_rg` (`k_rg = 0.5`)
    - `G_out = G − strength × rg × k_rg`
    - `B_out = B` (unchanged)
