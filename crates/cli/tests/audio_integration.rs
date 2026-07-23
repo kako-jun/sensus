@@ -202,9 +202,15 @@ fn audio_tinnitus_at_low_sample_rate_is_not_silent() {
 
     let (out_samples, out_spec) = read_wav_samples(&out_path);
     assert_eq!(out_spec.sample_rate, 8000);
+    // 16bit PCM 往復の量子化ノイズ（±6/32767 ≈ 0.0002 RMS 程度）だけでも
+    // `any(|x| x != 0.0)` は常に満たされてしまい、clamp をバイパスしても
+    // pass する偽陰性があった。量子化ノイズフロアを明確に上回り、clamp 後の
+    // 実トーン（振幅 ≈0.3）は余裕で通る閾値 0.01 で RMS 判定する。
+    let out_rms = rms(&out_samples);
     assert!(
-        out_samples.iter().any(|&x| x != 0.0),
-        "tinnitus at fs=8000 with default --freq 4000 (Nyquist) must not be all-zero"
+        out_rms > 0.01,
+        "tinnitus at fs=8000 with default --freq 4000 (Nyquist) must inject an audible tone, \
+         not just quantization noise (out_rms={out_rms})"
     );
 }
 
