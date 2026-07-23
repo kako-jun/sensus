@@ -256,26 +256,42 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// ディテールロス（ピクセル化）シミュレーション（cell_size 直接指定版）。
 ///
 /// `cell_size`: タイルサイズ (px)。1 以下の場合は identity を返す。
-/// `strength` は無視され、`cell_size` がそのままタイルサイズとして使用される。
+/// `strength` (0.0..=1.0) は「タイル中心点の色（pixelation 結果）」と「元の画素値」を
+/// **linear sRGB 空間**で線形補間する比率として使う（他フィルタと同じ blend 流儀。
+/// 色覚系 `apply_machado_matrix` を参照）。`strength = 0.0` は identity（早期 return で
+/// byte 恒等）、`strength = 1.0` は完全にタイル中心色（従来どおりの pixelation 効果）。
+/// NaN は `normalize_strength` により 0.0（identity）として扱う。
 ///
 /// `cell_size` が 1 の場合は各ピクセルが単独のセルになるため identity と等価です（早期リターン）。
 ///
 /// ## アルゴリズムの注意
-/// このバリアントは**タイル中心点参照**（pixelation）を使用する。
-/// これは [`detail_loss`] および GLSL シェーダ（`detail_loss.frag`）と同一アルゴリズムであり、
-/// 異なるのはタイルサイズの決め方だけ（こちらは `cell_size` 直接指定、[`detail_loss`] は
-/// `strength` から導出）。`apply(Filter::DetailLoss)` 経由時はこのバリアントが呼ばれる。
+/// タイル中心点サンプリング（pixelation）を使用する点は [`detail_loss`] および GLSL
+/// シェーダ（`detail_loss.frag`）と同一。異なるのはタイルサイズの決め方（こちらは
+/// `cell_size` 直接指定、[`detail_loss`] は `strength` から導出）。`apply(Filter::DetailLoss)`
+/// 経由時はこのバリアントが呼ばれる。
+///
+/// **`strength` の意味論は sibling の [`detail_loss`] とは異なる**（意図した仕様であり統一予定はない）:
+/// [`detail_loss`] は `strength` がタイル粒度そのもの（0 で 1px = 事実上 identity、1 で 20px タイル）を
+/// 決めるのに対し、このバリアントは `cell_size` でタイル粒度を固定し、`strength` は「元画像 ↔
+/// 固定粒度でのタイル化結果」の間の効果量（blend 比率）を表す。
 ///
 /// kako-jun/sensus#96: 以前はタイル内全ピクセルの linear sRGB 平均を使用しており、
 /// 公開 API（apply 経由）が GLSL シェーダとも等価テスト済み関数とも異なる出力を出していた。
 /// シェーダ（universal-experience の表示経路 = 正本）の中心点サンプリングに統一した。
-#[allow(unused_variables)]
+///
+/// kako-jun/sensus#167: `strength` を無視してタイル化していたため `strength=0` でも
+/// pixelation がかかる、クレート内で唯一 `strength=0=元画像` に違反する関数だった。
+/// linear sRGB 空間での blend を配線し、他フィルタと同じ契約に揃えた。
 pub fn detail_loss_with_cell_size(
     img: DynamicImage,
-    _strength: f32,
+    strength: f32,
     cell_size: u32,
 ) -> Result<DynamicImage> {
+    let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
+    if s == 0.0 {
+        return Ok(DynamicImage::ImageRgba8(rgba));
+    }
     let tile_size = cell_size.max(1);
     if tile_size <= 1 {
         return Ok(DynamicImage::ImageRgba8(rgba));
@@ -301,16 +317,23 @@ pub fn detail_loss_with_cell_size(
             let cx = (x0 + tile_size / 2).min(width - 1);
             let cy = (y0 + tile_size / 2).min(height - 1);
             let cp = rgba.get_pixel(cx, cy);
-            let avg_r = cp[0];
-            let avg_g = cp[1];
-            let avg_b = cp[2];
+            let sim_r = srgb_to_linear(cp[0] as f32 / 255.0);
+            let sim_g = srgb_to_linear(cp[1] as f32 / 255.0);
+            let sim_b = srgb_to_linear(cp[2] as f32 / 255.0);
 
             for py in y0..y1 {
                 for px in x0..x1 {
                     let p = out.get_pixel_mut(px, py);
-                    p[0] = avg_r;
-                    p[1] = avg_g;
-                    p[2] = avg_b;
+                    let r = srgb_to_linear(p[0] as f32 / 255.0);
+                    let g = srgb_to_linear(p[1] as f32 / 255.0);
+                    let b = srgb_to_linear(p[2] as f32 / 255.0);
+                    // strength で linear blend（0.0 = 原色, 1.0 = 完全 pixelation）
+                    let nr = lerp(r, sim_r, s);
+                    let ng = lerp(g, sim_g, s);
+                    let nb = lerp(b, sim_b, s);
+                    p[0] = pack_u8(linear_to_srgb(nr));
+                    p[1] = pack_u8(linear_to_srgb(ng));
+                    p[2] = pack_u8(linear_to_srgb(nb));
                     // alpha はそのまま
                 }
             }

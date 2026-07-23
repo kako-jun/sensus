@@ -203,22 +203,34 @@ Color vision deficiency simulation uses the
   the simulation is computed, and the result is gamma-encoded back to
   sRGB. Naïve implementations that multiply matrices against gamma-encoded
   sRGB are color-scientifically incorrect.
-- Applies the published **severity = 1.0** matrix and uses
-  `lerp(original, simulated, strength)` in linear space for intermediate
-  `strength` values. This is the linearised approximation of anomalous
-  trichromacy that Machado suggests and that DaltonLens et al. adopt.
+- For protanopia / deuteranopia / tritanopia, resolves `strength` against the
+  full published **per-severity table** (11 entries, severity `0.0..=1.0` in
+  `0.1` steps; `table[0]` = identity, `table[10]` = the severity = 1.0
+  matrix) instead of a two-point blend: grid-point strengths return the
+  matching table entry unchanged, other strengths interpolate the two
+  neighboring entries in matrix-element space, then the resolved matrix is
+  applied directly (#165, ADR-0008). This matches the full Machado 2009
+  family more closely than blending toward the severity = 1.0 endpoint;
+  the largest error under the old two-point blend was ~111/255 (tritanopia,
+  whose per-severity matrices are not monotonic between identity and
+  severity = 1.0).
 - Treats `achromatopsia` as a separate path: cone tristimulus values do
   not apply (the cones are dysfunctional), so the filter computes the
   CIE photopic luminance `Y = 0.2126·R + 0.7152·G + 0.0722·B` (BT.709
-  primaries, linear) and blends towards `(Y, Y, Y)`. BT.601 luma
-  (`0.299/0.587/0.114`, NTSC CRT) is **not** used — it is wrong for
-  sRGB content.
+  primaries, linear) and blends towards `(Y, Y, Y)` with
+  `lerp(original, simulated, strength)` in linear space — no published
+  per-severity table exists for this path, so it still uses the ADR-0002
+  linear blend. BT.601 luma (`0.299/0.587/0.114`, NTSC CRT) is **not**
+  used — it is wrong for sRGB content.
 - Preserves the alpha channel.
 
-The rationale for these choices (linear sRGB, direct Machado matrices, linear
-blend, BT.709 photopic luminance) is recorded canonically in
-[`adr/`](adr/) — see [ADR-0001](adr/0001-linear-srgb-machado-matrices.md),
-[ADR-0002](adr/0002-linear-blend-intermediate-severity.md), and
+The rationale for these choices (linear sRGB, direct Machado matrices,
+per-severity table resolution, achromatopsia's linear blend, BT.709 photopic
+luminance) is recorded canonically in [`adr/`](adr/) — see
+[ADR-0001](adr/0001-linear-srgb-machado-matrices.md),
+[ADR-0008](adr/0008-machado-per-severity-table.md) (supersedes
+[ADR-0002](adr/0002-linear-blend-intermediate-severity.md) for the three
+dichromacy filters; ADR-0002 still governs achromatopsia), and
 [ADR-0004](adr/0004-achromatopsia-bt709-photopic.md). The provenance of the
 matrices and luminance coefficients is in
 [`adr/matrix-provenance.md`](adr/matrix-provenance.md).
@@ -228,8 +240,10 @@ matrices and luminance coefficients is in
 
 ## Tetrachromacy algorithm (Phase 1+, #3)
 
-`tetrachromacy` approximates what a tetrachromat might perceive by
-exaggerating color differences that trichromats cannot distinguish.
+`tetrachromacy` approximates what a tetrachromat might perceive by detecting
+**metameric-pair candidates** — pixels whose red and green channels a
+trichromat would tend to confuse — and exaggerating their chroma, plus a
+baseline red–green opponent exaggeration applied everywhere else.
 
 ### Fundamental limitation
 
@@ -237,26 +251,42 @@ RGB cameras and displays capture only 3 channels; the fourth spectral
 dimension that a tetrachromat's extra cone type would sense is not
 recorded. A physically exact simulation is **impossible from RGB input**.
 The filter instead renders a visualization: "if a difference existed here,
-it might look like this."
+it might look like this." **No colorimetric fidelity is claimed** for any
+step of this algorithm, including the LMS-like values in step 2 below — see
+the "Heuristic matrices" section of
+[`adr/matrix-provenance.md`](adr/matrix-provenance.md).
 
 ### Algorithm
 
 1. Decode each pixel to **linear sRGB** (gamma removal).
-2. Compute **opponent channels**:
-   - `rg = R − G` (red–green axis; most relevant to the tetrachromat's
-     extra L/M cone overlap near 560 nm)
-   - `yb = 0.5×(R+G) − B` (yellow–blue axis)
-3. Exaggerate each axis scaled by `strength`:
+2. Compute a **pseudo-LMS** `L`/`M` pair: apply the `HPE_LMS_HEURISTIC`
+   matrix (the Hunt-Pointer-Estévez XYZ→LMS transform, D65-normalized) directly
+   to the linear RGB triple, with **no sRGB→CIE XYZ step** in between. This is
+   a fast heuristic proxy, not a colorimetric LMS conversion — the resulting
+   `L`/`M` are not true cone tristimulus values, only a repeatable stand-in
+   used to locate likely metameric pairs (the matrix's third, `S`, row is
+   present but unused).
+3. Compute the metameric indicator `delta = M − L`.
+4. **Baseline branch** (always computed first *in the CPU reference
+   implementation*; the GLSL shader instead takes an equivalent if/else,
+   computing only one branch per pixel): red–green opponent exaggeration
+   `rg = R − G`, scaled by `strength`:
    - `R_out = R + strength × rg × k_rg` (`k_rg = 0.5`)
    - `G_out = G − strength × rg × k_rg`
-   - `B_out = B + strength × yb × k_yb` (`k_yb = 0.25`, subtler)
-4. Clamp each channel to `0.0..=1.0`.
-5. Re-encode to sRGB (gamma application).
-6. Alpha is preserved.
+   - `B_out = B` (unchanged)
+5. **Metameric-pair override**: if `|delta| < 0.05` (a metameric-pair
+   candidate region), replace the baseline result with a Cb/Cr chroma
+   exaggeration around the pixel's BT.709 luma `Y`:
+   - `Cb = B − Y`, `Cr = R − Y`, `scale = strength × 2.0`
+   - `R_out = Y + Cr × scale`, `G_out = Y`, `B_out = Y + Cb × scale`
+6. Clamp each channel to `0.0..=1.0`.
+7. Re-encode to sRGB (gamma application).
+8. Alpha is preserved.
 
-**Uniform colours** (R = G = B) produce `rg = yb = 0` and are therefore
-unchanged regardless of `strength`. The effect is visible only where
-hue differences already exist in the source image.
+**Uniform colours** (R = G = B) produce `rg = Cb = Cr = 0`, so both branches
+reduce to the identity — the pixel is unchanged regardless of `strength` or
+which branch fires. The effect is visible only where hue differences already
+exist in the source image.
 
 
 
@@ -342,6 +372,14 @@ blurred direction is therefore at `axis_deg + 90°`. Default
 `axis = 90°` corresponds to with-the-rule astigmatism (vertical lines
 sharp, horizontal lines blurred). `axis_deg` is normalised
 modulo 180° (`rem_euclid`); only `NaN` falls back to the 90° default.
+The GLSL uniform side (`shaders::astigmatism_uniforms`) shares this
+exact normalization via `vision::refraction::normalize_axis_deg`, so
+CPU and GLSL always agree on the effective axis. Before this was
+unified (Issue #169), GLSL uniforms applied `axis_deg + 90°`
+unconditionally: a `NaN` axis — reachable only via direct library
+calls, since the CLI's `parse_axis` rejects it — produced
+`cos/sin = NaN` and an all-black GLSL render, while the CPU path fell
+back to 90° and produced a normal blurred image.
 
 Real clinical astigmatism is almost always *compound* (cylinder + a
 spherical refractive error), so both meridians are blurred to differing
@@ -604,13 +642,15 @@ CPU and shader outputs agree within ≤ 2/255 per channel (matrix filters) or
 PSNR ≥ 30 dB (blur / directional filters).
 
 That suite fixes *self-consistency* (CPU == shader). A separate known-answer
-test suite (`crates/core/tests/color_kat.rs`, `#156`) fixes *source-consistency*:
-it asserts that the color-vision output matches values derived independently from
-the published [Machado 2009][machado] severity-1.0 matrices — the reference
-matrices and gamma pipeline are re-typed in the test, never imported from the
-implementation. This catches a matrix coefficient that drifts together across the
-CPU and shader paths (which the equivalence test alone cannot detect), even when
-both stay self-consistent.
+test suite (`crates/core/tests/color_kat.rs`, `#156`, extended in `#165` to
+cover the per-severity table) fixes *source-consistency*: it asserts that the
+color-vision output matches values derived independently from the published
+[Machado 2009][machado] matrices — both the severity-1.0 endpoint and
+intermediate per-severity table entries (severity 0.5 grid point, severity
+0.25 interpolated) — the reference matrices and gamma pipeline are re-typed
+in the test, never imported from the implementation. This catches a matrix
+coefficient that drifts together across the CPU and shader paths (which the
+equivalence test alone cannot detect), even when both stay self-consistent.
 
 Because the KAT verifies the **8-bit quantized output**, its sensitivity has a
 floor: it catches any drift large enough to move a rounded output channel

@@ -175,6 +175,46 @@ fn audio_diplacusis_mono_to_stereo() {
 }
 
 #[test]
+fn audio_tinnitus_at_low_sample_rate_is_not_silent() {
+    // Issue #169: tinnitus は既定 --freq (4000Hz) がサンプルレートに対する
+    // Nyquist ちょうどになる低サンプルレート素材（8kHz）で無音化する退化が
+    // あった（sin(2π・(fs/2)・n/fs) = sin(nπ) = 0 が全サンプルで成立するため）。
+    // clamp 修正後は非ゼロの耳鳴りトーンが乗ることを実 CLI 経由で確認する。
+    let dir = tempfile::tempdir().unwrap();
+    let in_path = dir.path().join("in.wav");
+    let out_path = dir.path().join("out.wav");
+    write_sine_wav(&in_path, 0.0, 2000, 8000, 1); // 実質無音の 8kHz WAV
+
+    let status = Command::new(sensus_bin())
+        .args([
+            "--audio",
+            in_path.to_str().unwrap(),
+            "-o",
+            out_path.to_str().unwrap(),
+            "--hearing",
+            "tinnitus",
+            "-s",
+            "1.0",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "sensus --audio tinnitus should succeed");
+
+    let (out_samples, out_spec) = read_wav_samples(&out_path);
+    assert_eq!(out_spec.sample_rate, 8000);
+    // 16bit PCM 往復の量子化ノイズ（±6/32767 ≈ 0.0002 RMS 程度）だけでも
+    // `any(|x| x != 0.0)` は常に満たされてしまい、clamp をバイパスしても
+    // pass する偽陰性があった。量子化ノイズフロアを明確に上回り、clamp 後の
+    // 実トーン（振幅 ≈0.3）は余裕で通る閾値 0.01 で RMS 判定する。
+    let out_rms = rms(&out_samples);
+    assert!(
+        out_rms > 0.01,
+        "tinnitus at fs=8000 with default --freq 4000 (Nyquist) must inject an audible tone, \
+         not just quantization noise (out_rms={out_rms})"
+    );
+}
+
+#[test]
 fn audio_conflicts_with_image_filter() {
     let dir = tempfile::tempdir().unwrap();
     let in_path = dir.path().join("in.wav");
