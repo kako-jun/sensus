@@ -70,8 +70,28 @@ tritanopia only**. Resolve `strength` to a matrix by:
    `strength` is a multiple of `0.1`), return `table[i0]` **unchanged** — no
    interpolation arithmetic, so grid points are bit-for-bit the table entry
    (this is what lets `strength = 0.5` KAT against `table[5]` with zero
-   floating-point slop, and `strength = 1.0` stay byte-identical to the
-   pre-#165 output).
+   floating-point slop).
+   At `strength = 1.0` this returns `table[10]`, which is **numerically
+   (real-number) equivalent** to the pre-#165 output — the old formula
+   computed `n = v + (matrix·v - v) * 1.0`, which is `matrix·v` algebraically.
+   It is not bit-identical in all cases: `f32` addition/subtraction is not
+   associative, so `v + (s - v)` can differ from `s` by 1 ULP for some inputs.
+   An exhaustive 256³ (16,777,216 colors) sweep at `strength = 1.0`
+   (`crates/core/tests/color_severity1_full_sweep.rs`, `#[ignore]`, run
+   manually) measured this drift precisely:
+
+   | Deficiency | Mismatched pixels (of 16,777,216) | Max diff |
+   |---|---|---|
+   | protanopia | 28 | 1 LSB |
+   | deuteranopia | 11 | 1 LSB |
+   | tritanopia | 6 | 1 LSB |
+
+   In every one of these cases the difference is exactly ±1 on a single
+   channel — never larger, and affecting roughly 1 pixel in 600,000 to
+   1,500,000 at most. This is a rounding artifact of eliminating the
+   redundant blend arithmetic (the new formula is, if anything, *more*
+   numerically direct — one rounding step instead of two), not a fidelity
+   regression.
 3. Otherwise, linearly interpolate `table[i0]` and `table[i1]` **in matrix
    element space**: `M = table[i0] + (table[i1] - table[i0]) * frac`.
 
@@ -124,9 +144,11 @@ per-severity table exists for it (ADR-0004).
 - Matrix-element-space interpolation is the cheaper of the two mathematically
   equivalent options (one matrix multiply per pixel instead of two), and
   keeping identity/severity=1.0 as exact grid entries (no interpolation
-  arithmetic at `frac == 0`) preserves the existing byte-exact contracts at
-  `strength = 0.0` and `strength = 1.0` without any special-casing beyond
-  what already existed.
+  arithmetic at `frac == 0`) preserves the `strength = 0.0` byte-exact
+  contract, and keeps `strength = 1.0` numerically equivalent to the
+  pre-#165 output (real-number equal; `f32` non-associativity can move a
+  handful of pixels by ±1 LSB — see the sweep numbers above) without any
+  special-casing beyond what already existed.
 
 ## Consequences / Trade-offs
 
@@ -134,9 +156,12 @@ per-severity table exists for it (ADR-0004).
   family instead of a 2-point linear approximation — closes the fidelity gap
   identified against VIP-Sim, most visible for tritanopia (measured max
   111/255 error under the old approach).
-- **Gain:** `strength = 0.0` and `strength = 1.0` remain byte-identical to
-  before (verified by unchanged goldens/KAT) — this ADR only changes the
-  behavior strictly *between* the endpoints.
+- **Gain:** `strength = 0.0` remains byte-identical to before, and
+  `strength = 1.0` remains byte-identical for **all but a handful of inputs**
+  (28 / 16,777,216 for protanopia, 11 for deuteranopia, 6 for tritanopia —
+  see the Decision section; the rare exceptions are a `±1 LSB` `f32`
+  rounding artifact, not a behavior change) — this ADR's intended behavior
+  change is strictly *between* the endpoints.
 - **Cost:** 10x more constants to source, transcribe, and audit per
   deficiency (11-entry table vs. 1 matrix) — the transcription is guarded by
   a regression test asserting `table[10]` equals the pre-existing
@@ -162,6 +187,10 @@ per-severity table exists for it (ADR-0004).
   `SRC_TRITANOMALY_SEV_0_3`, `cross_check_protanopia_mid_strength`,
   `cross_check_deuteranopia_mid_strength`,
   `cross_check_tritanopia_quarter_strength_interpolated`.
+- `crates/core/tests/color_severity1_full_sweep.rs` — `#[ignore]`d exhaustive
+  256³ sweep measuring the `strength = 1.0` old-vs-new `±1 LSB` drift cited
+  above (run manually: `cargo test --release --test
+  color_severity1_full_sweep -- --ignored --nocapture`).
 - `docs/adr/matrix-provenance.md` — table provenance and VIP-Sim
   cross-check.
 - [ADR-0002](0002-linear-blend-intermediate-severity.md) (superseded by this
