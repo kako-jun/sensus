@@ -115,6 +115,13 @@ pub use common::{linear_to_srgb, srgb_to_linear};
 // これにより各サブモジュールの `use super::*;` から到達でき、`super::lerp` 等の
 // テスト参照（分割前と同一）もそのまま解決する。
 pub(crate) use color::{LUMA_B, LUMA_G, LUMA_R};
+// #165: severity 別 11 段行列テーブルと解決関数。`shaders.rs` の
+// `protanopia_uniforms` 等が CPU 実装 (`color.rs`) と同じテーブルを単一の
+// ソースから参照するために再エクスポートする（GLSL 側で行列リテラルを
+// 再度書き写す二重管理を避ける）。
+pub(crate) use color::{
+    resolve_severity_matrix, DEUTERANOMALY_TABLE, PROTANOMALY_TABLE, TRITANOMALY_TABLE,
+};
 pub(crate) use common::{
     ellipse_blur, isotropic_disk_blur_image, lerp, linear_planes_to_rgba, normalize_strength,
     pack_u8, radius_from_strength, rgba_to_linear_planes, sample_bilinear, MIN_BLUR_RADIUS_PX,
