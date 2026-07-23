@@ -2528,6 +2528,11 @@ fn detail_loss_with_cell_size_nan_strength_is_identity() {
 /// kako-jun/sensus#167: strength=0.5 は「元画像」と「strength=1.0 のタイル化結果」の
 /// linear sRGB 中間値になる（CPU 実装と同じ blend 式でシミュレートした `sim_detail_loss_shader_cell`
 /// と比較）。中間 strength での CPU↔GLSL 等価ケース。
+///
+/// 注意（PR #175 review nit1）: strength=0.5 は `lerp(a,b,0.5) == lerp(b,a,0.5)` となる
+/// 対称点のため、blend の引数順（`orig` が起点・`tile` が終点）の取り違えは検出できない。
+/// このテストは 0/1 と異なることの確認に留める（引数順の反転検出は
+/// `detail_loss_with_cell_size_strength_quarter_matches_independent_lerp`（strength=0.25）が担う）。
 #[test]
 fn shader_equiv_detail_loss_with_cell_size_strength_half_psnr() {
     use sensus_core::vision::detail_loss_with_cell_size;
@@ -2555,6 +2560,112 @@ fn shader_equiv_detail_loss_with_cell_size_strength_half_psnr() {
         cpu_out.as_raw(),
         full.as_raw(),
         "strength=0.5 は strength=1.0 の完全タイル化結果と異なるべき"
+    );
+}
+
+/// kako-jun/sensus#167 review (PR #175, should): strength=1.0 の出力が「タイル中心色の
+/// 生 byte をそのまま代入する（gamma 変換も blend もしない）」旧実装相当と byte 一致することを、
+/// **core の実装関数を期待値計算に使い回さず**テスト内で独立に再実装した legacy ロジックで固定する
+/// （非トートロジー流儀）。
+#[test]
+fn apply_detail_loss_cell_size_8_strength_1_is_byte_identity_with_legacy() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+
+    // #167 修正前の `detail_loss_with_cell_size` 相当（cell_size のみでタイル化し、
+    // タイル中心点の sRGB byte をそのまま代入。linear 変換や blend は一切行わない）。
+    fn legacy_pixelate(img: &RgbaImage, cell_size: u32) -> RgbaImage {
+        let (w, h) = img.dimensions();
+        let tile_size = cell_size.max(1);
+        let mut out = img.clone();
+        if tile_size <= 1 {
+            return out;
+        }
+        let tile_cols = w.div_ceil(tile_size);
+        let tile_rows = h.div_ceil(tile_size);
+        for ty in 0..tile_rows {
+            for tx in 0..tile_cols {
+                let x0 = tx * tile_size;
+                let y0 = ty * tile_size;
+                let x1 = (x0 + tile_size).min(w);
+                let y1 = (y0 + tile_size).min(h);
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
+                }
+                let cx = (x0 + tile_size / 2).min(w - 1);
+                let cy = (y0 + tile_size / 2).min(h - 1);
+                let c = *img.get_pixel(cx, cy);
+                for py in y0..y1 {
+                    for px in x0..x1 {
+                        let p = out.get_pixel_mut(px, py);
+                        p[0] = c[0];
+                        p[1] = c[1];
+                        p[2] = c[2];
+                        // alpha はそのまま
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    let img = color_chart_32();
+    let legacy = legacy_pixelate(&img.to_rgba8(), 8);
+    let out = detail_loss_with_cell_size(img.clone(), 1.0, 8)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        legacy.as_raw(),
+        "strength=1.0 は旧実装（gamma 変換なしの生 byte 代入）と byte 一致するべき（golden 不変）"
+    );
+}
+
+/// kako-jun/sensus#167 review (PR #175, nit1): strength=0.5 は `lerp(a,b,0.5)==lerp(b,a,0.5)`
+/// となる対称点のため blend の引数順の取り違えを検出できない。strength=0.25（非対称点）で、
+/// `sim_detail_loss_shader_cell` とは別にテスト内で独立実装した期待値（linear 空間 lerp、
+/// `orig` が起点・`tile` が終点で固定）と比較し、引数順の反転を検出できるようにする。
+#[test]
+fn detail_loss_with_cell_size_strength_quarter_matches_independent_lerp() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+
+    // sim_detail_loss_shader_cell と意図的に別実装（両方が同じ引数順ミスを共有するリスクを避ける）。
+    fn expected_quarter_blend(img: &RgbaImage, cell_size: u32, strength: f32) -> RgbaImage {
+        let (w, h) = img.dimensions();
+        let tile_size = cell_size.max(1) as f32;
+        let mut out = img.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let tile_ox = (x as f32 / tile_size).floor() * tile_size;
+                let tile_oy = (y as f32 / tile_size).floor() * tile_size;
+                let cx = (tile_ox + tile_size * 0.5).clamp(0.0, (w - 1) as f32) as u32;
+                let cy = (tile_oy + tile_size * 0.5).clamp(0.0, (h - 1) as f32) as u32;
+                let tile_px = img.get_pixel(cx, cy);
+                let orig_px = img.get_pixel(x, y);
+                let mut ch = [0u8; 3];
+                for i in 0..3 {
+                    let o = srgb_to_linear(orig_px[i] as f32 / 255.0);
+                    let t = srgb_to_linear(tile_px[i] as f32 / 255.0);
+                    // orig を起点（strength=0）、タイル色を終点（strength=1）とする lerp。
+                    // 引数順を固定で書き下し、core 側の swap を検出できるようにする。
+                    let v = o + (t - o) * strength;
+                    ch[i] = (linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                }
+                out.put_pixel(x, y, image::Rgba([ch[0], ch[1], ch[2], orig_px[3]]));
+            }
+        }
+        out
+    }
+
+    let img = color_chart_32();
+    let expected = expected_quarter_blend(&img.to_rgba8(), 7, 0.25);
+    let out = detail_loss_with_cell_size(img.clone(), 0.25, 7)
+        .unwrap()
+        .to_rgba8();
+    let db = psnr(&out, &expected);
+    assert!(
+        db >= 60.0,
+        "detail_loss_with_cell_size strength=0.25: PSNR {db:.1} dB < 60 dB \
+         (独立実装の期待値と不一致。blend の引数順を確認)"
     );
 }
 

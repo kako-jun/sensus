@@ -270,6 +270,11 @@ pub fn detail_loss(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// `cell_size` 直接指定、[`detail_loss`] は `strength` から導出）。`apply(Filter::DetailLoss)`
 /// 経由時はこのバリアントが呼ばれる。
 ///
+/// **`strength` の意味論は sibling の [`detail_loss`] とは異なる**（意図した仕様であり統一予定はない）:
+/// [`detail_loss`] は `strength` がタイル粒度そのもの（0 で 1px = 事実上 identity、1 で 20px タイル）を
+/// 決めるのに対し、このバリアントは `cell_size` でタイル粒度を固定し、`strength` は「元画像 ↔
+/// 固定粒度でのタイル化結果」の間の効果量（blend 比率）を表す。
+///
 /// kako-jun/sensus#96: 以前はタイル内全ピクセルの linear sRGB 平均を使用しており、
 /// 公開 API（apply 経由）が GLSL シェーダとも等価テスト済み関数とも異なる出力を出していた。
 /// シェーダ（universal-experience の表示経路 = 正本）の中心点サンプリングに統一した。
