@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vision::srgb_to_linear` / `vision::linear_to_srgb` are now public utilities**: GLSL の `srgbToLinear` / `linearToSrgb` と同一式の sRGB ⇄ linear gamma 変換を公開 util 化。`tests/shader_equivalence.rs` が private に持っていた同一式の重複定義を削除し、CPU 正本（`sensus_core::vision`）を参照するよう統合した（Issue #157）。
 
+### Fixed
+
+- **fix: kako-jun/sensus#166 depth_aware_blur のビン中心 off-by-one を修正（焦点面ずれ最大 ~0.09、最遠ビン半径 ~6.25% 過小）**: ビン半径計算の `bin_center=(bin+0.5)/8`（定義域 0.0625..0.9375）が補間側の `scaled=d*(N_BINS-1)`（定義域 0.0..=1.0）とズレており、`focus_depth` と厳密に一致する深度でも blur 半径が 0 にならず焦点面が最大 ~0.09 ずれ、最遠ビン（i=7）の半径が意図値より一貫して約 6.25% 過小だった。`bin_center=bin/(N_BINS-1)` に統一（ビン数・補間方式は不変）。`depth_aware_blur` は `pub fn` のため **crates.io 公開 API の可視変更**（同じ入力でも出力バイトが変わる）。回帰テスト 5 件を追加（両端の depth=focus で identity・focus からの距離に対する単調性・両端の半径が設計式 `max_radius_ratio*min_dim*|depth-focus|` と一致）。GLSL 側 `depth_aware_blur.frag` は per-fragment 直接計算でビン分割を持たないため影響なし、`Filter`/`apply()` からの呼び出しも無いため単一入力 Filter 経路には影響しない。
+
 ## [0.5.0] - 2026-05-30
 
 ### Added

@@ -2096,17 +2096,33 @@ fn depth_aware_blur_per_pixel_bin_assignment() {
 // ---------------------------------------------------------------
 
 // DA-10: focus=1.0 のとき depth=1.0（均一領域）は画素単位で完全一致（identity）
+//
+// size/ratio は旧実装（bin_center=(bin+0.5)/8）の誤差が確実に可視化される値を選ぶ。
+// size=32, ratio=0.1 だと旧誤差半径が 0.0625*0.1*32=0.2px となり
+// MIN_BLUR_RADIUS_PX(0.5px) 未満に隠れて旧実装でも pass してしまう（PR #177
+// レビュー指摘、main へのグラフトで実証済み）。size=64, ratio=0.5 なら
+// 旧誤差半径 = 0.0625*0.5*64 = 2.0px となり、MIN_BLUR_RADIUS_PX はもちろん
+// build_ellipse_spans の縮退カーネル閾値（半径 <1.0px で退化）も超えるため、
+// 旧実装なら確実に FAIL する（PR #177 レビュー対応で `(bin+0.5)/N_BINS` に
+// 一時復元して実測済み）。
 #[test]
 fn depth_aware_blur_focus_at_max_depth_is_exact_identity() {
     // depth=255 (d=1.0) は最終ビン（bin7, center=1.0）を直接使う経路。
     // focus=1.0 と bin7 の center が一致するため delta=0 → radius=0 → 補間なしで
     // raw pixel がそのまま出力されるはず。
-    let size = 32_u32;
+    let size = 64_u32;
+    let max_radius_ratio = 0.5_f32;
     let input = center_white_dot(size);
     let depth = depth_map_solid(size, 255); // d=1.0
 
-    let out =
-        depth_aware_blur(input.clone(), &depth, 1.0, 0.1, DepthBlurKind::DepthOfField).unwrap();
+    let out = depth_aware_blur(
+        input.clone(),
+        &depth,
+        1.0,
+        max_radius_ratio,
+        DepthBlurKind::DepthOfField,
+    )
+    .unwrap();
 
     assert_eq!(
         input.to_rgba8().into_raw(),
@@ -2116,17 +2132,26 @@ fn depth_aware_blur_focus_at_max_depth_is_exact_identity() {
 }
 
 // DA-11: focus=0.0 のとき depth=0.0（均一領域）は画素単位で完全一致（identity）
+//
+// DA-10 と同じ理由で size=64, ratio=0.5（旧誤差半径 2.0px）を使う。
 #[test]
 fn depth_aware_blur_focus_at_min_depth_is_exact_identity() {
     // depth=0 (d=0.0) はビン0/1 ペアの t=0（補間係数ゼロ）経路。
     // bin0 の center=0.0 と focus=0.0 が一致するため delta=0 → radius=0。
     // t=0 により ceil 側の値は寄与せず、raw pixel がそのまま出力されるはず。
-    let size = 32_u32;
+    let size = 64_u32;
+    let max_radius_ratio = 0.5_f32;
     let input = center_white_dot(size);
     let depth = depth_map_solid(size, 0); // d=0.0
 
-    let out =
-        depth_aware_blur(input.clone(), &depth, 0.0, 0.1, DepthBlurKind::DepthOfField).unwrap();
+    let out = depth_aware_blur(
+        input.clone(),
+        &depth,
+        0.0,
+        max_radius_ratio,
+        DepthBlurKind::DepthOfField,
+    )
+    .unwrap();
 
     assert_eq!(
         input.to_rgba8().into_raw(),
@@ -2136,6 +2161,10 @@ fn depth_aware_blur_focus_at_min_depth_is_exact_identity() {
 }
 
 // DA-12: focus=0.5 のとき、focus に最も近い深度ほど半径が最小（中心輝度が最も高い）
+//
+// 一般 sanity（#166 の off-by-one 回帰防止は DA-13/14 が担う）。旧実装の
+// (bin+0.5)/8 でも新実装の bin/(N_BINS-1) でも「focus に近いほど半径が小さい」
+// という単調性自体は成り立つため、この off-by-one を検出する目的では使わない。
 #[test]
 fn depth_aware_blur_focus_mid_radius_is_minimal_near_focus() {
     let size = 64_u32;
