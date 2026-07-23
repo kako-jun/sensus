@@ -2219,7 +2219,10 @@ fn shader_equiv_cataract_strength_zero_psnr() {
 /// detail_loss シェーダ（detail_loss.frag, 中心点サンプリング）を、タイルサイズ = cell_size
 /// 直接指定で Rust シミュレートする。apply(Filter::DetailLoss) 経路（detail_loss_with_cell_size）
 /// の等価検証用（kako-jun/sensus#96）。
-fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32) -> RgbaImage {
+///
+/// kako-jun/sensus#167: `strength` を追加し、タイル中心色と元画素色を linear sRGB 空間で
+/// `orig + (tile - orig) * strength` する（CPU 実装 `detail_loss_with_cell_size` と同じ blend 式）。
+fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let tile_size = cell_size.max(1) as f32;
     let mut out = img.clone();
@@ -2231,10 +2234,17 @@ fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32) -> RgbaImage {
             let sx = (center_px.0.clamp(0.0, (w - 1) as f32)) as u32;
             let sy = (center_px.1.clamp(0.0, (h - 1) as f32)) as u32;
             let s = img.get_pixel(sx, sy);
-            let lin_r = srgb_to_linear(s[0] as f32 / 255.0);
-            let lin_g = srgb_to_linear(s[1] as f32 / 255.0);
-            let lin_b = srgb_to_linear(s[2] as f32 / 255.0);
-            let orig_alpha = img.get_pixel(x, y)[3];
+            let sim_r = srgb_to_linear(s[0] as f32 / 255.0);
+            let sim_g = srgb_to_linear(s[1] as f32 / 255.0);
+            let sim_b = srgb_to_linear(s[2] as f32 / 255.0);
+            let orig = img.get_pixel(x, y);
+            let orig_r = srgb_to_linear(orig[0] as f32 / 255.0);
+            let orig_g = srgb_to_linear(orig[1] as f32 / 255.0);
+            let orig_b = srgb_to_linear(orig[2] as f32 / 255.0);
+            let lin_r = orig_r + (sim_r - orig_r) * strength;
+            let lin_g = orig_g + (sim_g - orig_g) * strength;
+            let lin_b = orig_b + (sim_b - orig_b) * strength;
+            let orig_alpha = orig[3];
             out.put_pixel(
                 x,
                 y,
@@ -2261,7 +2271,7 @@ fn shader_equiv_apply_detail_loss_cpu_gpu_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2276,7 +2286,7 @@ fn shader_equiv_apply_detail_loss_cell_size_20_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 20)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 20);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 20, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2354,7 +2364,7 @@ fn shader_equiv_apply_detail_loss_non_square_64x32_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2371,7 +2381,7 @@ fn shader_equiv_apply_detail_loss_non_square_32x64_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2406,7 +2416,7 @@ fn shader_equiv_apply_detail_loss_cell_size_exceeds_image_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 100)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 100);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 100, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2432,7 +2442,7 @@ fn shader_equiv_apply_detail_loss_coprime_cell_size_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 5)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 5);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 5, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2460,6 +2470,225 @@ fn apply_detail_loss_preserves_alpha_per_pixel() {
     for (po, pi) in out.pixels().zip(orig.pixels()) {
         assert_eq!(po[3], pi[3], "alpha は画素ごとに保存されるべき");
     }
+}
+
+// ---------------------------------------------------------------------------
+// S-2c: kako-jun/sensus#167 — detail_loss_with_cell_size の strength 配線
+// ---------------------------------------------------------------------------
+
+/// kako-jun/sensus#167: `strength=0` は cell_size に関わらず byte 恒等（早期 return）。
+/// 修正前は `_strength` が無視され、cell_size=8 でも常にタイル化されていた
+/// （issue #167 の再現条件そのもの: `apply(DetailLoss{cell_size:8}, img, 0.0)`）。
+#[test]
+fn detail_loss_with_cell_size_strength_0_is_byte_identity() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let orig = img.to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), 0.0, 8)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "detail_loss_with_cell_size strength=0 は cell_size=8 でも byte 恒等であるべき"
+    );
+}
+
+/// kako-jun/sensus#167: `apply(Filter::DetailLoss{cell_size:8}, img, 0.0)` の公開 API 経路でも
+/// byte 恒等（issue の再現コードそのものを検証）。
+#[test]
+fn apply_detail_loss_cell_size_8_strength_0_is_byte_identity() {
+    use sensus_core::{apply, Filter};
+    let img = color_chart_32();
+    let orig = img.to_rgba8();
+    let out = apply(Filter::DetailLoss { cell_size: 8 }, img.clone(), 0.0)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "apply(DetailLoss{{cell_size:8}}, strength=0) は byte 恒等であるべき（クレート横断不変条件）"
+    );
+}
+
+/// kako-jun/sensus#167: NaN strength は `normalize_strength` の流儀どおり identity（0.0 扱い）。
+#[test]
+fn detail_loss_with_cell_size_nan_strength_is_identity() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let orig = img.to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), f32::NAN, 8)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "detail_loss_with_cell_size strength=NaN は identity であるべき"
+    );
+}
+
+/// kako-jun/sensus#167: strength=0.5 は「元画像」と「strength=1.0 のタイル化結果」の
+/// linear sRGB 中間値になる（CPU 実装と同じ blend 式でシミュレートした `sim_detail_loss_shader_cell`
+/// と比較）。中間 strength での CPU↔GLSL 等価ケース。
+///
+/// 注意（PR #175 review nit1）: strength=0.5 は `lerp(a,b,0.5) == lerp(b,a,0.5)` となる
+/// 対称点のため、blend の引数順（`orig` が起点・`tile` が終点）の取り違えは検出できない。
+/// このテストは 0/1 と異なることの確認に留める（引数順の反転検出は
+/// `detail_loss_with_cell_size_strength_quarter_matches_independent_lerp`（strength=0.25）が担う）。
+#[test]
+fn shader_equiv_detail_loss_with_cell_size_strength_half_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 0.5, 7)
+        .unwrap()
+        .to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 0.5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 60.0,
+        "detail_loss_with_cell_size strength=0.5 CPU/GPU: PSNR {db:.1} dB < 60 dB"
+    );
+    // strength=0.5 は明確に元画像・strength=1.0 の両方と異なること（無意味な identity でない）
+    let orig = img.to_rgba8();
+    let full = detail_loss_with_cell_size(img.clone(), 1.0, 7)
+        .unwrap()
+        .to_rgba8();
+    assert_ne!(
+        cpu_out.as_raw(),
+        orig.as_raw(),
+        "strength=0.5 は元画像と異なるべき"
+    );
+    assert_ne!(
+        cpu_out.as_raw(),
+        full.as_raw(),
+        "strength=0.5 は strength=1.0 の完全タイル化結果と異なるべき"
+    );
+}
+
+/// kako-jun/sensus#167 review (PR #175, should→must): strength=1.0 の出力が「タイル中心色の
+/// 生 byte をそのまま代入する（gamma 変換も blend もしない）」旧実装相当と byte 一致することを、
+/// **core の実装関数を期待値計算に使い回さず**テスト内で独立に再実装した legacy ロジックで固定する
+/// （非トートロジー流儀）。
+///
+/// PR #175 再レビュー (must): 当初 `color_chart_32()`（16×16 単色ブロック4枚）を入力にしていたが、
+/// cell_size=8 は 16 の約数のため全タイルが単色ブロック内に収まり、タイル内の全画素で
+/// `orig == tile` になる。この場合 lerp の引数順が反転していても `lerp(a,a,s) == a` で
+/// 結果が変わらず、テストが blend 実装の破壊を検出できず退化する（レビュアーがミューテーション
+/// で実証）。`gradient_32()`（画素値がタイル内で連続的に変化する）に差し替え、さらに
+/// 「タイル内に `orig != tile` の画素が存在する」ことを前提アサートで固定し、将来また
+/// 単色寄りの入力に差し替えられて退化するのを防ぐ。
+#[test]
+fn apply_detail_loss_cell_size_8_strength_1_is_byte_identity_with_legacy() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+
+    // #167 修正前の `detail_loss_with_cell_size` 相当（cell_size のみでタイル化し、
+    // タイル中心点の sRGB byte をそのまま代入。linear 変換や blend は一切行わない）。
+    fn legacy_pixelate(img: &RgbaImage, cell_size: u32) -> RgbaImage {
+        let (w, h) = img.dimensions();
+        let tile_size = cell_size.max(1);
+        let mut out = img.clone();
+        if tile_size <= 1 {
+            return out;
+        }
+        let tile_cols = w.div_ceil(tile_size);
+        let tile_rows = h.div_ceil(tile_size);
+        for ty in 0..tile_rows {
+            for tx in 0..tile_cols {
+                let x0 = tx * tile_size;
+                let y0 = ty * tile_size;
+                let x1 = (x0 + tile_size).min(w);
+                let y1 = (y0 + tile_size).min(h);
+                if x1 <= x0 || y1 <= y0 {
+                    continue;
+                }
+                let cx = (x0 + tile_size / 2).min(w - 1);
+                let cy = (y0 + tile_size / 2).min(h - 1);
+                let c = *img.get_pixel(cx, cy);
+                for py in y0..y1 {
+                    for px in x0..x1 {
+                        let p = out.get_pixel_mut(px, py);
+                        p[0] = c[0];
+                        p[1] = c[1];
+                        p[2] = c[2];
+                        // alpha はそのまま
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    let img = gradient_32();
+    let orig = img.to_rgba8();
+    let legacy = legacy_pixelate(&orig, 8);
+
+    // 前提アサート: タイル内に orig != tile な画素が実際に存在すること。
+    // これが崩れる入力（単色ブロック等）に差し替えられると本テストは blend 実装の
+    // 破壊を検出できなくなるため、退化を早期に検知するガードとして明示する。
+    assert_ne!(
+        legacy.as_raw(),
+        orig.as_raw(),
+        "precondition: gradient_32 の cell_size=8 タイル内には orig != tile の画素が\
+         存在するはず（さもないと本テストは lerp 実装の破壊を検出できず退化する）"
+    );
+
+    let out = detail_loss_with_cell_size(img.clone(), 1.0, 8)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        legacy.as_raw(),
+        "strength=1.0 は旧実装（gamma 変換なしの生 byte 代入）と byte 一致するべき（golden 不変）"
+    );
+}
+
+/// kako-jun/sensus#167 review (PR #175, nit1): strength=0.5 は `lerp(a,b,0.5)==lerp(b,a,0.5)`
+/// となる対称点のため blend の引数順の取り違えを検出できない。strength=0.25（非対称点）で、
+/// `sim_detail_loss_shader_cell` とは別にテスト内で独立実装した期待値（linear 空間 lerp、
+/// `orig` が起点・`tile` が終点で固定）と比較し、引数順の反転を検出できるようにする。
+#[test]
+fn detail_loss_with_cell_size_strength_quarter_matches_independent_lerp() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+
+    // sim_detail_loss_shader_cell と意図的に別実装（両方が同じ引数順ミスを共有するリスクを避ける）。
+    fn expected_quarter_blend(img: &RgbaImage, cell_size: u32, strength: f32) -> RgbaImage {
+        let (w, h) = img.dimensions();
+        let tile_size = cell_size.max(1) as f32;
+        let mut out = img.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let tile_ox = (x as f32 / tile_size).floor() * tile_size;
+                let tile_oy = (y as f32 / tile_size).floor() * tile_size;
+                let cx = (tile_ox + tile_size * 0.5).clamp(0.0, (w - 1) as f32) as u32;
+                let cy = (tile_oy + tile_size * 0.5).clamp(0.0, (h - 1) as f32) as u32;
+                let tile_px = img.get_pixel(cx, cy);
+                let orig_px = img.get_pixel(x, y);
+                let mut ch = [0u8; 3];
+                for i in 0..3 {
+                    let o = srgb_to_linear(orig_px[i] as f32 / 255.0);
+                    let t = srgb_to_linear(tile_px[i] as f32 / 255.0);
+                    // orig を起点（strength=0）、タイル色を終点（strength=1）とする lerp。
+                    // 引数順を固定で書き下し、core 側の swap を検出できるようにする。
+                    let v = o + (t - o) * strength;
+                    ch[i] = (linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8;
+                }
+                out.put_pixel(x, y, image::Rgba([ch[0], ch[1], ch[2], orig_px[3]]));
+            }
+        }
+        out
+    }
+
+    let img = color_chart_32();
+    let expected = expected_quarter_blend(&img.to_rgba8(), 7, 0.25);
+    let out = detail_loss_with_cell_size(img.clone(), 0.25, 7)
+        .unwrap()
+        .to_rgba8();
+    let db = psnr(&out, &expected);
+    assert!(
+        db >= 60.0,
+        "detail_loss_with_cell_size strength=0.25: PSNR {db:.1} dB < 60 dB \
+         (独立実装の期待値と不一致。blend の引数順を確認)"
+    );
 }
 
 // ---------------------------------------------------------------------------
