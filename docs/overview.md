@@ -228,8 +228,10 @@ matrices and luminance coefficients is in
 
 ## Tetrachromacy algorithm (Phase 1+, #3)
 
-`tetrachromacy` approximates what a tetrachromat might perceive by
-exaggerating color differences that trichromats cannot distinguish.
+`tetrachromacy` approximates what a tetrachromat might perceive by detecting
+**metameric-pair candidates** — pixels whose red and green channels a
+trichromat would tend to confuse — and exaggerating their chroma, plus a
+baseline red–green opponent exaggeration applied everywhere else.
 
 ### Fundamental limitation
 
@@ -237,26 +239,42 @@ RGB cameras and displays capture only 3 channels; the fourth spectral
 dimension that a tetrachromat's extra cone type would sense is not
 recorded. A physically exact simulation is **impossible from RGB input**.
 The filter instead renders a visualization: "if a difference existed here,
-it might look like this."
+it might look like this." **No colorimetric fidelity is claimed** for any
+step of this algorithm, including the LMS-like values in step 2 below — see
+the "Heuristic matrices" section of
+[`adr/matrix-provenance.md`](adr/matrix-provenance.md).
 
 ### Algorithm
 
 1. Decode each pixel to **linear sRGB** (gamma removal).
-2. Compute **opponent channels**:
-   - `rg = R − G` (red–green axis; most relevant to the tetrachromat's
-     extra L/M cone overlap near 560 nm)
-   - `yb = 0.5×(R+G) − B` (yellow–blue axis)
-3. Exaggerate each axis scaled by `strength`:
+2. Compute a **pseudo-LMS** `L`/`M` pair: apply the `HPE_LMS_HEURISTIC`
+   matrix (the Hunt-Pointer-Estévez XYZ→LMS transform, D65-normalized) directly
+   to the linear RGB triple, with **no sRGB→CIE XYZ step** in between. This is
+   a fast heuristic proxy, not a colorimetric LMS conversion — the resulting
+   `L`/`M` are not true cone tristimulus values, only a repeatable stand-in
+   used to locate likely metameric pairs (the matrix's third, `S`, row is
+   present but unused).
+3. Compute the metameric indicator `delta = M − L`.
+4. **Baseline branch** (always computed first *in the CPU reference
+   implementation*; the GLSL shader instead takes an equivalent if/else,
+   computing only one branch per pixel): red–green opponent exaggeration
+   `rg = R − G`, scaled by `strength`:
    - `R_out = R + strength × rg × k_rg` (`k_rg = 0.5`)
    - `G_out = G − strength × rg × k_rg`
-   - `B_out = B + strength × yb × k_yb` (`k_yb = 0.25`, subtler)
-4. Clamp each channel to `0.0..=1.0`.
-5. Re-encode to sRGB (gamma application).
-6. Alpha is preserved.
+   - `B_out = B` (unchanged)
+5. **Metameric-pair override**: if `|delta| < 0.05` (a metameric-pair
+   candidate region), replace the baseline result with a Cb/Cr chroma
+   exaggeration around the pixel's BT.709 luma `Y`:
+   - `Cb = B − Y`, `Cr = R − Y`, `scale = strength × 2.0`
+   - `R_out = Y + Cr × scale`, `G_out = Y`, `B_out = Y + Cb × scale`
+6. Clamp each channel to `0.0..=1.0`.
+7. Re-encode to sRGB (gamma application).
+8. Alpha is preserved.
 
-**Uniform colours** (R = G = B) produce `rg = yb = 0` and are therefore
-unchanged regardless of `strength`. The effect is visible only where
-hue differences already exist in the source image.
+**Uniform colours** (R = G = B) produce `rg = Cb = Cr = 0`, so both branches
+reduce to the identity — the pixel is unchanged regardless of `strength` or
+which branch fires. The effect is visible only where hue differences already
+exist in the source image.
 
 
 
