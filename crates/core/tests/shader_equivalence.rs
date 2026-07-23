@@ -4011,8 +4011,11 @@ fn shader_equiv_starbursts_non_square() {
 
 // ---------------------------------------------------------------------------
 // cataract（白内障）— #125 で白濁ノイズを #99 と同じ 32bit spatial hash に
-// CPU/GLSL 両方統一した。黄変マトリクス（Pokorny 1987）に加えてノイズ項も
-// CPU↔.frag↔sim が bit 一致する。
+// CPU/GLSL 両方統一した。黄変マトリクス（Pokorny 1987）に加え、ノイズ項の
+// 32bit 整数ハッシュ系列も CPU↔.frag↔sim で bit 一致する。ただし最終画素値は
+// sRGB↔linear の `pow()` が CPU/GPU で last-ULP 一致を保証されないため、
+// 完全な bit 一致は主張しない——このため以下のテストは exact 等価でなく
+// PSNR/許容差ベースで判定する（#170）。
 //
 // 旧実装（#100 時点）は CPU が 64bit Knuth LCG の高位ビット抽出
 // `(lcg >> 32)/u32::MAX`、.frag が同定数の下位 32bit 切り詰めで別系列であり、
@@ -4020,7 +4023,7 @@ fn shader_equiv_starbursts_non_square() {
 // の 0.5px オフセットで食い違っていた（PSNR 19.6dB）。#125 で:
 //   - ノイズハッシュを metamorphopsia/dry_eye と同一の 32bit spatial hash に統一
 //   - 格子規約を整数ピクセル座標 (top-left) に統一（.frag は uv*res-0.5 で復元）
-// した結果、CPU↔GLSL が等価になった。
+// した結果、CPU↔GLSL が高精度で一致するようになった（PSNR ベースで検証）。
 // ---------------------------------------------------------------------------
 
 /// cataract.frag の gridNoise を Rust で再現する（CPU `grid_hash` と bit 一致）。
