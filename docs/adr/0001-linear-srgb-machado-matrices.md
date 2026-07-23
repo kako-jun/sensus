@@ -60,8 +60,9 @@ linear space, and the result is gamma-encoded back to sRGB
 - **Gain:** no separate LMS conversion matrices to maintain or get wrong.
 - **Cost:** the simulation is only as good as the Machado matrices; we cannot
   independently tune cone responses without replacing the source matrices (a
-  change that would have to update both the const and the provenance spec — see
-  ADR-0002 and `matrix-provenance.md`).
+  change that would have to update both the const/table and the provenance
+  spec — see ADR-0008 (per-severity table; ADR-0002 for achromatopsia) and
+  `matrix-provenance.md`).
 - **Cost:** gamma decode/encode runs per pixel; this is the price of doing the
   math in linear space (and is shared by every other linear-sRGB filter).
 
