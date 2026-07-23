@@ -51,7 +51,16 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     const WHITE_BLEND_MAX: f32 = 0.4;
     // 格子セルサイズ（旧 BLOCK_SIZE=8 より大きい 32px で空間相関を確保）
     const CELL_SIZE: f32 = 32.0;
-    // VIP-Sim 二段モデルのコントラスト/輝度低下（#106）。
+    // VIP-Sim 二段モデルの**再解釈**によるコントラスト/輝度低下（#106）。
+    // 原典 VIP-Sim（一次出典 `myBrightnessContrastGamma.shader`:
+    // `color *= _BCG.x; color = (color - coeff) * _BCG.y + coeff`）は
+    // brightness を `×(1-severity)` の乗算（severity=1 で全消灯）とし、
+    // コントラスト pivot は ContrastCoeff そのもの (0.7, 0.7, 0.4) を使う
+    // （B 係数 0.4 が最小＝白内障で青の散乱が最大であることに対応する）。
+    // sensus はこれと異なり pivot を 0.5 に固定し、輝度低下も
+    // `-0.1*severity` の減算オフセットとする——原典よりずっとマイルドな
+    // 実装であり、原典の忠実移植ではない（挙動は本修正で変更しない。
+    // 挙動変更の提案は #174 で別管理）。
     const CATARACT_PIVOT: f32 = 0.5;
     const CATARACT_BRIGHTNESS_DROP: f32 = 0.1;
 
@@ -62,7 +71,10 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     // spatial hash（黄金比定数混合 + XOR-shift finalizer）に置き換えた。各頂点の
     // 値は seed と頂点座標 (gx, gy) だけの決定論的関数で、逐次状態を持たない。
     // `cataract.frag` の `gridHash`（= metamorphopsia/dry_eye と同一の系列）と
-    // bit 単位に一致する（u32 演算は GLSL の uint 同様 mod 2^32 で wrap する）。
+    // 32bit 整数ハッシュ系列が bit 一致する（u32 演算は GLSL の uint 同様
+    // mod 2^32 で wrap する）。ただし最終画素値は sRGB↔linear の `pow()` が
+    // CPU/GPU で last-ULP 一致を保証されないため、完全な bit 一致は主張しない
+    // （CPU↔GLSL 等価テストは PSNR 閾値で安全側に判定する。#170）。
     let seed32 = seed as u32;
     // 1 頂点ぶんの 32bit ハッシュ（0.0..=1.0 を返す）。
     let grid_hash = |gx: u32, gy: u32| -> f32 {
@@ -134,10 +146,11 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
             let ng = g + (yg - g) * strength;
             let nb = b + (yb - b) * strength;
 
-            // VIP-Sim 二段モデルの未移植分（#106）: severity 比例の輝度・コントラスト低下。
-            // 白内障の霞み感の核。pivot 0.5 を中心にコントラストを per-channel 収縮させ
-            // （ContrastCoeff = (0.7, 0.7, 0.4)、青の散乱が最大）、全体輝度を僅かに下げる。
-            // c_ch = 1 - s*(1 - coeff_ch) で strength=0 のとき恒等。CPU/GLSL/sim で同一演算。
+            // VIP-Sim 二段モデルの**再解釈**（#106）: severity 比例の輝度・コントラスト低下。
+            // 白内障の霞み感の核。c_ch = 1 - s*(1 - coeff_ch) で strength=0 のとき恒等。
+            // CPU/GLSL/sim で同一演算。原典との差分・出典・pivot/brightness の詳細は
+            // 上記 CATARACT_PIVOT / CATARACT_BRIGHTNESS_DROP 定義のコメント参照
+            // （挙動変更の提案は #174 で別管理）。
             let nr = ((nr - CATARACT_PIVOT) * (1.0 - strength * (1.0 - 0.7)) + CATARACT_PIVOT
                 - strength * CATARACT_BRIGHTNESS_DROP)
                 .clamp(0.0, 1.0);

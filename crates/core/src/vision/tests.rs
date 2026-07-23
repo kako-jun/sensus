@@ -3045,6 +3045,53 @@ fn teichopsia_strength_one_darkens_center() {
     );
 }
 
+#[test]
+fn teichopsia_upper_half_ring_never_darker_than_input() {
+    // #168: ジグザグリング（dist 0.2..=0.5）は加算光（brightness = saw*s*fade*0.6 >= 0）
+    // のはず。修正前は atan2() が uy<0（画像上半分）で常に負角度を返し、
+    // f32::fract() が負入力に負を返すため saw ∈ (-1,1) になり、上半分のリング
+    // 全体が暗化していた（意図した加算光と逆）。
+    let w = 64u32;
+    let h = 64u32;
+    let mut img = RgbaImage::new(w, h);
+    for px in img.pixels_mut() {
+        *px = Rgba([128, 128, 128, 255]);
+    }
+    let input = img.clone();
+    let out = teichopsia(DynamicImage::ImageRgba8(img), 1.0)
+        .unwrap()
+        .to_rgba8();
+
+    let w_f = w as f32;
+    let h_f = h as f32;
+    let aspect = w_f / h_f;
+    let mut checked = 0u32;
+    for y in 0..(h / 2) {
+        // uy < 0 の上半分のみ
+        for x in 0..w {
+            let ux = (x as f32 / w_f) - 0.5;
+            let uy = ((y as f32 / h_f) - 0.5) / aspect;
+            let dist = (ux * ux + uy * uy).sqrt();
+            if !(0.2..=0.5).contains(&dist) {
+                continue;
+            }
+            let src = input.get_pixel(x, y);
+            let dst = out.get_pixel(x, y);
+            checked += 1;
+            for c in 0..3 {
+                assert!(
+                    dst[c] >= src[c],
+                    "teichopsia ring darkened at uy<0 pixel ({x},{y}): channel {c} {}\u{2192}{} \
+                     (加算光のはずが暗化した)",
+                    src[c],
+                    dst[c]
+                );
+            }
+        }
+    }
+    assert!(checked > 0, "テスト前提: リング領域に uy<0 の画素が無い");
+}
+
 // -------------------------------------------------------
 // flickering_stars tests
 // -------------------------------------------------------

@@ -85,17 +85,27 @@ impl BiquadFilter {
 // フィルタ係数計算
 // ---------------------------------------------------------------
 
+/// `sample_rate == 0` を 44100 Hz にフォールバックした実効サンプルレートを返す。
+///
+/// biquad 系フィルタ (`low_pass_biquad` / `high_pass_biquad` /
+/// `band_reject_biquad`)、`auditory_processing_disorder` の gap 埋め、
+/// `tinnitus` の時間軸・周波数 clamp が共有するフォールバック規約
+/// （Issue #169: 個別に `sample_rate as f32` を使うと sr=0 で `0.0/0.0 = NaN`
+/// になる問題があった。呼び出し側ごとの重複定義も一元化する）。
+fn effective_sample_rate(sample_rate: u32) -> f32 {
+    if sample_rate == 0 {
+        44100.0
+    } else {
+        sample_rate as f32
+    }
+}
+
 /// Butterworth 近似の 2 次ローパスフィルタ係数を返す。
 ///
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    // sample_rate=0 の場合はフォールバックとして 44100 Hz を使用する。
-    let fs = if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    };
+    let fs = effective_sample_rate(sample_rate);
     // バイリニア変換による Butterworth 2 次 LP
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
@@ -126,11 +136,7 @@ pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    };
+    let fs = effective_sample_rate(sample_rate);
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let q = std::f32::consts::FRAC_1_SQRT_2;
@@ -161,11 +167,7 @@ pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `bandwidth_hz`: 帯域幅 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn band_reject_biquad(center_hz: f32, bandwidth_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    };
+    let fs = effective_sample_rate(sample_rate);
     let f0 = center_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let bw = bandwidth_hz.max(1.0);
@@ -277,23 +279,37 @@ pub fn noise_induced_hearing_loss(buf: AudioBuffer, strength: f32) -> AudioBuffe
     sudden_hearing_loss(buf, strength, 4000.0)
 }
 
+/// tinnitus の正弦波周波数を Nyquist 未満に clamp する。
+///
+/// `low_pass_biquad` 等の biquad 系フィルタと同じ `[1.0, fs * 0.4999]` 規約。
+/// `fs` は [`effective_sample_rate`] で解決済みの実効サンプルレートを渡すこと。
+/// 低サンプルレート (例 8kHz) と既定 freq (4000Hz = Nyquist ちょうど) の
+/// 組み合わせでは、clamp なしだと `sin(2π・(fs/2)・n/fs) = sin(nπ) = 0` が
+/// 全サンプルで成立し耳鳴りトーンが無音化してしまう（エイリアシングの退化ケース）。
+fn tinnitus_clamped_freq_hz(freq_hz: f32, fs: f32) -> f32 {
+    freq_hz.clamp(1.0, fs * 0.4999)
+}
+
 /// 耳鳴り（tinnitus）シミュレーション。
 ///
 /// 指定周波数の正弦波を音声にミックスする。
-/// `freq_hz`: 耳鳴りの周波数（典型的に 4000-8000 Hz）。
+/// `freq_hz`: 耳鳴りの周波数（典型的に 4000-8000 Hz）。サンプルレートに対する
+/// Nyquist 未満に clamp される（[`tinnitus_clamped_freq_hz`] 参照）。
+/// `sample_rate == 0` は 44100 Hz にフォールバックする（[`effective_sample_rate`]）。
 pub fn tinnitus(buf: AudioBuffer, strength: f32, freq_hz: f32) -> AudioBuffer {
     let s = strength.clamp(0.0, 1.0);
     if s == 0.0 {
         return buf;
     }
-    let sr = buf.sample_rate as f32;
+    let fs = effective_sample_rate(buf.sample_rate);
     let ch = buf.channels as usize;
     let frames = buf.frames();
     let mut out = buf.samples.clone();
+    let freq_hz = tinnitus_clamped_freq_hz(freq_hz, fs);
 
     // 正弦波を全チャンネルにミックス
     for frame in 0..frames {
-        let t = frame as f32 / sr;
+        let t = frame as f32 / fs;
         let sine = (2.0 * PI * freq_hz * t).sin() * s * 0.3; // 最大振幅 0.3
         for c in 0..ch {
             let idx = frame * ch + c;
@@ -635,13 +651,8 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
     noisy = smeared;
 
     // Step 3: gap 埋め（< 5 ms の無音区間を前後の値で補間）
-    // sample_rate=0 は 44100 Hz として扱う
-    let sr = if buf.sample_rate == 0 {
-        44100
-    } else {
-        buf.sample_rate
-    };
-    let gap_frames = ((sr as f32 * 0.005) as usize).max(1); // 5 ms
+    let fs = effective_sample_rate(buf.sample_rate);
+    let gap_frames = ((fs * 0.005) as usize).max(1); // 5 ms
     let silence_threshold = 0.01_f32;
 
     let frames = n / ch;
@@ -782,6 +793,68 @@ mod tests {
         let rms: f32 =
             (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
         assert!(rms > 0.0, "tinnitus should add signal to silence");
+    }
+
+    // ---------------------------------------------------------------
+    // Issue #169: tinnitus 周波数の Nyquist clamp
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn tinnitus_clamped_freq_hz_respects_nyquist() {
+        // fs=8000 の Nyquist=4000。既定 freq=4000 は biquad と同じ規約
+        // (fs * 0.4999) で 3999.2 まで clamp される。
+        let clamped = tinnitus_clamped_freq_hz(4000.0, 8000.0);
+        assert!(
+            (clamped - 3999.2).abs() < 1e-2,
+            "expected ~3999.2, got {clamped}"
+        );
+    }
+
+    #[test]
+    fn tinnitus_clamped_freq_hz_unchanged_for_normal_sample_rate() {
+        // 44.1kHz 素材では既定 freq (4000/200Hz) は Nyquist (22050) に対して
+        // 十分低いため clamp されず不変。
+        let clamped = tinnitus_clamped_freq_hz(4000.0, 44100.0);
+        assert!((clamped - 4000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn effective_sample_rate_zero_falls_back_to_44100() {
+        // biquad 系 (low_pass_biquad 等) と同じ sample_rate=0 → 44100 フォールバック。
+        assert_eq!(effective_sample_rate(0), 44100.0);
+    }
+
+    #[test]
+    fn effective_sample_rate_nonzero_is_passthrough() {
+        assert_eq!(effective_sample_rate(8000), 8000.0);
+    }
+
+    #[test]
+    fn tinnitus_does_not_degenerate_to_silence_at_low_sample_rate_nyquist() {
+        // clamp なしだと sr=8000 + freq=4000 (ちょうど Nyquist) は
+        // sin(2π・4000・n/8000) = sin(nπ) = 0 が全サンプルで成立し、
+        // 耳鳴りトーンが実質無音化する（エイリアシングの退化ケース）。
+        // clamp 後は Nyquist よりわずかに低い周波数になるため、非ゼロの音が乗る。
+        let buf = silence(2000, 8000, 1);
+        let out = tinnitus(buf, 1.0, 4000.0);
+        let rms: f32 =
+            (out.samples.iter().map(|&x| x * x).sum::<f32>() / out.samples.len() as f32).sqrt();
+        assert!(
+            rms > 0.01,
+            "clamped tinnitus tone should be audible at fs=8000, freq=4000 (Nyquist); rms={rms}"
+        );
+    }
+
+    #[test]
+    fn tinnitus_sample_rate_zero_produces_finite_output() {
+        // sample_rate=0 だと旧実装は t = frame/sr = frame/0.0 で NaN/inf になっていた。
+        // effective_sample_rate で 44100 Hz にフォールバックするため、全サンプル有限であること。
+        let buf = silence(1000, 0, 1);
+        let out = tinnitus(buf, 1.0, 4000.0);
+        assert!(
+            out.samples.iter().all(|x| x.is_finite()),
+            "tinnitus output must be all-finite even when sample_rate=0"
+        );
     }
 
     #[test]

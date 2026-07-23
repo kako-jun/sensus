@@ -90,9 +90,11 @@ void main() {
     float ng = g + (yg - g) * uStrength;
     float nb = b + (yb - b) * uStrength;
 
-    // VIP-Sim 二段モデルの輝度・コントラスト低下（#106）。
+    // VIP-Sim 二段モデルの**再解釈**による輝度・コントラスト低下（#106）。
     // pivot 0.5 中心の per-channel コントラスト収縮（ContrastCoeff = 0.7, 0.7, 0.4）
-    // + 輝度低下。CPU vision::cataract と同一演算。
+    // + 輝度低下。CPU vision::cataract と同一演算。原典 VIP-Sim との差分（原典は
+    // brightness ×(1-severity) の乗算・pivot=ContrastCoeff 自身）は CPU 側
+    // `vision::cataract` の doc コメント参照（#170）。
     const float PIVOT = 0.5;
     const float BRIGHTNESS_DROP = 0.1;
     nr = clamp((nr - PIVOT) * (1.0 - uStrength * (1.0 - 0.7)) + PIVOT - uStrength * BRIGHTNESS_DROP, 0.0, 1.0);
