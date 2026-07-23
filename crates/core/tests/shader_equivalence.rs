@@ -2217,7 +2217,10 @@ fn shader_equiv_cataract_strength_zero_psnr() {
 /// detail_loss シェーダ（detail_loss.frag, 中心点サンプリング）を、タイルサイズ = cell_size
 /// 直接指定で Rust シミュレートする。apply(Filter::DetailLoss) 経路（detail_loss_with_cell_size）
 /// の等価検証用（kako-jun/sensus#96）。
-fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32) -> RgbaImage {
+///
+/// kako-jun/sensus#167: `strength` を追加し、タイル中心色と元画素色を linear sRGB 空間で
+/// `orig + (tile - orig) * strength` する（CPU 実装 `detail_loss_with_cell_size` と同じ blend 式）。
+fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32, strength: f32) -> RgbaImage {
     let (w, h) = img.dimensions();
     let tile_size = cell_size.max(1) as f32;
     let mut out = img.clone();
@@ -2229,10 +2232,17 @@ fn sim_detail_loss_shader_cell(img: &RgbaImage, cell_size: u32) -> RgbaImage {
             let sx = (center_px.0.clamp(0.0, (w - 1) as f32)) as u32;
             let sy = (center_px.1.clamp(0.0, (h - 1) as f32)) as u32;
             let s = img.get_pixel(sx, sy);
-            let lin_r = srgb_to_linear(s[0] as f32 / 255.0);
-            let lin_g = srgb_to_linear(s[1] as f32 / 255.0);
-            let lin_b = srgb_to_linear(s[2] as f32 / 255.0);
-            let orig_alpha = img.get_pixel(x, y)[3];
+            let sim_r = srgb_to_linear(s[0] as f32 / 255.0);
+            let sim_g = srgb_to_linear(s[1] as f32 / 255.0);
+            let sim_b = srgb_to_linear(s[2] as f32 / 255.0);
+            let orig = img.get_pixel(x, y);
+            let orig_r = srgb_to_linear(orig[0] as f32 / 255.0);
+            let orig_g = srgb_to_linear(orig[1] as f32 / 255.0);
+            let orig_b = srgb_to_linear(orig[2] as f32 / 255.0);
+            let lin_r = orig_r + (sim_r - orig_r) * strength;
+            let lin_g = orig_g + (sim_g - orig_g) * strength;
+            let lin_b = orig_b + (sim_b - orig_b) * strength;
+            let orig_alpha = orig[3];
             out.put_pixel(
                 x,
                 y,
@@ -2259,7 +2269,7 @@ fn shader_equiv_apply_detail_loss_cpu_gpu_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2274,7 +2284,7 @@ fn shader_equiv_apply_detail_loss_cell_size_20_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 20)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 20);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 20, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2352,7 +2362,7 @@ fn shader_equiv_apply_detail_loss_non_square_64x32_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2369,7 +2379,7 @@ fn shader_equiv_apply_detail_loss_non_square_32x64_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 7)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2404,7 +2414,7 @@ fn shader_equiv_apply_detail_loss_cell_size_exceeds_image_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 100)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 100);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 100, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2430,7 +2440,7 @@ fn shader_equiv_apply_detail_loss_coprime_cell_size_psnr() {
     let cpu_out = detail_loss_with_cell_size(img.clone(), 1.0, 5)
         .unwrap()
         .to_rgba8();
-    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 5);
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 5, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
         db >= 60.0,
@@ -2458,6 +2468,94 @@ fn apply_detail_loss_preserves_alpha_per_pixel() {
     for (po, pi) in out.pixels().zip(orig.pixels()) {
         assert_eq!(po[3], pi[3], "alpha は画素ごとに保存されるべき");
     }
+}
+
+// ---------------------------------------------------------------------------
+// S-2c: kako-jun/sensus#167 — detail_loss_with_cell_size の strength 配線
+// ---------------------------------------------------------------------------
+
+/// kako-jun/sensus#167: `strength=0` は cell_size に関わらず byte 恒等（早期 return）。
+/// 修正前は `_strength` が無視され、cell_size=8 でも常にタイル化されていた
+/// （issue #167 の再現条件そのもの: `apply(DetailLoss{cell_size:8}, img, 0.0)`）。
+#[test]
+fn detail_loss_with_cell_size_strength_0_is_byte_identity() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let orig = img.to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), 0.0, 8)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "detail_loss_with_cell_size strength=0 は cell_size=8 でも byte 恒等であるべき"
+    );
+}
+
+/// kako-jun/sensus#167: `apply(Filter::DetailLoss{cell_size:8}, img, 0.0)` の公開 API 経路でも
+/// byte 恒等（issue の再現コードそのものを検証）。
+#[test]
+fn apply_detail_loss_cell_size_8_strength_0_is_byte_identity() {
+    use sensus_core::{apply, Filter};
+    let img = color_chart_32();
+    let orig = img.to_rgba8();
+    let out = apply(Filter::DetailLoss { cell_size: 8 }, img.clone(), 0.0)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "apply(DetailLoss{{cell_size:8}}, strength=0) は byte 恒等であるべき（クレート横断不変条件）"
+    );
+}
+
+/// kako-jun/sensus#167: NaN strength は `normalize_strength` の流儀どおり identity（0.0 扱い）。
+#[test]
+fn detail_loss_with_cell_size_nan_strength_is_identity() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let orig = img.to_rgba8();
+    let out = detail_loss_with_cell_size(img.clone(), f32::NAN, 8)
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(
+        out.as_raw(),
+        orig.as_raw(),
+        "detail_loss_with_cell_size strength=NaN は identity であるべき"
+    );
+}
+
+/// kako-jun/sensus#167: strength=0.5 は「元画像」と「strength=1.0 のタイル化結果」の
+/// linear sRGB 中間値になる（CPU 実装と同じ blend 式でシミュレートした `sim_detail_loss_shader_cell`
+/// と比較）。中間 strength での CPU↔GLSL 等価ケース。
+#[test]
+fn shader_equiv_detail_loss_with_cell_size_strength_half_psnr() {
+    use sensus_core::vision::detail_loss_with_cell_size;
+    let img = color_chart_32();
+    let cpu_out = detail_loss_with_cell_size(img.clone(), 0.5, 7)
+        .unwrap()
+        .to_rgba8();
+    let gpu_sim = sim_detail_loss_shader_cell(&img.to_rgba8(), 7, 0.5);
+    let db = psnr(&cpu_out, &gpu_sim);
+    assert!(
+        db >= 60.0,
+        "detail_loss_with_cell_size strength=0.5 CPU/GPU: PSNR {db:.1} dB < 60 dB"
+    );
+    // strength=0.5 は明確に元画像・strength=1.0 の両方と異なること（無意味な identity でない）
+    let orig = img.to_rgba8();
+    let full = detail_loss_with_cell_size(img.clone(), 1.0, 7)
+        .unwrap()
+        .to_rgba8();
+    assert_ne!(
+        cpu_out.as_raw(),
+        orig.as_raw(),
+        "strength=0.5 は元画像と異なるべき"
+    );
+    assert_ne!(
+        cpu_out.as_raw(),
+        full.as_raw(),
+        "strength=0.5 は strength=1.0 の完全タイル化結果と異なるべき"
+    );
 }
 
 // ---------------------------------------------------------------------------

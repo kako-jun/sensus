@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fix: `DetailLoss` の `strength=0` が identity にならないクレート横断不変条件違反を修正**: `apply(Filter::DetailLoss{cell_size}, img, strength)` が呼ぶ `detail_loss_with_cell_size` は `strength` を完全に無視し `cell_size` だけでタイル化していたため、`strength=0.0` でも pixelation がかかる、crate 内で唯一「strength=0=元画像」に違反するフィルタだった。タイル中心色（pixelation 結果）と元画素値を **linear sRGB 空間**で `lerp(orig, tile, strength)` するよう配線（色覚系 `apply_machado_matrix` と同じ blend 流儀）。`strength=0.0` は早期 return で byte 恒等、`strength=1.0` は従来どおりの pixelation 結果と byte 一致（golden 不変）。NaN は `normalize_strength` の流儀どおり identity。回帰テスト 4 件を追加（`detail_loss_with_cell_size_strength_0_is_byte_identity` / `apply_detail_loss_cell_size_8_strength_0_is_byte_identity`（issue の再現条件そのもの）/ `detail_loss_with_cell_size_nan_strength_is_identity` / `shader_equiv_detail_loss_with_cell_size_strength_half_psnr`）。既存の CPU↔GLSL 等価テスト（`sim_detail_loss_shader_cell`）にも `strength` を追加し blend 式を統一（Issue #167）。
+
 ### Changed
 
 - **internal: split CLI `main.rs` into `arguments` / `filter_mapping` / `depth_resolver` modules (behavior unchanged)**: 約 963 行の `crates/cli/src/main.rs` に同居していた clap 引数定義・CLI→core 変換・depth blur 統合・オーケストレーションを責務ごとに分割。`arguments`（`Cli` struct / `Filter`・`Hearing` ValueEnum / `parse_*` バリデータ）、`filter_mapping`（`Filter::to_core` 等の core enum 変換 / `warn_unused_flags`）、`depth_resolver`（`depth_kinds` / `apply_filters_to_image` / `apply_non_depth_filters` / `DEPTH_BLUR_MAX_RADIUS_RATIO`）へ純粋移動し、`main.rs` には `main` / `run` / `run_audio` / `run_pipe` / `split_jpeg_frames` / `RunError` を残置。clap 属性・default・help・value_parser・mapping・depth 計算・seed 既定はすべて不変で、`sensus --help` の出力はバイト等価。CLI 統合テスト（cli / pipe / depth_compose / mpo / portrait / audio）と workspace 全テストが緑であることを確認（Issue #159）。
