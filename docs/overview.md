@@ -203,22 +203,34 @@ Color vision deficiency simulation uses the
   the simulation is computed, and the result is gamma-encoded back to
   sRGB. Naïve implementations that multiply matrices against gamma-encoded
   sRGB are color-scientifically incorrect.
-- Applies the published **severity = 1.0** matrix and uses
-  `lerp(original, simulated, strength)` in linear space for intermediate
-  `strength` values. This is the linearised approximation of anomalous
-  trichromacy that Machado suggests and that DaltonLens et al. adopt.
+- For protanopia / deuteranopia / tritanopia, resolves `strength` against the
+  full published **per-severity table** (11 entries, severity `0.0..=1.0` in
+  `0.1` steps; `table[0]` = identity, `table[10]` = the severity = 1.0
+  matrix) instead of a two-point blend: grid-point strengths return the
+  matching table entry unchanged, other strengths interpolate the two
+  neighboring entries in matrix-element space, then the resolved matrix is
+  applied directly (#165, ADR-0008). This matches the full Machado 2009
+  family more closely than blending toward the severity = 1.0 endpoint;
+  the largest error under the old two-point blend was ~111/255 (tritanopia,
+  whose per-severity matrices are not monotonic between identity and
+  severity = 1.0).
 - Treats `achromatopsia` as a separate path: cone tristimulus values do
   not apply (the cones are dysfunctional), so the filter computes the
   CIE photopic luminance `Y = 0.2126·R + 0.7152·G + 0.0722·B` (BT.709
-  primaries, linear) and blends towards `(Y, Y, Y)`. BT.601 luma
-  (`0.299/0.587/0.114`, NTSC CRT) is **not** used — it is wrong for
-  sRGB content.
+  primaries, linear) and blends towards `(Y, Y, Y)` with
+  `lerp(original, simulated, strength)` in linear space — no published
+  per-severity table exists for this path, so it still uses the ADR-0002
+  linear blend. BT.601 luma (`0.299/0.587/0.114`, NTSC CRT) is **not**
+  used — it is wrong for sRGB content.
 - Preserves the alpha channel.
 
-The rationale for these choices (linear sRGB, direct Machado matrices, linear
-blend, BT.709 photopic luminance) is recorded canonically in
-[`adr/`](adr/) — see [ADR-0001](adr/0001-linear-srgb-machado-matrices.md),
-[ADR-0002](adr/0002-linear-blend-intermediate-severity.md), and
+The rationale for these choices (linear sRGB, direct Machado matrices,
+per-severity table resolution, achromatopsia's linear blend, BT.709 photopic
+luminance) is recorded canonically in [`adr/`](adr/) — see
+[ADR-0001](adr/0001-linear-srgb-machado-matrices.md),
+[ADR-0008](adr/0008-machado-per-severity-table.md) (supersedes
+[ADR-0002](adr/0002-linear-blend-intermediate-severity.md) for the three
+dichromacy filters; ADR-0002 still governs achromatopsia), and
 [ADR-0004](adr/0004-achromatopsia-bt709-photopic.md). The provenance of the
 matrices and luminance coefficients is in
 [`adr/matrix-provenance.md`](adr/matrix-provenance.md).
@@ -604,13 +616,15 @@ CPU and shader outputs agree within ≤ 2/255 per channel (matrix filters) or
 PSNR ≥ 30 dB (blur / directional filters).
 
 That suite fixes *self-consistency* (CPU == shader). A separate known-answer
-test suite (`crates/core/tests/color_kat.rs`, `#156`) fixes *source-consistency*:
-it asserts that the color-vision output matches values derived independently from
-the published [Machado 2009][machado] severity-1.0 matrices — the reference
-matrices and gamma pipeline are re-typed in the test, never imported from the
-implementation. This catches a matrix coefficient that drifts together across the
-CPU and shader paths (which the equivalence test alone cannot detect), even when
-both stay self-consistent.
+test suite (`crates/core/tests/color_kat.rs`, `#156`, extended in `#165` to
+cover the per-severity table) fixes *source-consistency*: it asserts that the
+color-vision output matches values derived independently from the published
+[Machado 2009][machado] matrices — both the severity-1.0 endpoint and
+intermediate per-severity table entries (severity 0.5 grid point, severity
+0.25 interpolated) — the reference matrices and gamma pipeline are re-typed
+in the test, never imported from the implementation. This catches a matrix
+coefficient that drifts together across the CPU and shader paths (which the
+equivalence test alone cannot detect), even when both stay self-consistent.
 
 Because the KAT verifies the **8-bit quantized output**, its sensitivity has a
 floor: it catches any drift large enough to move a rounded output channel

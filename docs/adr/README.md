@@ -44,12 +44,13 @@ Every ADR has these sections:
 | ADR | Title | Status |
 |---|---|---|
 | [0001](0001-linear-srgb-machado-matrices.md) | Operate color-vision simulation in linear sRGB, applying Machado 2009 matrices directly (no explicit LMS pipeline) | Accepted |
-| [0002](0002-linear-blend-intermediate-severity.md) | Linear blend for intermediate severity | Accepted |
+| [0002](0002-linear-blend-intermediate-severity.md) | Linear blend for intermediate severity | Superseded by 0008 (achromatopsia only) |
 | [0003](0003-disk-blur-not-gaussian.md) | Disk (pillbox) blur for defocus / refraction, not Gaussian | Accepted |
 | [0004](0004-achromatopsia-bt709-photopic.md) | Achromatopsia via BT.709 photopic luminance (not BT.601, not LMS) | Accepted |
 | [0005](0005-phased-scope-phase1-four-types.md) | Phased scope: Phase 1 limited to the four dichromacy / achromatopsia types | Accepted |
 | [0006](0006-filters-as-pure-functions-explicit-seed.md) | Filters are pure functions with an explicit seed | Accepted |
 | [0007](0007-wasm-out-of-scope.md) | WebAssembly is out of scope | Accepted |
+| [0008](0008-machado-per-severity-table.md) | Adopt the Machado 2009 per-severity 11-entry matrix table for protanopia / deuteranopia / tritanopia | Accepted |
 
 ## Related specifications
 
