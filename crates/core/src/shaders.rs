@@ -480,7 +480,10 @@ pub fn astigmatism_uniforms(
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
     // vision/refraction.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
-    let blur_axis_deg = axis_deg + 90.0;
+    // normalize_axis_deg で NaN→90°フォールバック・rem_euclid(180.0) 正規化してから
+    // +90° する（Issue #169: 正規化なしで NaN を素通しすると cos/sin=NaN で全 tap
+    // 不採用 = 黒画像になり、CPU 側の 90° フォールバックと分岐してしまう）。
+    let blur_axis_deg = crate::vision::normalize_axis_deg(axis_deg) + 90.0;
     AstigmatismUniforms {
         strength,
         radius_px,
@@ -1046,6 +1049,54 @@ mod tests {
     fn astigmatism_uniforms_strength_zero_has_zero_radius() {
         let u = astigmatism_uniforms(0.0, 1000, 90.0);
         assert!(u.radius_px < 0.001);
+    }
+
+    #[test]
+    fn astigmatism_uniforms_nan_axis_matches_cpu_normalization() {
+        // Issue #169: NaN 軸は CPU 側 (vision::refraction::normalize_axis_deg) と同じ
+        // 90° フォールバックを経て +90° されるべき（= 180.0）。正規化せず NaN を
+        // 素通しすると GLSL 側は cos/sin=NaN で黒画像になり CPU (90° フォールバック)
+        // と分岐してしまう。
+        let u = astigmatism_uniforms(1.0, 1000, f32::NAN);
+        assert!(
+            (u.axis_deg - 180.0).abs() < 1e-4,
+            "NaN axis should fall back to 90° sharp → 180° blur, got {}",
+            u.axis_deg
+        );
+    }
+
+    #[test]
+    fn astigmatism_uniforms_matches_cpu_normalize_axis_deg() {
+        // GLSL uniform 側の実効軸 (正規化後 - 90°) が CPU 側の
+        // crate::vision::normalize_axis_deg と byte-exact で一致することを、
+        // NaN / 負値 / 360° 超の代表値で直接クロスチェックする。
+        for axis in [f32::NAN, -45.0, 0.0, 90.0, 179.9, 360.0, 405.0] {
+            let u = astigmatism_uniforms(1.0, 1000, axis);
+            let expected_cpu_norm = crate::vision::normalize_axis_deg(axis);
+            assert_eq!(
+                u.axis_deg - 90.0,
+                expected_cpu_norm,
+                "axis_deg={axis}: GLSL effective axis must equal CPU normalize_axis_deg()"
+            );
+        }
+    }
+
+    #[test]
+    fn astigmatism_uniforms_axis_is_180_periodic() {
+        // 負値 / 360° 超も CPU 側 rem_euclid(180.0) と同じ結果になること。
+        let u_neg = astigmatism_uniforms(1.0, 1000, -45.0); // -45 rem_euclid 180 = 135
+        assert!(
+            (u_neg.axis_deg - 225.0).abs() < 1e-4,
+            "axis=-45° should normalize to 135° sharp → 225° blur, got {}",
+            u_neg.axis_deg
+        );
+
+        let u_over = astigmatism_uniforms(1.0, 1000, 405.0); // 405 rem_euclid 180 = 45
+        assert!(
+            (u_over.axis_deg - 135.0).abs() < 1e-4,
+            "axis=405° should normalize to 45° sharp → 135° blur, got {}",
+            u_over.axis_deg
+        );
     }
 
     #[test]

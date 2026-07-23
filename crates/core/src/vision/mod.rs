@@ -119,6 +119,7 @@ pub(crate) use common::{
     ellipse_blur, isotropic_disk_blur_image, lerp, linear_planes_to_rgba, normalize_strength,
     pack_u8, radius_from_strength, rgba_to_linear_planes, sample_bilinear, MIN_BLUR_RADIUS_PX,
 };
+pub(crate) use refraction::normalize_axis_deg;
 
 #[cfg(test)]
 mod tests;
