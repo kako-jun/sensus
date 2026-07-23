@@ -1806,11 +1806,11 @@ fn depth_aware_blur_myopia_near_is_sharp() {
 #[test]
 fn depth_aware_blur_dof_both_blurred() {
     // focus=0.5。depth=0.0 (遠方) と depth=1.0 (近方) の両方がボケる。
-    // max_radius_ratio=0.1, size=64 → ビン0の radius ≈ 0.4375 * 0.1 * 64 = 2.8px
+    // max_radius_ratio=0.1, size=64 → ビン0の radius = 0.5 * 0.1 * 64 = 3.2px
     let size = 64_u32;
     let input = center_white_dot(size);
 
-    // 遠方 depth=0 (ビン0, center=0.0625, delta=-0.4375)
+    // 遠方 depth=0 (ビン0, center=0.0, delta=-0.5)
     let depth_far = depth_map_solid(size, 0);
     let out_far = depth_aware_blur(
         input.clone(),
@@ -1821,7 +1821,7 @@ fn depth_aware_blur_dof_both_blurred() {
     )
     .unwrap();
 
-    // 近方 depth=255 (ビン7, center=0.9375, delta=0.4375)
+    // 近方 depth=255 (ビン7, center=1.0, delta=0.5)
     let depth_near = depth_map_solid(size, 255);
     let out_near = depth_aware_blur(
         input.clone(),
@@ -2083,6 +2083,177 @@ fn depth_aware_blur_per_pixel_bin_assignment() {
     assert_eq!(
         right_px, 0,
         "right area (depth=255, near=focus) must stay black (no blur source): right={right_px}"
+    );
+}
+
+// ---------------------------------------------------------------
+// #166: ビン中心の off-by-one 修正の回帰防止
+//
+// 旧実装は bin_center=(bin+0.5)/8（0.0625..0.9375）で計算しており、
+// 補間側の scaled=d*7（定義域 0.0..=1.0）とズレていたため、focus_depth と
+// 厳密に一致する深度でも blur 半径が 0 にならなかった。
+// bin_center=bin/(N_BINS-1) に統一し、以下で焦点面のズレが解消されたことを固定する。
+// ---------------------------------------------------------------
+
+// DA-10: focus=1.0 のとき depth=1.0（均一領域）は画素単位で完全一致（identity）
+//
+// size/ratio は旧実装（bin_center=(bin+0.5)/8）の誤差が確実に可視化される値を選ぶ。
+// size=32, ratio=0.1 だと旧誤差半径が 0.0625*0.1*32=0.2px となり
+// MIN_BLUR_RADIUS_PX(0.5px) 未満に隠れて旧実装でも pass してしまう（PR #177
+// レビュー指摘、main へのグラフトで実証済み）。size=64, ratio=0.5 なら
+// 旧誤差半径 = 0.0625*0.5*64 = 2.0px となり、MIN_BLUR_RADIUS_PX はもちろん
+// build_ellipse_spans の縮退カーネル閾値（半径 <1.0px で退化）も超えるため、
+// 旧実装なら確実に FAIL する（PR #177 レビュー対応で `(bin+0.5)/N_BINS` に
+// 一時復元して実測済み）。
+#[test]
+fn depth_aware_blur_focus_at_max_depth_is_exact_identity() {
+    // depth=255 (d=1.0) は最終ビン（bin7, center=1.0）を直接使う経路。
+    // focus=1.0 と bin7 の center が一致するため delta=0 → radius=0 → 補間なしで
+    // raw pixel がそのまま出力されるはず。
+    let size = 64_u32;
+    let max_radius_ratio = 0.5_f32;
+    let input = center_white_dot(size);
+    let depth = depth_map_solid(size, 255); // d=1.0
+
+    let out = depth_aware_blur(
+        input.clone(),
+        &depth,
+        1.0,
+        max_radius_ratio,
+        DepthBlurKind::DepthOfField,
+    )
+    .unwrap();
+
+    assert_eq!(
+        input.to_rgba8().into_raw(),
+        out.to_rgba8().into_raw(),
+        "focus_depth=1.0 と一致する depth=1.0 の均一領域は完全一致(identity)のはず（#166）"
+    );
+}
+
+// DA-11: focus=0.0 のとき depth=0.0（均一領域）は画素単位で完全一致（identity）
+//
+// DA-10 と同じ理由で size=64, ratio=0.5（旧誤差半径 2.0px）を使う。
+#[test]
+fn depth_aware_blur_focus_at_min_depth_is_exact_identity() {
+    // depth=0 (d=0.0) はビン0/1 ペアの t=0（補間係数ゼロ）経路。
+    // bin0 の center=0.0 と focus=0.0 が一致するため delta=0 → radius=0。
+    // t=0 により ceil 側の値は寄与せず、raw pixel がそのまま出力されるはず。
+    let size = 64_u32;
+    let max_radius_ratio = 0.5_f32;
+    let input = center_white_dot(size);
+    let depth = depth_map_solid(size, 0); // d=0.0
+
+    let out = depth_aware_blur(
+        input.clone(),
+        &depth,
+        0.0,
+        max_radius_ratio,
+        DepthBlurKind::DepthOfField,
+    )
+    .unwrap();
+
+    assert_eq!(
+        input.to_rgba8().into_raw(),
+        out.to_rgba8().into_raw(),
+        "focus_depth=0.0 と一致する depth=0.0 の均一領域は完全一致(identity)のはず（#166）"
+    );
+}
+
+// DA-12: focus=0.5 のとき、focus に最も近い深度ほど半径が最小（中心輝度が最も高い）
+//
+// 一般 sanity（#166 の off-by-one 回帰防止は DA-13/14 が担う）。旧実装の
+// (bin+0.5)/8 でも新実装の bin/(N_BINS-1) でも「focus に近いほど半径が小さい」
+// という単調性自体は成り立つため、この off-by-one を検出する目的では使わない。
+#[test]
+fn depth_aware_blur_focus_mid_radius_is_minimal_near_focus() {
+    let size = 64_u32;
+    let input = center_white_dot(size);
+
+    let center_at = |depth_val: u8| -> u8 {
+        let depth = depth_map_solid(size, depth_val);
+        let out =
+            depth_aware_blur(input.clone(), &depth, 0.5, 0.1, DepthBlurKind::DepthOfField).unwrap();
+        out.to_rgba8().get_pixel(size / 2, size / 2)[0]
+    };
+
+    let c_near_focus = center_at(128); // d≈0.502, |delta|≈0.002（ほぼ焦点）
+    let c_mid = center_at(192); // d≈0.753, |delta|≈0.253
+    let c_far = center_at(0); // d=0.0, |delta|=0.5（最遠）
+
+    assert!(
+        c_near_focus >= c_mid,
+        "focus=0.5 に最も近い深度が最もボケが弱い(輝度が高い)はず: near_focus={c_near_focus}, mid={c_mid}"
+    );
+    assert!(
+        c_mid >= c_far,
+        "focus から遠い深度ほどボケが強い(輝度が低い)はず: mid={c_mid}, far={c_far}"
+    );
+}
+
+// DA-13/DA-14: 深度 0.0 / 1.0 の両端で半径が意図の設計式
+// `max_radius_ratio * min_dim * |depth - focus|` と一致することを、
+// ellipse_blur を直接呼んだ参照結果とのバイト一致で確認する。
+
+#[test]
+fn depth_aware_blur_extreme_depth_one_radius_matches_design_formula() {
+    // d=1.0（最終ビン専用パス）。focus=0.0 → |delta|=1.0 → 意図半径 = ratio*min_dim。
+    let size = 40_u32;
+    let max_radius_ratio = 0.1_f32;
+    let min_dim = size as f32;
+    let input = center_white_dot(size);
+    let depth = depth_map_solid(size, 255); // d=1.0
+
+    let out = depth_aware_blur(
+        input.clone(),
+        &depth,
+        0.0,
+        max_radius_ratio,
+        DepthBlurKind::DepthOfField,
+    )
+    .unwrap();
+
+    let rgba = input.to_rgba8();
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+    let expected_radius = max_radius_ratio * min_dim;
+    let expected_linear = ellipse_blur(&linear, size, size, expected_radius, expected_radius, 0.0);
+    let expected = linear_planes_to_rgba(&expected_linear, &alpha, size, size);
+
+    assert_eq!(
+        out.to_rgba8().into_raw(),
+        expected.into_raw(),
+        "d=1.0 の半径は max_radius_ratio*min_dim(意図値)に一致するはず（#166）"
+    );
+}
+
+#[test]
+fn depth_aware_blur_extreme_depth_zero_radius_matches_design_formula() {
+    // d=0.0（ビン0, t=0 の非補間パス）。focus=1.0 → |delta|=1.0 → 意図半径 = ratio*min_dim。
+    let size = 40_u32;
+    let max_radius_ratio = 0.1_f32;
+    let min_dim = size as f32;
+    let input = center_white_dot(size);
+    let depth = depth_map_solid(size, 0); // d=0.0
+
+    let out = depth_aware_blur(
+        input.clone(),
+        &depth,
+        1.0,
+        max_radius_ratio,
+        DepthBlurKind::DepthOfField,
+    )
+    .unwrap();
+
+    let rgba = input.to_rgba8();
+    let (linear, alpha) = rgba_to_linear_planes(&rgba);
+    let expected_radius = max_radius_ratio * min_dim;
+    let expected_linear = ellipse_blur(&linear, size, size, expected_radius, expected_radius, 0.0);
+    let expected = linear_planes_to_rgba(&expected_linear, &alpha, size, size);
+
+    assert_eq!(
+        out.to_rgba8().into_raw(),
+        expected.into_raw(),
+        "d=0.0 の半径は max_radius_ratio*min_dim(意図値)に一致するはず（#166）"
     );
 }
 
