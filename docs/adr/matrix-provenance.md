@@ -10,14 +10,11 @@ back to its origin.
 Read this alongside [ADR-0001](0001-linear-srgb-machado-matrices.md) (why the
 matrices are applied directly in linear sRGB),
 [ADR-0004](0004-achromatopsia-bt709-photopic.md) (the achromatopsia luminance
-<<<<<<< HEAD
-path), and [ADR-0005](0005-phased-scope-phase1-four-types.md) (why
+path), [ADR-0005](0005-phased-scope-phase1-four-types.md) (why
 tetrachromacy sits outside the colorimetrically-verifiable Phase 1 scope —
-relevant background for §3 below).
-=======
-path), and [ADR-0008](0008-machado-per-severity-table.md) (the per-severity
-table adopted for intermediate `strength`).
->>>>>>> 7e94980 (docs: ADR-0008 を新設し per-severity テーブル採用の背景・出典・トレードオフを記録 (#165))
+relevant background for §3 below), and
+[ADR-0008](0008-machado-per-severity-table.md) (the per-severity table adopted
+for intermediate `strength`).
 
 ## Scope
 
@@ -310,25 +307,16 @@ that keeps this spec, the code, and the tests in agreement.
 ## References
 
 - `crates/core/src/vision/color.rs` — `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA` /
-<<<<<<< HEAD
-  `LUMA_R/G/B` / `HPE_LMS_HEURISTIC` consts and their derivation comments.
+  `PROTANOMALY_TABLE` / `DEUTERANOMALY_TABLE` / `TRITANOMALY_TABLE` /
+  `LUMA_R/G/B` / `HPE_LMS_HEURISTIC` consts, `resolve_severity_matrix`, and
+  their derivation comments.
 - `crates/core/src/shaders/tetrachromacy.frag` — GPU-side hardcoded copy of the
   `HPE_LMS_HEURISTIC` coefficients (§3).
-- `crates/core/tests/color_kat.rs` — `SRC_*`, `BT709`, reference pipeline,
-  `golden_*`, and `cross_check_*` tests.
-- `docs/overview.md` — "Color vision algorithm (Phase 1, #2)" and "GLSL ES 3.00
-  shader source API" (the source-consistency vs self-consistency distinction).
-- [ADR-0001](0001-linear-srgb-machado-matrices.md),
-  [ADR-0004](0004-achromatopsia-bt709-photopic.md),
-  [ADR-0005](0005-phased-scope-phase1-four-types.md).
-=======
-  `PROTANOMALY_TABLE` / `DEUTERANOMALY_TABLE` / `TRITANOMALY_TABLE` /
-  `LUMA_R/G/B` consts, `resolve_severity_matrix`, and their derivation comments.
 - `crates/core/tests/color_kat.rs` — `SRC_*`, `SRC_*_SEV_*`, `BT709`,
   reference pipeline, `golden_*`, and `cross_check_*` tests.
 - `docs/overview.md` — "Color vision algorithm (Phase 1, #2)" and "GLSL ES 3.00
   shader source API" (the source-consistency vs self-consistency distinction).
 - [ADR-0001](0001-linear-srgb-machado-matrices.md),
-  [ADR-0008](0008-machado-per-severity-table.md),
-  [ADR-0004](0004-achromatopsia-bt709-photopic.md).
->>>>>>> 7e94980 (docs: ADR-0008 を新設し per-severity テーブル採用の背景・出典・トレードオフを記録 (#165))
+  [ADR-0004](0004-achromatopsia-bt709-photopic.md),
+  [ADR-0005](0005-phased-scope-phase1-four-types.md),
+  [ADR-0008](0008-machado-per-severity-table.md).
