@@ -148,11 +148,17 @@ fn apply_machado_matrix(
 /// ペア候補）を検出し、その領域の Cb/Cr 色差を追加誇張する。
 /// 全領域には赤-緑 opponent channel の基本誇張も適用する。
 ///
-/// ## アルゴリズム（Machado 2009 LMS 変換使用）
+/// 本フィルタは測色的忠実度を主張しない可視化演出であり、メタメリックペア候補の
+/// 検出に使う L/M 値も真の錐体刺激値ではなくヒューリスティックな代理量である
+/// （詳細は `HPE_LMS_HEURISTIC` の doc コメントと
+/// `docs/adr/matrix-provenance.md` の Heuristic matrices 節を参照）。
+///
+/// ## アルゴリズム（Hunt-Pointer-Estévez 行列を linear RGB に直接流用するヒューリスティック）
 ///
 /// 1. linear sRGB に変換（gamma 解除）
-/// 2. linear sRGB → LMS（Machado 2009 の変換行列）
-/// 3. M（緑錐体）と L（赤錐体）の差分 `delta = M - L` を抽出
+/// 2. linear sRGB → 疑似 LMS（Hunt-Pointer-Estévez の XYZ→LMS 変換行列を、
+///    sRGB→XYZ を挟まず linear RGB に直接適用するヒューリスティック）
+/// 3. M（緑錐体相当）と L（赤錐体相当）の差分 `delta = M - L` を抽出
 /// 4. `|delta| < 0.05` の領域 = メタメリックペア候補
 /// 5. そのような領域で Cb/Cr（色差）を `strength * 2.0` 倍に誇張
 /// 6. 全領域: 赤-緑 opponent channel を基本誇張（strength でスケール）
@@ -168,10 +174,18 @@ pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
         return Ok(DynamicImage::ImageRgba8(rgba));
     }
 
-    // Machado 2009 linear sRGB → LMS 変換行列
-    // 出典: Machado, Oliveira, Fernandes 2009, Equation 1 / Table 1
-    // (Hunt-Pointer-Estévez の D65 白色点正規化版)
-    const SRGB_TO_LMS: [[f32; 3]; 3] = [
+    // Hunt-Pointer-Estévez (HPE) の CIE XYZ→LMS 変換行列（D65 白色点正規化版）。
+    //
+    // この行列は Machado, Oliveira & Fernandes (2009) の Table 1 には存在しない
+    // （同 Table 1 が公開するのは severity=1.0 の CVD 行列 3 種のみ。
+    // `docs/adr/matrix-provenance.md` §1 参照）。かつ本来 HPE 行列は CIE XYZ
+    // 入力を前提とするが、ここでは sRGB→XYZ 変換を挟まず linear RGB に直接
+    // 適用しているためヒューリスティックであり、測色的な LMS 値ではない。
+    //
+    // tetrachromacy はメタメリック検出の可視化演出であり、測色的忠実度を
+    // 主張しない。出典・スコープの詳細は
+    // `docs/adr/matrix-provenance.md` の "Heuristic matrices" 節を参照（#170）。
+    const HPE_LMS_HEURISTIC: [[f32; 3]; 3] = [
         [0.4002, 0.7076, -0.0808],
         [-0.2263, 1.1653, 0.0457],
         [0.0000, 0.0000, 0.9182],
@@ -185,9 +199,11 @@ pub fn tetrachromacy(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
         let g = srgb_to_linear(px[1] as f32 / 255.0);
         let b = srgb_to_linear(px[2] as f32 / 255.0);
 
-        // linear sRGB → LMS
-        let l_cone = SRGB_TO_LMS[0][0] * r + SRGB_TO_LMS[0][1] * g + SRGB_TO_LMS[0][2] * b;
-        let m_cone = SRGB_TO_LMS[1][0] * r + SRGB_TO_LMS[1][1] * g + SRGB_TO_LMS[1][2] * b;
+        // linear RGB → 疑似 LMS（HPE ヒューリスティック、上記 doc コメント参照）
+        let l_cone =
+            HPE_LMS_HEURISTIC[0][0] * r + HPE_LMS_HEURISTIC[0][1] * g + HPE_LMS_HEURISTIC[0][2] * b;
+        let m_cone =
+            HPE_LMS_HEURISTIC[1][0] * r + HPE_LMS_HEURISTIC[1][1] * g + HPE_LMS_HEURISTIC[1][2] * b;
 
         // M と L の差分（メタメリズム指標）
         let delta = m_cone - l_cone;

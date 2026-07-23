@@ -62,7 +62,8 @@ const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
 
 /// Myopia (近視) シミュレーション。
 ///
-/// strength=1.0 で約 -6D 相当の defocus blur (disk 半径 ≈ 5% × min(W,H))。
+/// strength=1.0 で約 -6D 相当の defocus blur (disk 半径 ≈ 2.3% × min(W,H)、
+/// `MYOPIA_MAX_RADIUS_RATIO` の導出は同定数の doc コメント参照)。
 /// 2D 画像には深度情報がないため、本実装は画面全体の uniform blur となる
 /// (現実の myopia は遠方ほどボケが強い)。alpha は保持。
 pub fn myopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {

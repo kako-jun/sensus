@@ -8,9 +8,11 @@ change a matrix can be audited — and so a downstream consumer can trace a numb
 back to its origin.
 
 Read this alongside [ADR-0001](0001-linear-srgb-machado-matrices.md) (why the
-matrices are applied directly in linear sRGB) and
+matrices are applied directly in linear sRGB),
 [ADR-0004](0004-achromatopsia-bt709-photopic.md) (the achromatopsia luminance
-path).
+path), and [ADR-0005](0005-phased-scope-phase1-four-types.md) (why
+tetrachromacy sits outside the colorimetrically-verifiable Phase 1 scope —
+relevant background for §3 below).
 
 ## Scope
 
@@ -20,6 +22,7 @@ path).
 | `DEUTERANOPIA` | 3×3 CVD matrix, severity = 1.0 | Machado 2009 |
 | `TRITANOPIA` | 3×3 CVD matrix, severity = 1.0 | Machado 2009 |
 | `LUMA_R` / `LUMA_G` / `LUMA_B` | photopic luminance weights | ITU-R BT.709 / sRGB (CIE Y) |
+| `HPE_LMS_HEURISTIC` | 3×3 heuristic matrix, linear RGB → pseudo-LMS (only rows 0–1 used) | Hunt-Pointer-Estévez XYZ→LMS (D65) — **not** Machado 2009; see §3 |
 
 ## 1. The dichromacy matrices (Machado 2009)
 
@@ -72,7 +75,7 @@ These are the exact values currently in `crates/core/src/vision/color.rs`:
 
 > The crate stores these as `f32`; the literals above are reproduced exactly as
 > written in the source const (and re-typed independently in the test — see
-> §3). Row order is `[R_out; G_out; B_out]`, column order is `[R_in, G_in,
+> §4). Row order is `[R_out; G_out; B_out]`, column order is `[R_in, G_in,
 > B_in]`, i.e. `out = M · in` per pixel in linear sRGB.
 
 ### How extracted
@@ -123,7 +126,64 @@ of ADR-0004.
 Standard published constants, copied verbatim from the BT.709 / sRGB
 specification.
 
-## 3. How these values are verified (pinning)
+## 3. Heuristic matrices (visualization-only, not colorimetric)
+
+Not every numeric matrix in the crate is a citable, source-anchored
+scientific instrument the way §1/§2 are. This section documents such
+matrices honestly: what the numbers actually are, where they came from, and
+that **no colorimetric fidelity is claimed** for them.
+
+### `HPE_LMS_HEURISTIC` (tetrachromacy, `crates/core/src/vision/color.rs`)
+
+**What it is.** The numeric values
+
+```
+[ 0.4002,  0.7076, -0.0808 ]
+[-0.2263,  1.1653,  0.0457 ]
+[ 0.0000,  0.0000,  0.9182 ]
+```
+
+are the **Hunt-Pointer-Estévez (HPE) CIE XYZ→LMS transform, D65
+white-point-normalized**. This matrix does **not** appear in Machado,
+Oliveira & Fernandes (2009) Table 1 — that table publishes only the three
+severity-1.0 dichromacy matrices listed in §1. An earlier revision of this
+codebase's comments incorrectly attributed this matrix to "Machado 2009,
+Equation 1 / Table 1"; that attribution was wrong and has been corrected
+(#170).
+
+**Why it's a heuristic, not a colorimetric LMS conversion.** `tetrachromacy`
+applies this matrix directly to **linear RGB**, with no sRGB→CIE XYZ step in
+between. A colorimetrically correct LMS conversion requires
+`linear RGB → CIE XYZ → LMS`; skipping the XYZ step means the resulting "L"
+and "M" values are not true cone tristimulus values — they are a fast,
+plausible-looking proxy used only to locate pixels where the red and green
+channels are hard to tell apart (a stand-in for a metameric-pair detector).
+Only rows 0–1 (L, M) are used by the filter; row 2 (S) is present in the
+matrix literal but unused.
+
+**What it's for.** `tetrachromacy` is a **visualization** of "what a
+four-cone observer might perceive differently," not a source-anchored
+simulation — see [ADR-0005](0005-phased-scope-phase1-four-types.md), which
+explicitly scopes tetrachromacy out of the first (colorimetrically
+verifiable) phase for exactly this reason. This spec does not claim, and the
+filter does not need, colorimetric fidelity from this matrix; it only needs
+a repeatable split between "similar red/green" and "distinguishable
+red/green" pixels.
+
+**Where it's duplicated.** The same six non-zero coefficients are hardcoded
+directly (not read from a named constant, since GLSL has no cross-file
+const import) in `crates/core/src/shaders/tetrachromacy.frag`, for the GPU
+path. Both copies carry the corrected provenance comment as of #170; the
+numeric values themselves are unchanged.
+
+**Verification coverage.** Unlike §1/§2, this matrix is **not** pinned by the
+independent-literal known-answer test described in §4 — `color_kat.rs` covers
+only `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA` / `LUMA_R/G/B`.
+`HPE_LMS_HEURISTIC` is instead covered by the CPU↔GLSL cross-check
+(`shader_equiv_tetrachromacy_*` in `crates/core/tests/shader_equivalence.rs`),
+which pins CPU/GPU agreement but not agreement against an external source.
+
+## 4. How these values are verified (pinning)
 
 The constants above are pinned against the source by a known-answer test (KAT),
 introduced in **#156**: `crates/core/tests/color_kat.rs`.
@@ -151,7 +211,7 @@ inputs surface coefficient changes of roughly `0.001–0.004`). Sub-`u8`
 floating-point drift that leaves every rounded channel unchanged is **out of
 scope by design** — the intrinsic limit of an 8-bit-output check.
 
-## 4. Procedure for changing a matrix (auditable improvement path)
+## 5. Procedure for changing a matrix (auditable improvement path)
 
 A future proposal to change any value in this spec **must**:
 
@@ -171,10 +231,13 @@ that keeps this spec, the code, and the tests in agreement.
 ## References
 
 - `crates/core/src/vision/color.rs` — `PROTANOPIA` / `DEUTERANOPIA` / `TRITANOPIA` /
-  `LUMA_R/G/B` consts and their derivation comments.
+  `LUMA_R/G/B` / `HPE_LMS_HEURISTIC` consts and their derivation comments.
+- `crates/core/src/shaders/tetrachromacy.frag` — GPU-side hardcoded copy of the
+  `HPE_LMS_HEURISTIC` coefficients (§3).
 - `crates/core/tests/color_kat.rs` — `SRC_*`, `BT709`, reference pipeline,
   `golden_*`, and `cross_check_*` tests.
 - `docs/overview.md` — "Color vision algorithm (Phase 1, #2)" and "GLSL ES 3.00
   shader source API" (the source-consistency vs self-consistency distinction).
 - [ADR-0001](0001-linear-srgb-machado-matrices.md),
-  [ADR-0004](0004-achromatopsia-bt709-photopic.md).
+  [ADR-0004](0004-achromatopsia-bt709-photopic.md),
+  [ADR-0005](0005-phased-scope-phase1-four-types.md).
