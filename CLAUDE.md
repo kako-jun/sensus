@@ -65,6 +65,7 @@ sensus/
 - **clap derive を採用** — 引数定義はコード生成で簡潔に。`Filter` enum を `ValueEnum` で公開する
 - **医学的注記をドキュメントに付ける** — 各フィルタに「こうなったらすぐ病院へ」を併記。エンタメ + 早期発見の二重価値。緊急度は `Urgency` enum の 3 段（None / EarlyConsultation ⚠️ / Emergency 🚨）に統一し、`docs/overview.md`「Medical notes」表を正本とする（例: 半盲突発・突然の複視 = Emergency、緑内障 / 黄斑変性 = EarlyConsultation）
 - **フィルタ固有パラメータは `Filter` enum payload に一元化**（v0.5.0）— `FilterStep` は `{filter, strength}` のみ。`apply()` と `pipeline` は同じ enum payload を読むので単体適用と pipeline 適用は常に一致する。CLI は `Filter::to_core(&Cli)` でフラグから payload を構築する
+- **視野欠損 4 種は `FieldLossMode`（Darken 既定 / Blur）を payload で選択可能**（#171）— 暗点は臨床的に「黒」ではなく「ぼけ・欠落」として知覚されることが多いという医学的知見から、既存の暗転係数 m を disk blur 半径スケールとして再解釈する Blur モードを追加。既定 Darken は golden 不変。GLSL は現状 Darken のみ対応（Blur は CPU 先行、フォローアップ課題）
 - **味覚 / 嗅覚 / 触覚はスコープ外** — 汎用デジタル出力経路がないため。sensus は視覚 + 聴覚に絞る
 - **release は GitHub Release のみ自動化** — crates.io publish はタグ駆動にせず `/publish` スキルから手動で発火する
 
