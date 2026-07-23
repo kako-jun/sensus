@@ -3025,3 +3025,270 @@ fn flickering_stars_strength_one_increases_max_brightness() {
         "flickering_stars strength=1 must increase max brightness (orig={orig_max}, out={out_max})"
     );
 }
+
+// ---------------------------------------------------------------
+// Issue #171: FieldLossMode::Blur（暗転→ぼかし+彩度低下）
+// glaucoma / macular_degeneration / hemianopia / tunnel_vision で共通。
+// ---------------------------------------------------------------
+
+fn luma(p: &Rgba<u8>) -> f32 {
+    0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32
+}
+
+#[test]
+fn field_loss_blur_strength_zero_is_identity() {
+    let input = solid_rgba(32, 32, [180, 120, 60, 255]);
+    let original = raw_rgba_vec(&input);
+    assert_eq!(
+        raw_rgba_vec(
+            &glaucoma(
+                input.clone(),
+                0.0,
+                GlaucomaMode::Vignette,
+                FieldLossMode::Blur
+            )
+            .unwrap()
+        ),
+        original,
+        "glaucoma Blur strength=0 は恒等でなければならない"
+    );
+    assert_eq!(
+        raw_rgba_vec(&macular_degeneration(input.clone(), 0.0, FieldLossMode::Blur).unwrap()),
+        original,
+        "macular_degeneration Blur strength=0 は恒等でなければならない"
+    );
+    assert_eq!(
+        raw_rgba_vec(&hemianopia(input.clone(), 0.0, 0.5, FieldLossMode::Blur).unwrap()),
+        original,
+        "hemianopia Blur strength=0 は恒等でなければならない"
+    );
+    assert_eq!(
+        raw_rgba_vec(&tunnel_vision(input, 0.0, FieldLossMode::Blur).unwrap()),
+        original,
+        "tunnel_vision Blur strength=0 は恒等でなければならない"
+    );
+}
+
+#[test]
+fn field_loss_blur_nan_strength_is_identity() {
+    let input = solid_rgba(32, 32, [100, 150, 200, 255]);
+    let original = raw_rgba_vec(&input);
+    assert_eq!(
+        raw_rgba_vec(
+            &glaucoma(
+                input.clone(),
+                f32::NAN,
+                GlaucomaMode::Vignette,
+                FieldLossMode::Blur
+            )
+            .unwrap()
+        ),
+        original,
+        "glaucoma Blur strength=NaN は恒等でなければならない"
+    );
+    assert_eq!(
+        raw_rgba_vec(&macular_degeneration(input.clone(), f32::NAN, FieldLossMode::Blur).unwrap()),
+        original,
+        "macular_degeneration Blur strength=NaN は恒等でなければならない"
+    );
+    assert_eq!(
+        raw_rgba_vec(&hemianopia(input.clone(), f32::NAN, 0.0, FieldLossMode::Blur).unwrap()),
+        original,
+        "hemianopia Blur strength=NaN は恒等でなければならない"
+    );
+    assert_eq!(
+        raw_rgba_vec(&tunnel_vision(input, f32::NAN, FieldLossMode::Blur).unwrap()),
+        original,
+        "tunnel_vision Blur strength=NaN は恒等でなければならない"
+    );
+}
+
+#[test]
+fn field_loss_blur_differs_from_darken() {
+    // gradient 画像（非一様）で darken/blur が偶然一致しないことを保証する。
+    let mut img = RgbaImage::new(64, 64);
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
+    }
+    let base = DynamicImage::ImageRgba8(img);
+
+    let g_darken = raw_rgba_vec(
+        &glaucoma(
+            base.clone(),
+            1.0,
+            GlaucomaMode::Vignette,
+            FieldLossMode::Darken,
+        )
+        .unwrap(),
+    );
+    let g_blur = raw_rgba_vec(
+        &glaucoma(
+            base.clone(),
+            1.0,
+            GlaucomaMode::Vignette,
+            FieldLossMode::Blur,
+        )
+        .unwrap(),
+    );
+    assert_ne!(
+        g_darken, g_blur,
+        "glaucoma: Darken と Blur は異なる出力でなければならない"
+    );
+
+    let m_darken =
+        raw_rgba_vec(&macular_degeneration(base.clone(), 1.0, FieldLossMode::Darken).unwrap());
+    let m_blur =
+        raw_rgba_vec(&macular_degeneration(base.clone(), 1.0, FieldLossMode::Blur).unwrap());
+    assert_ne!(
+        m_darken, m_blur,
+        "macular_degeneration: Darken と Blur は異なる出力でなければならない"
+    );
+
+    let h_darken =
+        raw_rgba_vec(&hemianopia(base.clone(), 1.0, 0.0, FieldLossMode::Darken).unwrap());
+    let h_blur = raw_rgba_vec(&hemianopia(base.clone(), 1.0, 0.0, FieldLossMode::Blur).unwrap());
+    assert_ne!(
+        h_darken, h_blur,
+        "hemianopia: Darken と Blur は異なる出力でなければならない"
+    );
+
+    let t_darken = raw_rgba_vec(&tunnel_vision(base.clone(), 1.0, FieldLossMode::Darken).unwrap());
+    let t_blur = raw_rgba_vec(&tunnel_vision(base, 1.0, FieldLossMode::Blur).unwrap());
+    assert_ne!(
+        t_darken, t_blur,
+        "tunnel_vision: Darken と Blur は異なる出力でなければならない"
+    );
+}
+
+/// 完全欠損部（m=1）の輝度が Darken（ほぼ黒）と違い、入力に対して大きく残ることを確認する。
+/// 単色画像なら blur 自体は輝度を変えない（隣接ピクセルが同色のため）ので、
+/// 彩度低下（linear 空間で luma へブレンド）だけが効く。BT.709 luma の重み和は
+/// 1.0 なので、単色画像に対する彩度低下は理論上 luma を保存する
+/// （`lerp` を各チャンネルへ均等にかけても加重和は不変）。この性質を使い、
+/// 「黒に落ちていない」ことを Darken との比較で検証する。
+#[test]
+fn field_loss_blur_full_loss_region_is_not_black() {
+    let size = 64_u32;
+    let color = [200_u8, 160, 100, 255];
+    let input_lum = luma(&Rgba(color));
+    let make = || solid_rgba(size, size, color);
+
+    // glaucoma vignette strength=1: コーナー (0,0) が完全欠損（r=1.0 相当）。
+    let g_blur = glaucoma(make(), 1.0, GlaucomaMode::Vignette, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let g_darken = glaucoma(make(), 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let g_blur_lum = luma(g_blur.get_pixel(0, 0));
+    let g_darken_lum = luma(g_darken.get_pixel(0, 0));
+    assert!(
+        g_blur_lum > input_lum * 0.5,
+        "glaucoma Blur: 完全欠損部の輝度が黒に近い（blur_lum={g_blur_lum}, input_lum={input_lum}）"
+    );
+    assert!(
+        g_blur_lum > g_darken_lum * 2.0,
+        "glaucoma: Blur は Darken よりずっと明るいはず（blur={g_blur_lum}, darken={g_darken_lum}）"
+    );
+
+    // macular_degeneration strength=1: 中心が完全欠損（inner_r 内）。
+    let m_blur = macular_degeneration(make(), 1.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let m_darken = macular_degeneration(make(), 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let center = (size / 2, size / 2);
+    let m_blur_lum = luma(m_blur.get_pixel(center.0, center.1));
+    let m_darken_lum = luma(m_darken.get_pixel(center.0, center.1));
+    assert!(
+        m_blur_lum > input_lum * 0.5,
+        "macular_degeneration Blur: 完全欠損部の輝度が黒に近い（blur_lum={m_blur_lum}, input_lum={input_lum}）"
+    );
+    assert!(
+        m_blur_lum > m_darken_lum * 1.5,
+        "macular_degeneration: Blur は Darken より明るいはず（blur={m_blur_lum}, darken={m_darken_lum}）"
+    );
+
+    // hemianopia strength=1, side=0.0（左視野消失）: 左端が完全欠損。
+    let h_blur = hemianopia(make(), 1.0, 0.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let h_darken = hemianopia(make(), 1.0, 0.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let h_blur_lum = luma(h_blur.get_pixel(0, size / 2));
+    let h_darken_lum = luma(h_darken.get_pixel(0, size / 2));
+    assert!(
+        h_blur_lum > input_lum * 0.5,
+        "hemianopia Blur: 完全欠損部の輝度が黒に近い（blur_lum={h_blur_lum}, input_lum={input_lum}）"
+    );
+    assert!(
+        h_blur_lum > h_darken_lum * 2.0,
+        "hemianopia: Blur は Darken よりずっと明るいはず（blur={h_blur_lum}, darken={h_darken_lum}）"
+    );
+
+    // tunnel_vision strength=1: コーナー (0,0) が完全欠損。
+    let t_blur = tunnel_vision(make(), 1.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let t_darken = tunnel_vision(make(), 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let t_blur_lum = luma(t_blur.get_pixel(0, 0));
+    let t_darken_lum = luma(t_darken.get_pixel(0, 0));
+    assert!(
+        t_blur_lum > input_lum * 0.5,
+        "tunnel_vision Blur: 完全欠損部の輝度が黒に近い（blur_lum={t_blur_lum}, input_lum={input_lum}）"
+    );
+    assert!(
+        t_blur_lum > t_darken_lum * 2.0,
+        "tunnel_vision: Blur は Darken よりずっと明るいはず（blur={t_blur_lum}, darken={t_darken_lum}）"
+    );
+}
+
+/// Blur は disk blur を伴うので、完全欠損部に鋭いエッジ（高周波成分）が
+/// あっても実際に平滑化される（分散が下がる）ことを確認する。
+/// glaucoma で代表して検証する。
+#[test]
+fn field_loss_blur_reduces_local_variance_at_edge() {
+    // 市松模様（高周波、period=8px）画像を使う。
+    // FIELD_LOSS_MAX_RADIUS_RATIO(0.125) × 64px = 8px の blur 半径は
+    // period と同程度なので、コーナー領域は大きく平滑化されるはず。
+    let size = 64_u32;
+    let mut img = RgbaImage::new(size, size);
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        let checker = ((x / 4 + y / 4) % 2 == 0) as u8;
+        let v = if checker == 0 { 40 } else { 220 };
+        *px = Rgba([v, v, v, 255]);
+    }
+    let base = DynamicImage::ImageRgba8(img);
+
+    let variance = |rgba: &RgbaImage, w: u32, h: u32| -> f32 {
+        let mut sum = 0.0_f64;
+        let mut sum_sq = 0.0_f64;
+        let mut n = 0.0_f64;
+        for y in 0..h {
+            for x in 0..w {
+                let v = luma(rgba.get_pixel(x, y)) as f64;
+                sum += v;
+                sum_sq += v * v;
+                n += 1.0;
+            }
+        }
+        let mean = sum / n;
+        ((sum_sq / n) - mean * mean) as f32
+    };
+
+    // glaucoma vignette strength=1 では左上 16×16 は全画素 fade=1（完全欠損）。
+    let input_var = variance(&base.to_rgba8(), 16, 16);
+    let blur = glaucoma(base, 1.0, GlaucomaMode::Vignette, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let blur_var = variance(&blur, 16, 16);
+
+    assert!(
+        blur_var < input_var * 0.5,
+        "glaucoma Blur は完全欠損部の高周波分散を大きく下げるはず（input_var={input_var}, blur_var={blur_var}）"
+    );
+}
