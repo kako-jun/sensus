@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vision::srgb_to_linear` / `vision::linear_to_srgb` are now public utilities**: GLSL の `srgbToLinear` / `linearToSrgb` と同一式の sRGB ⇄ linear gamma 変換を公開 util 化。`tests/shader_equivalence.rs` が private に持っていた同一式の重複定義を削除し、CPU 正本（`sensus_core::vision`）を参照するよう統合した（Issue #157）。
 
+### Fixed
+
+- **fix: astigmatism の NaN 軸で CPU/GLSL の挙動が分岐していた問題を修正**: `shaders::astigmatism_uniforms` は `axis_deg + 90.0` を無条件計算しており、CPU 側（`vision::refraction::astigmatism`）が持つ正規化（NaN→90.0 フォールバック、有限値は `rem_euclid(180.0)`）を欠いていた。NaN 軸を library から直接渡すと GLSL は cos/sin=NaN で全 tap 不採用となり黒画像になる一方、CPU は 90° フォールバックでボケを返すという分岐が起きていた（CLI 経由は `parse_axis` が弾くため library 直呼びのみの問題）。正規化ロジックを `vision::refraction::normalize_axis_deg` に切り出し、CPU/GLSL 両方から呼ぶよう統一した（Issue #169）。
+- **fix: tinnitus が低サンプルレート + 既定周波数で無音化する Nyquist 退化を修正**: `tinnitus` は正弦波周波数 `freq_hz` をサンプルレートに対して clamp しておらず、低レート WAV（例 8kHz）と既定 freq 4000Hz（= Nyquist ちょうど）の組み合わせでは `sin(2π・(fs/2)・n/fs) = sin(nπ) = 0` が全サンプルで成立し、耳鳴りトーンが実質無音化していた。同ファイルの biquad 系フィルタが既に持つ `[1.0, fs * 0.4999]` clamp 規約に統一した（Issue #169）。
+- **fix: tinnitus の `sample_rate=0` で時間軸が NaN/inf になる問題を修正**: 時間軸 `t` を `buf.sample_rate as f32` で直接計算しており、`sample_rate=0` の `AudioBuffer` では `0.0/0.0`（frame=0）や `x/0.0`（frame>0）で `t` が NaN/inf になっていた。biquad 系と同じ `sample_rate=0 → 44100Hz` フォールバックを `effective_sample_rate` として一元化し、時間軸・周波数 clamp の両方でこれを共有するよう統一した（Issue #169）。
+
 ## [0.5.0] - 2026-05-30
 
 ### Added

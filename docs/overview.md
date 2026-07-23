@@ -372,6 +372,14 @@ blurred direction is therefore at `axis_deg + 90°`. Default
 `axis = 90°` corresponds to with-the-rule astigmatism (vertical lines
 sharp, horizontal lines blurred). `axis_deg` is normalised
 modulo 180° (`rem_euclid`); only `NaN` falls back to the 90° default.
+The GLSL uniform side (`shaders::astigmatism_uniforms`) shares this
+exact normalization via `vision::refraction::normalize_axis_deg`, so
+CPU and GLSL always agree on the effective axis. Before this was
+unified (Issue #169), GLSL uniforms applied `axis_deg + 90°`
+unconditionally: a `NaN` axis — reachable only via direct library
+calls, since the CLI's `parse_axis` rejects it — produced
+`cos/sin = NaN` and an all-black GLSL render, while the CPU path fell
+back to 90° and produced a normal blurred image.
 
 Real clinical astigmatism is almost always *compound* (cylinder + a
 spherical refractive error), so both meridians are blurred to differing
