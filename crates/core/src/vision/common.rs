@@ -303,6 +303,16 @@ pub(crate) fn radius_from_strength(img: &DynamicImage, strength: f32, max_ratio:
 /// mask 値に応じて彩度低下も適用する（linear 空間で luma 方向へブレンド、
 /// `desaturate_max` は mask=1.0 における最大低下率）。alpha は元画像から
 /// 変更せず保持する。
+///
+/// > **既知の dead zone（#178）**: `MIN_BLUR_RADIUS_PX`（0.5px）は「ぼけを
+/// > 適用するか」の閾値だが、`build_ellipse_spans` は半径 1.0px 未満だと
+/// > dx=±1 が有効にならず原点のみの縮退カーネル（実質 no-op）を返す。
+/// > 中間ビンの半径が `[0.5, 1.0)` px に落ちると「ぼけ有効」判定なのに
+/// > 出力が入力と一致する。本関数は `FIELD_LOSS_MAX_RADIUS_RATIO=0.125` の
+/// > とき `radius(bin=1) = max_radius_px / 7 = 0.125/7 × min(W,H)` なので、
+/// > `min(W,H)` がおよそ `[28, 56)` px の画像でビン 1 がこの dead zone に
+/// > 入りうる（この基盤を使う全フィルタ共通の既存問題であり本関数固有では
+/// > ない。同 Issue で解決すること）。
 pub(crate) fn mask_mapped_blur_desaturate(
     rgba: &RgbaImage,
     mask: &[f32],

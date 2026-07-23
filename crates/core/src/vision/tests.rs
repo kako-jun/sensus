@@ -3160,6 +3160,136 @@ fn field_loss_blur_differs_from_darken() {
     );
 }
 
+/// Blur モードで strength が実際にマスク「強度」（振幅）へ反映されていることを
+/// 確認する（PR #180 レビュー must1: macular_degeneration が `mask = t`
+/// （strength 無視）になっており、strength=0.05..1.0 で同一出力になっていた
+/// 回帰の固定）。
+///
+/// 重要: 4フィルタとも `inner_r`/`outer_r` 自体が strength に依存するため、
+/// 単純に「画像全体が strength で変わるか」を見ると **マスクの空間的な広がり**
+/// が変わるだけで振幅バグを見逃す（must1 の実バグは全体比較では検出できな
+/// かった）。各フィルタには「どんな strength (>0) でも fade/t が厳密に 1.0固定
+/// になる」プローブ画素があるので、そこだけをピンポイントで比較し、振幅
+/// （= strength 自体）が効いているかを直接検証する。
+/// - glaucoma vignette: コーナー (0,0) は r_norm=1.0 が常に outer_r 以上
+/// - macular_degeneration: 中心 (cx,cy) は r=0 が常に inner_r 以下
+/// - hemianopia (side=0.0): 左端 x=0 は常に left_fade=1
+/// - tunnel_vision: コーナー (0,0) は常に outer_r 以上（glaucoma と同様）
+#[test]
+fn field_loss_blur_strength_changes_probe_pixel() {
+    let size = 64_u32;
+    let mut img = RgbaImage::new(size, size);
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        *px = Rgba([(x * 4) as u8, (y * 4) as u8, 128, 255]);
+    }
+    let base = DynamicImage::ImageRgba8(img);
+    let cx = size / 2;
+    let cy = size / 2;
+
+    let g_03 = glaucoma(
+        base.clone(),
+        0.3,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Blur,
+    )
+    .unwrap()
+    .to_rgba8();
+    let g_10 = glaucoma(
+        base.clone(),
+        1.0,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Blur,
+    )
+    .unwrap()
+    .to_rgba8();
+    assert_ne!(
+        g_03.get_pixel(0, 0),
+        g_10.get_pixel(0, 0),
+        "glaucoma Blur: コーナー画素は strength=0.3 と 1.0 で異なるはず"
+    );
+
+    let m_03 = macular_degeneration(base.clone(), 0.3, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let m_10 = macular_degeneration(base.clone(), 1.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    assert_ne!(
+        m_03.get_pixel(cx, cy),
+        m_10.get_pixel(cx, cy),
+        "macular_degeneration Blur: 中心画素は strength=0.3 と 1.0 で異なるはず\
+         （t=1 固定でも strength でマスク振幅が変わらなければ検出できない）"
+    );
+
+    let h_03 = hemianopia(base.clone(), 0.3, 0.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let h_10 = hemianopia(base.clone(), 1.0, 0.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    assert_ne!(
+        h_03.get_pixel(0, cy),
+        h_10.get_pixel(0, cy),
+        "hemianopia Blur: 左端画素は strength=0.3 と 1.0 で異なるはず"
+    );
+
+    let t_03 = tunnel_vision(base.clone(), 0.3, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let t_10 = tunnel_vision(base, 1.0, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    assert_ne!(
+        t_03.get_pixel(0, 0),
+        t_10.get_pixel(0, 0),
+        "tunnel_vision Blur: コーナー画素は strength=0.3 と 1.0 で異なるはず"
+    );
+}
+
+/// m=0（無傷）の画素が Blur モードでも厳密 byte 一致で恒等であることを確認する
+/// （PR #180 レビュー must2）。
+///
+/// glaucoma Vignette strength=1.0 の中心画素（r=0 < inner_r=0.3）は
+/// `mask = strength * fade = 1.0 * 0.0 = 0.0` が厳密に成立する。
+/// `mask_mapped_blur_desaturate` の bin 割り付けが「bin 0 = 半径 0」である限り、
+/// mask=0.0 の画素は blur_floor（未ブラー = 元の linear 値そのまま）を
+/// `lerp(..., t=0.0)` で選択し、彩度低下も `desat_t = 0.0 * 0.5 = 0.0` で
+/// スキップされるため、srgb→linear→srgb の往復だけが起きる。この往復が
+/// 全 256 通りの u8 値で bit-exact であることも本テストで併せて担保する。
+///
+/// 対照実験（#166 と同じ手順）: bin 割り付けを depth_aware_blur 型の
+/// `(bin+0.5)/N_BINS`（ビン中心方式）に一時変異させると、bin 0 の半径が
+/// `0.5/8 * max_radius_px` (0 でなくなる) になり本テストが FAIL することを
+/// 実測済み（コミットログ・作業ログ参照。ここでは正常実装での固定のみ行う）。
+#[test]
+fn field_loss_blur_zero_mask_is_strict_identity() {
+    // 128px: bin0 が「ビン中心方式」に変異した場合の半径 (0.0078125 * min(W,H)
+    // = 1.0px) が MIN_BLUR_RADIUS_PX(0.5px) を明確に超え、5画素十字カーネルで
+    // 実際に近傍を混ぜるようにする。64px だと変異後半径がちょうど 0.5px になり
+    // カーネルが原点 1 画素のみに退化して恒等と見分けがつかず、mutation test が
+    // 誤って green になる（実測済み、#166 と同じ「境界値で偽陰性」パターン）。
+    let size = 128_u32;
+    // グラデーションで「たまたま bit 一致」を避ける（差があれば必ず顕在化する)。
+    let mut img = RgbaImage::new(size, size);
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        *px = Rgba([(x * 4) as u8, (y * 4) as u8, (x + y) as u8, 255]);
+    }
+    let input = DynamicImage::ImageRgba8(img);
+    let cx = size / 2;
+    let cy = size / 2;
+    let expected = input.to_rgba8().get_pixel(cx, cy).0;
+
+    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Blur)
+        .unwrap()
+        .to_rgba8();
+    let actual = out.get_pixel(cx, cy).0;
+
+    assert_eq!(
+        actual, expected,
+        "glaucoma Blur: m=0 の中心画素は厳密に恒等でなければならない (expected={expected:?}, actual={actual:?})"
+    );
+}
+
 /// 完全欠損部（m=1）の輝度が Darken（ほぼ黒）と違い、入力に対して大きく残ることを確認する。
 /// 単色画像なら blur 自体は輝度を変えない（隣接ピクセルが同色のため）ので、
 /// 彩度低下（linear 空間で luma へブレンド）だけが効く。BT.709 luma の重み和は

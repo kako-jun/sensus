@@ -64,7 +64,9 @@ pub(crate) enum FieldLossMode {
     Darken,
     /// Blur: disk blur + desaturation toward the perceived "blur / dropout"
     /// experience many glaucoma / AMD patients report (VIP-Sim mip
-    /// approach). CPU only for now; GLSL shaders still use Darken.
+    /// approach). CPU only for now — the GLSL side has no such concept yet
+    /// (the `*_uniforms` functions for these filters don't take a mode
+    /// parameter at all, not even an implicit Darken).
     Blur,
 }
 

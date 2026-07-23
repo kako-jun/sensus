@@ -94,6 +94,11 @@ const FIELD_LOSS_MAX_RADIUS_RATIO: f32 = 0.125;
 /// 「色は残るが明確に鈍る」という中間点として 50% に留める。
 const FIELD_LOSS_DESATURATE_MAX: f32 = 0.5;
 
+// nit（PR #180 レビュー nit7・司令塔裁定）: 4 フィルタとも Darken/Blur 両分岐で
+// fade/t のマスク計算式を意図的に重複させている（Darken の byte-exact 不変を
+// 最優先するため）。将来 3 モード目を追加するときは compute_field_loss_mask
+// のような共通関数への切り出しを検討する。
+
 /// 緑内障（glaucoma）シミュレーション。
 ///
 /// 緑内障は眼圧上昇による視神経萎縮が原因で、周辺視野から徐々に欠けていく。
