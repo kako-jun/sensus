@@ -55,6 +55,19 @@ pub(crate) enum Filter {
     DepthOfField,
 }
 
+/// CLI-facing field-loss expression mode enum (clap derive). Maps to core
+/// [`sensus_core::vision::FieldLossMode`]. Used by `--filter glaucoma` /
+/// `macular-degeneration` / `hemianopia` / `tunnel-vision` (#171).
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum FieldLossMode {
+    /// Darken (default, backward-compatible): fade toward black.
+    Darken,
+    /// Blur: disk blur + desaturation toward the perceived "blur / dropout"
+    /// experience many glaucoma / AMD patients report (VIP-Sim mip
+    /// approach). CPU only for now; GLSL shaders still use Darken.
+    Blur,
+}
+
 /// CLI-facing hearing filter enum (clap derive). Maps to core [`sensus_core::HearingFilter`].
 /// `--audio` モードで `--hearing` に指定する（#105）。
 //
@@ -143,6 +156,12 @@ pub(crate) struct Cli {
     /// Only used with --filter hemianopia.
     #[arg(long, default_value = "0.0")]
     pub(crate) side: f32,
+
+    /// Visual-field-loss expression mode: `darken` (default, legacy fade-to-black)
+    /// or `blur` (disk blur + desaturation, VIP-Sim mip approach; #171).
+    /// Only used with --filter glaucoma / macular-degeneration / hemianopia / tunnel-vision.
+    #[arg(long, value_enum, default_value = "darken")]
+    pub(crate) field_loss_mode: FieldLossMode,
 
     /// Depth map image path (PNG / JPEG / etc.). Only used with depth blur filters.
     #[arg(long)]
