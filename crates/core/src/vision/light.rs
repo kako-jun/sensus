@@ -55,7 +55,8 @@ pub fn cataract(img: DynamicImage, strength: f32, seed: u64) -> crate::Result<Dy
     // 原典 VIP-Sim（一次出典 `myBrightnessContrastGamma.shader`:
     // `color *= _BCG.x; color = (color - coeff) * _BCG.y + coeff`）は
     // brightness を `×(1-severity)` の乗算（severity=1 で全消灯）とし、
-    // コントラスト pivot は ContrastCoeff そのもの (0.7, 0.7, 0.4) を使う。
+    // コントラスト pivot は ContrastCoeff そのもの (0.7, 0.7, 0.4) を使う
+    // （B 係数 0.4 が最小＝白内障で青の散乱が最大であることに対応する）。
     // sensus はこれと異なり pivot を 0.5 に固定し、輝度低下も
     // `-0.1*severity` の減算オフセットとする——原典よりずっとマイルドな
     // 実装であり、原典の忠実移植ではない（挙動は本修正で変更しない。
