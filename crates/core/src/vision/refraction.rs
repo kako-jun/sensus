@@ -207,7 +207,11 @@ pub fn depth_aware_blur(
     // 各ビンの中心深度と radius_px を計算
     let mut bin_radius: [f32; N_BINS] = [0.0; N_BINS];
     for (bin, radius) in bin_radius.iter_mut().enumerate().take(N_BINS) {
-        let bin_center = (bin as f32 + 0.5) / N_BINS as f32; // 0.0625..0.9375
+        // ビン中心は補間側の scaled = d * (N_BINS - 1) と定義域を揃える
+        // （0.0..=1.0 の両端を含む）。旧実装は (bin+0.5)/N_BINS で
+        // 0.0625..0.9375 に収まっており、補間の 0.0..=1.0 と定義域がズレて
+        // 焦点面が focus_depth から最大 ~0.09 ずれていた（#166）。
+        let bin_center = bin as f32 / (N_BINS - 1) as f32; // 0.0..=1.0
         let delta = bin_center - focus_depth;
         *radius = match kind {
             DepthBlurKind::Myopia => {
