@@ -684,7 +684,7 @@ fn glaucoma_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [200, 50, 30, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&glaucoma(input, 0.0, GlaucomaMode::Vignette).unwrap()),
+        raw_rgba_vec(&glaucoma(input, 0.0, GlaucomaMode::Vignette, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -694,7 +694,7 @@ fn macular_degeneration_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [200, 50, 30, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&macular_degeneration(input, 0.0).unwrap()),
+        raw_rgba_vec(&macular_degeneration(input, 0.0, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -704,7 +704,7 @@ fn hemianopia_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [200, 50, 30, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&hemianopia(input, 0.0, 0.0).unwrap()),
+        raw_rgba_vec(&hemianopia(input, 0.0, 0.0, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -713,7 +713,10 @@ fn hemianopia_strength_zero_is_identity() {
 fn tunnel_vision_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [200, 50, 30, 255]);
     let original = raw_rgba_vec(&input);
-    assert_eq!(raw_rgba_vec(&tunnel_vision(input, 0.0).unwrap()), original);
+    assert_eq!(
+        raw_rgba_vec(&tunnel_vision(input, 0.0, FieldLossMode::Darken).unwrap()),
+        original
+    );
 }
 
 // ---------------------------------------------------------------
@@ -725,7 +728,15 @@ fn glaucoma_nan_strength_returns_identity() {
     let input = solid_rgba(32, 32, [100, 150, 200, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&glaucoma(input, f32::NAN, GlaucomaMode::Vignette).unwrap()),
+        raw_rgba_vec(
+            &glaucoma(
+                input,
+                f32::NAN,
+                GlaucomaMode::Vignette,
+                FieldLossMode::Darken
+            )
+            .unwrap()
+        ),
         original
     );
 }
@@ -735,7 +746,7 @@ fn macular_degeneration_nan_strength_returns_identity() {
     let input = solid_rgba(32, 32, [100, 150, 200, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&macular_degeneration(input, f32::NAN).unwrap()),
+        raw_rgba_vec(&macular_degeneration(input, f32::NAN, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -745,7 +756,7 @@ fn hemianopia_nan_strength_returns_identity() {
     let input = solid_rgba(32, 32, [100, 150, 200, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&hemianopia(input, f32::NAN, 0.0).unwrap()),
+        raw_rgba_vec(&hemianopia(input, f32::NAN, 0.0, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -755,7 +766,7 @@ fn tunnel_vision_nan_strength_returns_identity() {
     let input = solid_rgba(32, 32, [100, 150, 200, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&tunnel_vision(input, f32::NAN).unwrap()),
+        raw_rgba_vec(&tunnel_vision(input, f32::NAN, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -767,8 +778,17 @@ fn tunnel_vision_nan_strength_returns_identity() {
 #[test]
 fn glaucoma_strength_above_one_clamped() {
     let input = solid_rgba(64, 64, [200, 100, 50, 255]);
-    let out2 = raw_rgba_vec(&glaucoma(input.clone(), 2.0, GlaucomaMode::Vignette).unwrap());
-    let out1 = raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap());
+    let out2 = raw_rgba_vec(
+        &glaucoma(
+            input.clone(),
+            2.0,
+            GlaucomaMode::Vignette,
+            FieldLossMode::Darken,
+        )
+        .unwrap(),
+    );
+    let out1 =
+        raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken).unwrap());
     assert_eq!(out2, out1);
 }
 
@@ -785,10 +805,18 @@ fn visual_field_filters_preserve_alpha() {
             assert_eq!(px[3], 200, "alpha must be preserved");
         }
     };
-    check_alpha(glaucoma(input.clone(), 0.8, GlaucomaMode::Vignette).unwrap());
-    check_alpha(macular_degeneration(input.clone(), 0.8).unwrap());
-    check_alpha(hemianopia(input.clone(), 0.8, 0.0).unwrap());
-    check_alpha(tunnel_vision(input, 0.8).unwrap());
+    check_alpha(
+        glaucoma(
+            input.clone(),
+            0.8,
+            GlaucomaMode::Vignette,
+            FieldLossMode::Darken,
+        )
+        .unwrap(),
+    );
+    check_alpha(macular_degeneration(input.clone(), 0.8, FieldLossMode::Darken).unwrap());
+    check_alpha(hemianopia(input.clone(), 0.8, 0.0, FieldLossMode::Darken).unwrap());
+    check_alpha(tunnel_vision(input, 0.8, FieldLossMode::Darken).unwrap());
 }
 
 // ---------------------------------------------------------------
@@ -799,13 +827,19 @@ fn visual_field_filters_preserve_alpha() {
 fn visual_field_filters_preserve_dimensions() {
     let input = solid_rgba(47, 31, [100, 100, 100, 255]);
     let (w, h) = (47, 31);
-    let out = glaucoma(input.clone(), 0.5, GlaucomaMode::Vignette).unwrap();
+    let out = glaucoma(
+        input.clone(),
+        0.5,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     assert_eq!((out.width(), out.height()), (w, h));
-    let out = macular_degeneration(input.clone(), 0.5).unwrap();
+    let out = macular_degeneration(input.clone(), 0.5, FieldLossMode::Darken).unwrap();
     assert_eq!((out.width(), out.height()), (w, h));
-    let out = hemianopia(input.clone(), 0.5, 0.5).unwrap();
+    let out = hemianopia(input.clone(), 0.5, 0.5, FieldLossMode::Darken).unwrap();
     assert_eq!((out.width(), out.height()), (w, h));
-    let out = tunnel_vision(input, 0.5).unwrap();
+    let out = tunnel_vision(input, 0.5, FieldLossMode::Darken).unwrap();
     assert_eq!((out.width(), out.height()), (w, h));
 }
 
@@ -818,7 +852,7 @@ fn glaucoma_center_pixel_unchanged_at_full_strength() {
     // 白画像で中心（r < inner_r=0.3）は変化なし
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 100, 50, 255]);
-    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken)
         .unwrap()
         .to_rgba8();
     let cx = size / 2;
@@ -837,7 +871,7 @@ fn glaucoma_corner_pixel_becomes_black_at_full_strength() {
     // コーナー (r=1.0 > outer_r=0.5) → mul=0.0 → 黒
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 100, 50, 255]);
-    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken)
         .unwrap()
         .to_rgba8();
     let corner = out.get_pixel(0, 0);
@@ -853,10 +887,15 @@ fn glaucoma_strength_monotonic_peripheral_darkening() {
     // コーナー付近では strength=0.5 の方が strength=1.0 より明るい
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out05 = glaucoma(input.clone(), 0.5, GlaucomaMode::Vignette)
-        .unwrap()
-        .to_rgba8();
-    let out10 = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+    let out05 = glaucoma(
+        input.clone(),
+        0.5,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
+    let out10 = glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken)
         .unwrap()
         .to_rgba8();
     // コーナー (0,0) での輝度比較
@@ -877,7 +916,9 @@ fn macular_degeneration_center_darkened_at_full_strength() {
     // 中心画素: darkened = lum * 0.05 なので元より暗くなる
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out = macular_degeneration(input, 1.0).unwrap().to_rgba8();
+    let out = macular_degeneration(input, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let cx = size / 2;
     let cy = size / 2;
     let center = out.get_pixel(cx, cy)[0] as i32;
@@ -897,7 +938,9 @@ fn macular_degeneration_periphery_unchanged_at_full_strength() {
     // 周辺 (r > outer_r=0.4) は t=0.0 → continue → 変化なし
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 100, 50, 255]);
-    let out = macular_degeneration(input, 1.0).unwrap().to_rgba8();
+    let out = macular_degeneration(input, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     // コーナーは周辺なので変化なし
     let corner = out.get_pixel(0, 0);
     assert_eq!([corner[0], corner[1], corner[2]], [200, 100, 50]);
@@ -912,8 +955,12 @@ fn macular_degeneration_strength_monotonic_center_darkening() {
     // 中心では strength が大きいほど暗い
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out05 = macular_degeneration(input.clone(), 0.5).unwrap().to_rgba8();
-    let out10 = macular_degeneration(input, 1.0).unwrap().to_rgba8();
+    let out05 = macular_degeneration(input.clone(), 0.5, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let out10 = macular_degeneration(input, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let cx = size / 2;
     let cy = size / 2;
     let r05 = out05.get_pixel(cx, cy)[0] as i32;
@@ -933,7 +980,9 @@ fn hemianopia_left_side_darkened_when_side_zero() {
     // side=0.0, strength=1.0: 左端 (x=0) は x < split_x - blur_w → fade=1.0 → 黒
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out = hemianopia(input, 1.0, 0.0).unwrap().to_rgba8();
+    let out = hemianopia(input, 1.0, 0.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let left = out.get_pixel(0, size / 2);
     assert_eq!(
         [left[0], left[1], left[2]],
@@ -951,7 +1000,9 @@ fn hemianopia_right_side_darkened_when_side_one() {
     // side=1.0, strength=1.0: 右端 (x=size-1) は x > split_x + blur_w → fade=1.0 → 黒
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out = hemianopia(input, 1.0, 1.0).unwrap().to_rgba8();
+    let out = hemianopia(input, 1.0, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let right = out.get_pixel(size - 1, size / 2);
     assert_eq!(
         [right[0], right[1], right[2]],
@@ -971,8 +1022,12 @@ fn hemianopia_side_left_right_symmetry() {
     // 境界から遠い領域（左 25%、右 25%）では完全に対称であるべき。
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out_left = hemianopia(input.clone(), 1.0, 0.0).unwrap().to_rgba8();
-    let out_right = hemianopia(input, 1.0, 1.0).unwrap().to_rgba8();
+    let out_left = hemianopia(input.clone(), 1.0, 0.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let out_right = hemianopia(input, 1.0, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     // 境界から遠い端部（左 1/4 と右 1/4）の対称性を確認
     for y in 0..size {
         for x in 0..size / 4 {
@@ -995,7 +1050,9 @@ fn hemianopia_boundary_center_is_intermediate() {
     // x = split_x (中央) は境界内にあり、完全黒でも完全白でもない
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out = hemianopia(input, 1.0, 0.0).unwrap().to_rgba8();
+    let out = hemianopia(input, 1.0, 0.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let cx = size / 2;
     let cy = size / 2;
     let center = out.get_pixel(cx, cy)[0] as i32;
@@ -1015,7 +1072,9 @@ fn tunnel_vision_corner_becomes_black_at_full_strength() {
     // strength=1.0: inner_r=0.0, outer_r=0.05。コーナー r≈1.0 > 0.05 → 黒
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 100, 50, 255]);
-    let out = tunnel_vision(input, 1.0).unwrap().to_rgba8();
+    let out = tunnel_vision(input, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let corner = out.get_pixel(0, 0);
     assert_eq!([corner[0], corner[1], corner[2]], [0, 0, 0]);
 }
@@ -1028,8 +1087,12 @@ fn tunnel_vision_corner_becomes_black_at_full_strength() {
 fn tunnel_vision_strength_monotonic_peripheral_darkening() {
     let size = 64_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let out05 = tunnel_vision(input.clone(), 0.5).unwrap().to_rgba8();
-    let out10 = tunnel_vision(input, 1.0).unwrap().to_rgba8();
+    let out05 = tunnel_vision(input.clone(), 0.5, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
+    let out10 = tunnel_vision(input, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let r05 = out05.get_pixel(0, 0)[0] as i32;
     let r10 = out10.get_pixel(0, 0)[0] as i32;
     assert!(
@@ -1051,10 +1114,17 @@ fn tunnel_vision_narrower_than_glaucoma_at_same_strength() {
     // 中心から 30% 離れた点での輝度比較（glaucoma は保存, tunnel は暗化済み）
     let size = 100_u32;
     let input = solid_rgba(size, size, [200, 200, 200, 255]);
-    let g_out = glaucoma(input.clone(), 1.0, GlaucomaMode::Vignette)
+    let g_out = glaucoma(
+        input.clone(),
+        1.0,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
+    let t_out = tunnel_vision(input, 1.0, FieldLossMode::Darken)
         .unwrap()
         .to_rgba8();
-    let t_out = tunnel_vision(input, 1.0).unwrap().to_rgba8();
     // (50, 65) は中心から dy=15, normalized ≈ 0.15 → glaucoma ではinner_r=0.3 内で保存
     let cx = 50_u32;
     let test_y = 65_u32; // 中心y=50, dy=15
@@ -1093,25 +1163,25 @@ fn lerp_extrapolation_beyond_range() {
 #[test]
 fn glaucoma_1x1_does_not_panic() {
     let input = pixel(128, 128, 128, 255);
-    let _ = glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap();
+    let _ = glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken).unwrap();
 }
 
 #[test]
 fn macular_degeneration_1x1_does_not_panic() {
     let input = pixel(128, 128, 128, 255);
-    let _ = macular_degeneration(input, 1.0).unwrap();
+    let _ = macular_degeneration(input, 1.0, FieldLossMode::Darken).unwrap();
 }
 
 #[test]
 fn hemianopia_1x1_does_not_panic() {
     let input = pixel(128, 128, 128, 255);
-    let _ = hemianopia(input, 1.0, 0.5).unwrap();
+    let _ = hemianopia(input, 1.0, 0.5, FieldLossMode::Darken).unwrap();
 }
 
 #[test]
 fn tunnel_vision_1x1_does_not_panic() {
     let input = pixel(128, 128, 128, 255);
-    let _ = tunnel_vision(input, 1.0).unwrap();
+    let _ = tunnel_vision(input, 1.0, FieldLossMode::Darken).unwrap();
 }
 
 // ---------------------------------------------------------------
@@ -1122,7 +1192,7 @@ fn tunnel_vision_1x1_does_not_panic() {
 fn glaucoma_white_image_center_stays_white_corner_goes_black() {
     let size = 64_u32;
     let input = solid_rgba(size, size, [255, 255, 255, 255]);
-    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette)
+    let out = glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken)
         .unwrap()
         .to_rgba8();
     let cx = size / 2;
@@ -1147,7 +1217,7 @@ fn glaucoma_black_image_stays_black() {
     let input = solid_rgba(size, size, [0, 0, 0, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette).unwrap()),
+        raw_rgba_vec(&glaucoma(input, 1.0, GlaucomaMode::Vignette, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -1158,7 +1228,7 @@ fn macular_degeneration_black_image_stays_black() {
     let input = solid_rgba(size, size, [0, 0, 0, 255]);
     let original = raw_rgba_vec(&input);
     assert_eq!(
-        raw_rgba_vec(&macular_degeneration(input, 1.0).unwrap()),
+        raw_rgba_vec(&macular_degeneration(input, 1.0, FieldLossMode::Darken).unwrap()),
         original
     );
 }
@@ -2593,28 +2663,52 @@ fn nyctalopia_purkinje_shift_blue_channel_increases() {
 #[test]
 fn glaucoma_vignette_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [180, 120, 60, 255]);
-    let out = glaucoma(input.clone(), 0.0, GlaucomaMode::Vignette).unwrap();
+    let out = glaucoma(
+        input.clone(),
+        0.0,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
 }
 
 #[test]
 fn glaucoma_arcuate_superior_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [180, 120, 60, 255]);
-    let out = glaucoma(input.clone(), 0.0, GlaucomaMode::ArcuateSuperior).unwrap();
+    let out = glaucoma(
+        input.clone(),
+        0.0,
+        GlaucomaMode::ArcuateSuperior,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
 }
 
 #[test]
 fn glaucoma_arcuate_inferior_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [180, 120, 60, 255]);
-    let out = glaucoma(input.clone(), 0.0, GlaucomaMode::ArcuateInferior).unwrap();
+    let out = glaucoma(
+        input.clone(),
+        0.0,
+        GlaucomaMode::ArcuateInferior,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
 }
 
 #[test]
 fn glaucoma_biarcuate_strength_zero_is_identity() {
     let input = solid_rgba(32, 32, [180, 120, 60, 255]);
-    let out = glaucoma(input.clone(), 0.0, GlaucomaMode::Biarcuate).unwrap();
+    let out = glaucoma(
+        input.clone(),
+        0.0,
+        GlaucomaMode::Biarcuate,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     assert_eq!(input.to_rgba8().into_raw(), out.to_rgba8().into_raw());
 }
 
@@ -2629,7 +2723,13 @@ fn glaucoma_vignette_strength_one_darkens() {
         .pixels()
         .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
         .sum();
-    let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Vignette).unwrap();
+    let out = glaucoma(
+        DynamicImage::ImageRgba8(img),
+        1.0,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     let out_sum: u32 = out
         .to_rgba8()
         .pixels()
@@ -2655,6 +2755,7 @@ fn glaucoma_arcuate_superior_strength_one_darkens() {
         DynamicImage::ImageRgba8(img),
         1.0,
         GlaucomaMode::ArcuateSuperior,
+        FieldLossMode::Darken,
     )
     .unwrap();
     let out_sum: u32 = out
@@ -2682,6 +2783,7 @@ fn glaucoma_arcuate_inferior_strength_one_darkens() {
         DynamicImage::ImageRgba8(img),
         1.0,
         GlaucomaMode::ArcuateInferior,
+        FieldLossMode::Darken,
     )
     .unwrap();
     let out_sum: u32 = out
@@ -2705,7 +2807,13 @@ fn glaucoma_biarcuate_strength_one_darkens() {
         .pixels()
         .map(|p| p[0] as u32 + p[1] as u32 + p[2] as u32)
         .sum();
-    let out = glaucoma(DynamicImage::ImageRgba8(img), 1.0, GlaucomaMode::Biarcuate).unwrap();
+    let out = glaucoma(
+        DynamicImage::ImageRgba8(img),
+        1.0,
+        GlaucomaMode::Biarcuate,
+        FieldLossMode::Darken,
+    )
+    .unwrap();
     let out_sum: u32 = out
         .to_rgba8()
         .pixels()

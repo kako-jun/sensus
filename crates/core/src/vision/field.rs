@@ -1,6 +1,7 @@
 //! 視野欠損フィルタ。
 //!
 //! 緑内障・加齢黄斑変性・半盲・視野狭窄。`GlaucomaMode` enum はこの領域専用。
+//! `FieldLossMode`（Darken/Blur）は 4 フィルタ共通の表現モード payload（#171）。
 
 use super::*;
 use image::DynamicImage;
@@ -51,10 +52,53 @@ impl GlaucomaMode {
     }
 }
 
+/// 視野欠損の表現モード（#171）。
+///
+/// `Darken`（既定）は欠損部を黒方向へ暗転させる既存挙動（後方互換、golden 不変）。
+/// `Blur` は VIP-Sim（`myFieldLoss.cs`）の mipmap 方式に相当し、欠損部を
+/// 「ぼけ + 彩度低下」で表現する（黒には落とさない）。緑内障・黄斑変性の
+/// 患者の多くは暗点を「黒い影」ではなく「ぼやけ・埋められた感じ」として
+/// 知覚し、暗点の自覚がないケースも多いとされる。Blur モードはこの臨床像に
+/// 寄せた表現である（提案 Issue kako-jun/sensus#171）。
+///
+/// glaucoma / macular_degeneration / tunnel_vision / hemianopia の 4 フィルタが
+/// 共通 payload として持つ。GLSL シェーダ（`.frag`）は現状 `Darken` のみ対応で、
+/// `Blur` は CPU 実装のみ（フォローアップ課題、`docs/overview.md` 参照）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldLossMode {
+    /// 既定・後方互換: 欠損部を黒方向へ暗転させる。
+    #[default]
+    Darken,
+    /// 欠損部を disk blur + 彩度低下で表現する（VIP-Sim mip 方式相当）。
+    Blur,
+}
+
+/// `FieldLossMode::Blur` における最大 disk blur 半径比（min(W,H) 比）。
+///
+/// 導出: refraction 系（myopia 等）の disk blur はディオプター起源の defocus 量を
+/// Smith-Helmholtz 近似で換算するが、視野欠損（scotoma）は光学的な defocus では
+/// なく「情報の消失」であるため同じ換算式は使えない。VIP-Sim の mipmap 方式は
+/// 欠損部を最下位ミップ（元解像度に対しおよそ 1 辺 1/8、面積比 1/64）まで落として
+/// 「識別不能」を近似する。本実装は mip レベルの代わりに disk blur 半径を使うため、
+/// 「ミップ最下位タイル 1 辺 (1/8) の半分」を最大半径として `0.125` を採用する
+/// （値が大きいほど欠損部の情報量が減るという定性的な関係は保たれる）。
+const FIELD_LOSS_MAX_RADIUS_RATIO: f32 = 0.125;
+
+/// `FieldLossMode::Blur` の完全欠損部（m=1）における最大彩度低下率。
+///
+/// linear 空間で `lerp(color, luma, mask * FIELD_LOSS_DESATURATE_MAX)` する係数。
+/// 1.0 = 完全グレースケール、0.0 = 無変化。「黒には落とさない」設計のため輝度は
+/// 保ちつつ、色情報の減衰で VIP-Sim が意図する「情報の消失感」を補強する。
+/// 中間 m はさらに m でスケールされるため実際の低下率はこの値未満になる。
+/// 完全な脱色（1.0）にすると単なる disk blur との違いが分かりにくくなるため、
+/// 「色は残るが明確に鈍る」という中間点として 50% に留める。
+const FIELD_LOSS_DESATURATE_MAX: f32 = 0.5;
+
 /// 緑内障（glaucoma）シミュレーション。
 ///
 /// 緑内障は眼圧上昇による視神経萎縮が原因で、周辺視野から徐々に欠けていく。
 /// `mode` により均等 vignetting と弧状暗点を切り替えられる。
+/// `field_loss_mode` により暗転（Darken, 既定）とぼかし（Blur, #171）を切り替えられる。
 ///
 /// ## モード: Vignette（デフォルト、後方互換）
 ///
@@ -79,10 +123,12 @@ impl GlaucomaMode {
 /// - `img`: 入力画像
 /// - `strength`: 強度 (0.0..=1.0)
 /// - `mode`: 暗点の種類（[`GlaucomaMode`] を参照）
+/// - `field_loss_mode`: 表現モード（[`FieldLossMode`] を参照。既定 `Darken`）
 pub fn glaucoma(
     img: DynamicImage,
     strength: f32,
     mode: GlaucomaMode,
+    field_loss_mode: FieldLossMode,
 ) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -97,117 +143,202 @@ pub fn glaucoma(
     let cx = w_f * 0.5;
     let cy = h_f * 0.5;
 
-    match mode {
-        GlaucomaMode::Vignette => {
-            // 既存実装（後方互換）
-            let max_r = (cx * cx + cy * cy).sqrt();
-            let inner_r = 1.0 - strength * 0.7;
-            let outer_r = (inner_r + 0.2).min(1.0);
+    match field_loss_mode {
+        // Darken（既定）: 既存実装そのまま（golden 不変。#171 で 1 ビットも変更しない）。
+        FieldLossMode::Darken => match mode {
+            GlaucomaMode::Vignette => {
+                // 既存実装（後方互換）
+                let max_r = (cx * cx + cy * cy).sqrt();
+                let inner_r = 1.0 - strength * 0.7;
+                let outer_r = (inner_r + 0.2).min(1.0);
 
-            let mut out_rgba = rgba.clone();
-            for y in 0..height {
-                for x in 0..width {
-                    let dx = x as f32 - cx;
-                    let dy = y as f32 - cy;
-                    let r = (dx * dx + dy * dy).sqrt() / max_r;
+                let mut out_rgba = rgba.clone();
+                for y in 0..height {
+                    for x in 0..width {
+                        let dx = x as f32 - cx;
+                        let dy = y as f32 - cy;
+                        let r = (dx * dx + dy * dy).sqrt() / max_r;
 
-                    let fade = if r <= inner_r {
-                        0.0
-                    } else if r >= outer_r {
-                        1.0
-                    } else {
-                        let t = (r - inner_r) / (outer_r - inner_r);
-                        t * t * (3.0 - 2.0 * t)
-                    };
+                        let fade = if r <= inner_r {
+                            0.0
+                        } else if r >= outer_r {
+                            1.0
+                        } else {
+                            let t = (r - inner_r) / (outer_r - inner_r);
+                            t * t * (3.0 - 2.0 * t)
+                        };
 
-                    let mul = 1.0 - strength * fade;
+                        let mul = 1.0 - strength * fade;
 
-                    let px = out_rgba.get_pixel_mut(x, y);
-                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
-                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
-                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
-                    px[0] = pack_u8(linear_to_srgb(rl * mul));
-                    px[1] = pack_u8(linear_to_srgb(gl * mul));
-                    px[2] = pack_u8(linear_to_srgb(bl * mul));
+                        let px = out_rgba.get_pixel_mut(x, y);
+                        let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                        let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                        let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                        px[0] = pack_u8(linear_to_srgb(rl * mul));
+                        px[1] = pack_u8(linear_to_srgb(gl * mul));
+                        px[2] = pack_u8(linear_to_srgb(bl * mul));
+                    }
+                }
+                Ok(DynamicImage::ImageRgba8(out_rgba))
+            }
+            mode => {
+                // 弧状暗点モード（ArcuateSuperior / ArcuateInferior / Biarcuate）
+                //
+                // 視神経乳頭（ON head）の位置: 画像中心から水平方向 15% オフセット（耳側）
+                let on_x = cx + w_f * 0.15;
+                let on_y = cy;
+
+                // 弧状暗点のパラメータ（極座標）
+                // r_min..=r_max: ON head からの距離（min(W,H) 比）
+                let min_dim = w_f.min(h_f);
+                let r_min = min_dim * 0.20; // 内側境界
+                let r_max = min_dim * 0.55 * strength.sqrt(); // 外側境界（strength に応じて拡大）
+
+                // 弧状の角度範囲（ON head からの極角 θ）
+                // 上方弧状: θ ∈ [90°, 270°]（y > on_y の半面、画像座標では y 下向き）
+                // 下方弧状: θ ∈ [-90°, 90°]（y < on_y の半面）
+
+                let apply_superior = matches!(
+                    mode,
+                    GlaucomaMode::ArcuateSuperior | GlaucomaMode::Biarcuate
+                );
+                let apply_inferior = matches!(
+                    mode,
+                    GlaucomaMode::ArcuateInferior | GlaucomaMode::Biarcuate
+                );
+
+                let mut out_rgba = rgba.clone();
+                for y in 0..height {
+                    for x in 0..width {
+                        let dx = x as f32 - on_x;
+                        let dy = y as f32 - on_y; // 画像座標: y 下向きが正
+
+                        let r = (dx * dx + dy * dy).sqrt();
+
+                        // ON head からの距離が弧状帯に入っているか
+                        if r < r_min || r > r_max {
+                            continue;
+                        }
+
+                        // 弧状帯の中での正規化距離（smoothstep 用）
+                        // strength ≈ 0.133 付近で r_max ≈ r_min になりうるが、
+                        // その場合は r_min < r < r_max が成立しないため早期 continue し、
+                        // ゼロ除算・NaN は発生しない。
+                        let t_r = (r - r_min) / (r_max - r_min);
+                        let fade_r = t_r * t_r * (3.0 - 2.0 * t_r); // smoothstep
+                                                                    // 帯の中央（t_r=0.5）が最も暗く、両端に向かって明るくなる
+                        let fade_radial = 1.0 - (fade_r * 2.0 - 1.0).abs();
+
+                        // 角度条件: dy > 0 が画像下方（inferior）、dy < 0 が上方（superior）
+                        let in_superior = dy < 0.0; // 画像上半分（y が on_y より上）
+                        let in_inferior = dy > 0.0; // 画像下半分
+
+                        let in_arc =
+                            (apply_superior && in_superior) || (apply_inferior && in_inferior);
+                        if !in_arc {
+                            continue;
+                        }
+
+                        // ON head に近い角度（x 軸付近）では暗点が弱くなる（弧状の端）
+                        // |θ| が 0 や π に近いほど暗点は弱い → sin(θ) の絶対値でフェード
+                        let theta = dy.atan2(dx); // -π..=π
+                        let arc_fade = theta.sin().abs().sqrt().clamp(0.0, 1.0);
+
+                        let fade = strength * fade_radial * arc_fade;
+
+                        let mul = 1.0 - fade;
+                        let px = out_rgba.get_pixel_mut(x, y);
+                        let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                        let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                        let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                        px[0] = pack_u8(linear_to_srgb(rl * mul));
+                        px[1] = pack_u8(linear_to_srgb(gl * mul));
+                        px[2] = pack_u8(linear_to_srgb(bl * mul));
+                    }
+                }
+                Ok(DynamicImage::ImageRgba8(out_rgba))
+            }
+        },
+        // Blur（#171）: 暗転係数 m を blur 半径スケールとして再解釈する。
+        // Darken 分岐と同じ式で m（0=無傷, 1=完全欠損）を計算し、disk blur +
+        // 彩度低下を適用する（黒には落とさない）。
+        FieldLossMode::Blur => {
+            let mut mask = vec![0.0_f32; (width * height) as usize];
+            match mode {
+                GlaucomaMode::Vignette => {
+                    let max_r = (cx * cx + cy * cy).sqrt();
+                    let inner_r = 1.0 - strength * 0.7;
+                    let outer_r = (inner_r + 0.2).min(1.0);
+
+                    for y in 0..height {
+                        for x in 0..width {
+                            let dx = x as f32 - cx;
+                            let dy = y as f32 - cy;
+                            let r = (dx * dx + dy * dy).sqrt() / max_r;
+
+                            let fade = if r <= inner_r {
+                                0.0
+                            } else if r >= outer_r {
+                                1.0
+                            } else {
+                                let t = (r - inner_r) / (outer_r - inner_r);
+                                t * t * (3.0 - 2.0 * t)
+                            };
+
+                            mask[(y * width + x) as usize] = strength * fade;
+                        }
+                    }
+                }
+                mode => {
+                    let on_x = cx + w_f * 0.15;
+                    let on_y = cy;
+                    let min_dim = w_f.min(h_f);
+                    let r_min = min_dim * 0.20;
+                    let r_max = min_dim * 0.55 * strength.sqrt();
+
+                    let apply_superior = matches!(
+                        mode,
+                        GlaucomaMode::ArcuateSuperior | GlaucomaMode::Biarcuate
+                    );
+                    let apply_inferior = matches!(
+                        mode,
+                        GlaucomaMode::ArcuateInferior | GlaucomaMode::Biarcuate
+                    );
+
+                    for y in 0..height {
+                        for x in 0..width {
+                            let dx = x as f32 - on_x;
+                            let dy = y as f32 - on_y;
+
+                            let r = (dx * dx + dy * dy).sqrt();
+                            if r < r_min || r > r_max {
+                                continue;
+                            }
+
+                            let t_r = (r - r_min) / (r_max - r_min);
+                            let fade_r = t_r * t_r * (3.0 - 2.0 * t_r);
+                            let fade_radial = 1.0 - (fade_r * 2.0 - 1.0).abs();
+
+                            let in_superior = dy < 0.0;
+                            let in_inferior = dy > 0.0;
+                            let in_arc =
+                                (apply_superior && in_superior) || (apply_inferior && in_inferior);
+                            if !in_arc {
+                                continue;
+                            }
+
+                            let theta = dy.atan2(dx);
+                            let arc_fade = theta.sin().abs().sqrt().clamp(0.0, 1.0);
+
+                            mask[(y * width + x) as usize] = strength * fade_radial * arc_fade;
+                        }
+                    }
                 }
             }
-            Ok(DynamicImage::ImageRgba8(out_rgba))
-        }
-        mode => {
-            // 弧状暗点モード（ArcuateSuperior / ArcuateInferior / Biarcuate）
-            //
-            // 視神経乳頭（ON head）の位置: 画像中心から水平方向 15% オフセット（耳側）
-            let on_x = cx + w_f * 0.15;
-            let on_y = cy;
-
-            // 弧状暗点のパラメータ（極座標）
-            // r_min..=r_max: ON head からの距離（min(W,H) 比）
-            let min_dim = w_f.min(h_f);
-            let r_min = min_dim * 0.20; // 内側境界
-            let r_max = min_dim * 0.55 * strength.sqrt(); // 外側境界（strength に応じて拡大）
-
-            // 弧状の角度範囲（ON head からの極角 θ）
-            // 上方弧状: θ ∈ [90°, 270°]（y > on_y の半面、画像座標では y 下向き）
-            // 下方弧状: θ ∈ [-90°, 90°]（y < on_y の半面）
-
-            let apply_superior = matches!(
-                mode,
-                GlaucomaMode::ArcuateSuperior | GlaucomaMode::Biarcuate
-            );
-            let apply_inferior = matches!(
-                mode,
-                GlaucomaMode::ArcuateInferior | GlaucomaMode::Biarcuate
-            );
-
-            let mut out_rgba = rgba.clone();
-            for y in 0..height {
-                for x in 0..width {
-                    let dx = x as f32 - on_x;
-                    let dy = y as f32 - on_y; // 画像座標: y 下向きが正
-
-                    let r = (dx * dx + dy * dy).sqrt();
-
-                    // ON head からの距離が弧状帯に入っているか
-                    if r < r_min || r > r_max {
-                        continue;
-                    }
-
-                    // 弧状帯の中での正規化距離（smoothstep 用）
-                    // strength ≈ 0.133 付近で r_max ≈ r_min になりうるが、
-                    // その場合は r_min < r < r_max が成立しないため早期 continue し、
-                    // ゼロ除算・NaN は発生しない。
-                    let t_r = (r - r_min) / (r_max - r_min);
-                    let fade_r = t_r * t_r * (3.0 - 2.0 * t_r); // smoothstep
-                                                                // 帯の中央（t_r=0.5）が最も暗く、両端に向かって明るくなる
-                    let fade_radial = 1.0 - (fade_r * 2.0 - 1.0).abs();
-
-                    // 角度条件: dy > 0 が画像下方（inferior）、dy < 0 が上方（superior）
-                    let in_superior = dy < 0.0; // 画像上半分（y が on_y より上）
-                    let in_inferior = dy > 0.0; // 画像下半分
-
-                    let in_arc = (apply_superior && in_superior) || (apply_inferior && in_inferior);
-                    if !in_arc {
-                        continue;
-                    }
-
-                    // ON head に近い角度（x 軸付近）では暗点が弱くなる（弧状の端）
-                    // |θ| が 0 や π に近いほど暗点は弱い → sin(θ) の絶対値でフェード
-                    let theta = dy.atan2(dx); // -π..=π
-                    let arc_fade = theta.sin().abs().sqrt().clamp(0.0, 1.0);
-
-                    let fade = strength * fade_radial * arc_fade;
-
-                    let mul = 1.0 - fade;
-                    let px = out_rgba.get_pixel_mut(x, y);
-                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
-                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
-                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
-                    px[0] = pack_u8(linear_to_srgb(rl * mul));
-                    px[1] = pack_u8(linear_to_srgb(gl * mul));
-                    px[2] = pack_u8(linear_to_srgb(bl * mul));
-                }
-            }
-            Ok(DynamicImage::ImageRgba8(out_rgba))
+            let max_radius_px = FIELD_LOSS_MAX_RADIUS_RATIO * width.min(height) as f32;
+            let out =
+                mask_mapped_blur_desaturate(&rgba, &mask, max_radius_px, FIELD_LOSS_DESATURATE_MAX);
+            Ok(DynamicImage::ImageRgba8(out))
         }
     }
 }
@@ -228,7 +359,12 @@ pub fn glaucoma(
 /// # 引数
 /// - `img`: 入力画像
 /// - `strength`: 強度 (0.0..=1.0)
-pub fn macular_degeneration(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+/// - `field_loss_mode`: 表現モード（[`FieldLossMode`] を参照。既定 `Darken`）
+pub fn macular_degeneration(
+    img: DynamicImage,
+    strength: f32,
+    field_loss_mode: FieldLossMode,
+) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let rgba = img.to_rgba8();
     if strength == 0.0 {
@@ -246,47 +382,78 @@ pub fn macular_degeneration(img: DynamicImage, strength: f32) -> crate::Result<D
     let inner_r = strength * 0.25;
     let outer_r = strength * 0.4;
 
-    let mut out_rgba = rgba.clone();
-    for y in 0..height {
-        for x in 0..width {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let r = (dx * dx + dy * dy).sqrt() / max_r;
+    match field_loss_mode {
+        // Darken（既定）: 既存実装そのまま（golden 不変）。
+        FieldLossMode::Darken => {
+            let mut out_rgba = rgba.clone();
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 - cx;
+                    let dy = y as f32 - cy;
+                    let r = (dx * dx + dy * dy).sqrt() / max_r;
 
-            let t = if r <= inner_r {
-                1.0
-            } else if r >= outer_r {
-                0.0
-            } else {
-                let u = (r - inner_r) / (outer_r - inner_r);
-                1.0 - u * u * (3.0 - 2.0 * u)
-            };
+                    let t = if r <= inner_r {
+                        1.0
+                    } else if r >= outer_r {
+                        0.0
+                    } else {
+                        let u = (r - inner_r) / (outer_r - inner_r);
+                        1.0 - u * u * (3.0 - 2.0 * u)
+                    };
 
-            if t == 0.0 {
-                continue;
+                    if t == 0.0 {
+                        continue;
+                    }
+
+                    let px = out_rgba.get_pixel_mut(x, y);
+                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
+
+                    // 中心部: 輝度を BT.709 で取り出して暗化＋脱色
+                    let lum = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+                    // 強度に応じて暗化 (最大 0.05 の輝度)
+                    let darkened = lum * (1.0 - strength * 0.95);
+                    // 元色と脱色・暗化色を t でブレンド
+                    let out_r = lerp(rl, darkened, t);
+                    let out_g = lerp(gl, darkened, t);
+                    let out_b = lerp(bl, darkened, t);
+
+                    px[0] = pack_u8(linear_to_srgb(out_r));
+                    px[1] = pack_u8(linear_to_srgb(out_g));
+                    px[2] = pack_u8(linear_to_srgb(out_b));
+                }
             }
 
-            let px = out_rgba.get_pixel_mut(x, y);
-            let rl = srgb_to_linear(px[0] as f32 / 255.0);
-            let gl = srgb_to_linear(px[1] as f32 / 255.0);
-            let bl = srgb_to_linear(px[2] as f32 / 255.0);
+            Ok(DynamicImage::ImageRgba8(out_rgba))
+        }
+        // Blur（#171）: `t`（Darken 分岐と同じ式）を disk blur 半径スケールとして使う。
+        FieldLossMode::Blur => {
+            let mut mask = vec![0.0_f32; (width * height) as usize];
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 - cx;
+                    let dy = y as f32 - cy;
+                    let r = (dx * dx + dy * dy).sqrt() / max_r;
 
-            // 中心部: 輝度を BT.709 で取り出して暗化＋脱色
-            let lum = 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
-            // 強度に応じて暗化 (最大 0.05 の輝度)
-            let darkened = lum * (1.0 - strength * 0.95);
-            // 元色と脱色・暗化色を t でブレンド
-            let out_r = lerp(rl, darkened, t);
-            let out_g = lerp(gl, darkened, t);
-            let out_b = lerp(bl, darkened, t);
+                    let t = if r <= inner_r {
+                        1.0
+                    } else if r >= outer_r {
+                        0.0
+                    } else {
+                        let u = (r - inner_r) / (outer_r - inner_r);
+                        1.0 - u * u * (3.0 - 2.0 * u)
+                    };
 
-            px[0] = pack_u8(linear_to_srgb(out_r));
-            px[1] = pack_u8(linear_to_srgb(out_g));
-            px[2] = pack_u8(linear_to_srgb(out_b));
+                    mask[(y * width + x) as usize] = t;
+                }
+            }
+            let max_radius_px = FIELD_LOSS_MAX_RADIUS_RATIO * width.min(height) as f32;
+            let out =
+                mask_mapped_blur_desaturate(&rgba, &mask, max_radius_px, FIELD_LOSS_DESATURATE_MAX);
+            Ok(DynamicImage::ImageRgba8(out))
         }
     }
-
-    Ok(DynamicImage::ImageRgba8(out_rgba))
 }
 
 /// 半盲（hemianopia）シミュレーション。
@@ -304,7 +471,13 @@ pub fn macular_degeneration(img: DynamicImage, strength: f32) -> crate::Result<D
 /// - `img`: 入力画像
 /// - `strength`: 強度 (0.0..=1.0)
 /// - `side`: 欠損側 (0.0 = 左欠損, 1.0 = 右欠損)
-pub fn hemianopia(img: DynamicImage, strength: f32, side: f32) -> crate::Result<DynamicImage> {
+/// - `field_loss_mode`: 表現モード（[`FieldLossMode`] を参照。既定 `Darken`）
+pub fn hemianopia(
+    img: DynamicImage,
+    strength: f32,
+    side: f32,
+    field_loss_mode: FieldLossMode,
+) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let rgba = img.to_rgba8();
     if strength == 0.0 {
@@ -321,43 +494,73 @@ pub fn hemianopia(img: DynamicImage, strength: f32, side: f32) -> crate::Result<
     // 境界のぼかし幅
     let blur_w = w_f * 0.02;
 
-    let mut out_rgba = rgba.clone();
-    for y in 0..height {
-        for x in 0..width {
-            let xf = x as f32;
+    match field_loss_mode {
+        // Darken（既定）: 既存実装そのまま（golden 不変）。
+        FieldLossMode::Darken => {
+            let mut out_rgba = rgba.clone();
+            for y in 0..height {
+                for x in 0..width {
+                    let xf = x as f32;
 
-            // 左欠損 (side=0.0): x < split_x の領域を暗化
-            // 右欠損 (side=1.0): x > split_x の領域を暗化
-            // 中間値は欠損量を按分
-            let left_fade = if xf < split_x - blur_w {
-                1.0
-            } else if xf > split_x + blur_w {
-                0.0
-            } else {
-                let t = (xf - (split_x - blur_w)) / (2.0 * blur_w);
-                1.0 - t * t * (3.0 - 2.0 * t)
-            };
+                    // 左欠損 (side=0.0): x < split_x の領域を暗化
+                    // 右欠損 (side=1.0): x > split_x の領域を暗化
+                    // 中間値は欠損量を按分
+                    let left_fade = if xf < split_x - blur_w {
+                        1.0
+                    } else if xf > split_x + blur_w {
+                        0.0
+                    } else {
+                        let t = (xf - (split_x - blur_w)) / (2.0 * blur_w);
+                        1.0 - t * t * (3.0 - 2.0 * t)
+                    };
 
-            // side=0 → left_fade を使う, side=1 → (1-left_fade) を使う
-            let fade = lerp(left_fade, 1.0 - left_fade, side);
+                    // side=0 → left_fade を使う, side=1 → (1-left_fade) を使う
+                    let fade = lerp(left_fade, 1.0 - left_fade, side);
 
-            if fade == 0.0 {
-                continue;
+                    if fade == 0.0 {
+                        continue;
+                    }
+
+                    let mul = 1.0 - fade * strength;
+
+                    let px = out_rgba.get_pixel_mut(x, y);
+                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                    px[0] = pack_u8(linear_to_srgb(rl * mul));
+                    px[1] = pack_u8(linear_to_srgb(gl * mul));
+                    px[2] = pack_u8(linear_to_srgb(bl * mul));
+                }
             }
 
-            let mul = 1.0 - fade * strength;
+            Ok(DynamicImage::ImageRgba8(out_rgba))
+        }
+        // Blur（#171）: `fade * strength`（Darken 分岐と同じ式）を blur 半径スケールとして使う。
+        FieldLossMode::Blur => {
+            let mut mask = vec![0.0_f32; (width * height) as usize];
+            for y in 0..height {
+                for x in 0..width {
+                    let xf = x as f32;
 
-            let px = out_rgba.get_pixel_mut(x, y);
-            let rl = srgb_to_linear(px[0] as f32 / 255.0);
-            let gl = srgb_to_linear(px[1] as f32 / 255.0);
-            let bl = srgb_to_linear(px[2] as f32 / 255.0);
-            px[0] = pack_u8(linear_to_srgb(rl * mul));
-            px[1] = pack_u8(linear_to_srgb(gl * mul));
-            px[2] = pack_u8(linear_to_srgb(bl * mul));
+                    let left_fade = if xf < split_x - blur_w {
+                        1.0
+                    } else if xf > split_x + blur_w {
+                        0.0
+                    } else {
+                        let t = (xf - (split_x - blur_w)) / (2.0 * blur_w);
+                        1.0 - t * t * (3.0 - 2.0 * t)
+                    };
+
+                    let fade = lerp(left_fade, 1.0 - left_fade, side);
+                    mask[(y * width + x) as usize] = fade * strength;
+                }
+            }
+            let max_radius_px = FIELD_LOSS_MAX_RADIUS_RATIO * width.min(height) as f32;
+            let out =
+                mask_mapped_blur_desaturate(&rgba, &mask, max_radius_px, FIELD_LOSS_DESATURATE_MAX);
+            Ok(DynamicImage::ImageRgba8(out))
         }
     }
-
-    Ok(DynamicImage::ImageRgba8(out_rgba))
 }
 
 /// 視野狭窄（tunnel vision）シミュレーション。
@@ -374,7 +577,12 @@ pub fn hemianopia(img: DynamicImage, strength: f32, side: f32) -> crate::Result<
 /// # 引数
 /// - `img`: 入力画像
 /// - `strength`: 強度 (0.0..=1.0)
-pub fn tunnel_vision(img: DynamicImage, strength: f32) -> crate::Result<DynamicImage> {
+/// - `field_loss_mode`: 表現モード（[`FieldLossMode`] を参照。既定 `Darken`）
+pub fn tunnel_vision(
+    img: DynamicImage,
+    strength: f32,
+    field_loss_mode: FieldLossMode,
+) -> crate::Result<DynamicImage> {
     let strength = normalize_strength(strength);
     let rgba = img.to_rgba8();
     if strength == 0.0 {
@@ -394,37 +602,68 @@ pub fn tunnel_vision(img: DynamicImage, strength: f32) -> crate::Result<DynamicI
     // tunnel_vision は急激な境界が特徴
     let outer_r = (inner_r + 0.05).min(1.0);
 
-    let mut out_rgba = rgba.clone();
-    for y in 0..height {
-        for x in 0..width {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let r = (dx * dx + dy * dy).sqrt() / max_r;
+    match field_loss_mode {
+        // Darken（既定）: 既存実装そのまま（golden 不変）。
+        FieldLossMode::Darken => {
+            let mut out_rgba = rgba.clone();
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 - cx;
+                    let dy = y as f32 - cy;
+                    let r = (dx * dx + dy * dy).sqrt() / max_r;
 
-            let fade = if r <= inner_r {
-                0.0
-            } else if r >= outer_r {
-                1.0
-            } else {
-                let t = (r - inner_r) / (outer_r - inner_r);
-                t * t * (3.0 - 2.0 * t)
-            };
+                    let fade = if r <= inner_r {
+                        0.0
+                    } else if r >= outer_r {
+                        1.0
+                    } else {
+                        let t = (r - inner_r) / (outer_r - inner_r);
+                        t * t * (3.0 - 2.0 * t)
+                    };
 
-            if fade == 0.0 {
-                continue;
+                    if fade == 0.0 {
+                        continue;
+                    }
+
+                    let mul = 1.0 - strength * fade;
+
+                    let px = out_rgba.get_pixel_mut(x, y);
+                    let rl = srgb_to_linear(px[0] as f32 / 255.0);
+                    let gl = srgb_to_linear(px[1] as f32 / 255.0);
+                    let bl = srgb_to_linear(px[2] as f32 / 255.0);
+                    px[0] = pack_u8(linear_to_srgb(rl * mul));
+                    px[1] = pack_u8(linear_to_srgb(gl * mul));
+                    px[2] = pack_u8(linear_to_srgb(bl * mul));
+                }
             }
 
-            let mul = 1.0 - strength * fade;
+            Ok(DynamicImage::ImageRgba8(out_rgba))
+        }
+        // Blur（#171）: `strength * fade`（Darken 分岐と同じ式）を blur 半径スケールとして使う。
+        FieldLossMode::Blur => {
+            let mut mask = vec![0.0_f32; (width * height) as usize];
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = x as f32 - cx;
+                    let dy = y as f32 - cy;
+                    let r = (dx * dx + dy * dy).sqrt() / max_r;
 
-            let px = out_rgba.get_pixel_mut(x, y);
-            let rl = srgb_to_linear(px[0] as f32 / 255.0);
-            let gl = srgb_to_linear(px[1] as f32 / 255.0);
-            let bl = srgb_to_linear(px[2] as f32 / 255.0);
-            px[0] = pack_u8(linear_to_srgb(rl * mul));
-            px[1] = pack_u8(linear_to_srgb(gl * mul));
-            px[2] = pack_u8(linear_to_srgb(bl * mul));
+                    let fade = if r <= inner_r {
+                        0.0
+                    } else if r >= outer_r {
+                        1.0
+                    } else {
+                        let t = (r - inner_r) / (outer_r - inner_r);
+                        t * t * (3.0 - 2.0 * t)
+                    };
+
+                    mask[(y * width + x) as usize] = strength * fade;
+                }
+            }
+            let max_radius_px = FIELD_LOSS_MAX_RADIUS_RATIO * width.min(height) as f32;
+            let out =
+                mask_mapped_blur_desaturate(&rgba, &mask, max_radius_px, FIELD_LOSS_DESATURATE_MAX);
+            Ok(DynamicImage::ImageRgba8(out))
         }
     }
-
-    Ok(DynamicImage::ImageRgba8(out_rgba))
 }

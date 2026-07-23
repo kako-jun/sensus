@@ -159,6 +159,7 @@ mod tests {
             .push(FilterStep::new(
                 Filter::Glaucoma {
                     mode: crate::vision::GlaucomaMode::Vignette,
+                    field_loss_mode: crate::vision::FieldLossMode::Darken,
                 },
                 0.8,
             ));
@@ -291,6 +292,7 @@ mod tests {
             .push(FilterStep::new(
                 Filter::Glaucoma {
                     mode: crate::vision::GlaucomaMode::Vignette,
+                    field_loss_mode: crate::vision::FieldLossMode::Darken,
                 },
                 1.0,
             ))
@@ -303,6 +305,7 @@ mod tests {
             .push(FilterStep::new(
                 Filter::Glaucoma {
                     mode: crate::vision::GlaucomaMode::Vignette,
+                    field_loss_mode: crate::vision::FieldLossMode::Darken,
                 },
                 1.0,
             ))

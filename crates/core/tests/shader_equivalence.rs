@@ -33,7 +33,8 @@ use sensus_core::vision::{
     achromatopsia, astigmatism, bppv_rotation, deuteranopia, diplopia, dry_eye, eye_strain,
     glaucoma, hemianopia, hyperopia, linear_to_srgb, macular_degeneration, metamorphopsia, myopia,
     nyctalopia, nystagmus, photophobia, presbyopia, protanopia, srgb_to_linear, starbursts,
-    tetrachromacy, tritanopia, tunnel_vision, vertigo, vestibular_neuritis, GlaucomaMode,
+    tetrachromacy, tritanopia, tunnel_vision, vertigo, vestibular_neuritis, FieldLossMode,
+    GlaucomaMode,
 };
 
 // ---------------------------------------------------------------------------
@@ -1246,14 +1247,25 @@ fn shader_equiv_strength_zero_no_change() {
         ("achromatopsia", achromatopsia(img.clone(), 0.0)),
         (
             "glaucoma",
-            glaucoma(img.clone(), 0.0, GlaucomaMode::Vignette),
+            glaucoma(
+                img.clone(),
+                0.0,
+                GlaucomaMode::Vignette,
+                FieldLossMode::Darken,
+            ),
         ),
-        ("tunnel_vision", tunnel_vision(img.clone(), 0.0)),
+        (
+            "tunnel_vision",
+            tunnel_vision(img.clone(), 0.0, FieldLossMode::Darken),
+        ),
         (
             "macular_degeneration",
-            macular_degeneration(img.clone(), 0.0),
+            macular_degeneration(img.clone(), 0.0, FieldLossMode::Darken),
         ),
-        ("hemianopia", hemianopia(img.clone(), 0.0, 0.5)),
+        (
+            "hemianopia",
+            hemianopia(img.clone(), 0.0, 0.5, FieldLossMode::Darken),
+        ),
     ] {
         let cpu_out = cpu_result.unwrap().to_rgba8();
         let orig = img.to_rgba8();
@@ -1528,9 +1540,14 @@ fn shader_equiv_glaucoma_strength_1_0_psnr() {
     let u = glaucoma_uniforms(1.0, 32, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette)
-        .unwrap()
-        .to_rgba8();
+    let cpu_out = glaucoma(
+        img.clone(),
+        1.0,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=1.0: PSNR {db:.1} dB < 30 dB");
@@ -1542,9 +1559,14 @@ fn shader_equiv_glaucoma_strength_0_5_psnr() {
     let u = glaucoma_uniforms(0.5, 32, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 0.5, GlaucomaMode::Vignette)
-        .unwrap()
-        .to_rgba8();
+    let cpu_out = glaucoma(
+        img.clone(),
+        0.5,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(db >= 30.0, "glaucoma strength=0.5: PSNR {db:.1} dB < 30 dB");
@@ -1554,7 +1576,9 @@ fn shader_equiv_glaucoma_strength_0_5_psnr() {
 fn shader_equiv_macular_degeneration_strength_1_0_psnr() {
     let img = gradient_32();
     let u = macular_degeneration_uniforms(1.0, 32, 32);
-    let cpu_out = macular_degeneration(img.clone(), 1.0).unwrap().to_rgba8();
+    let cpu_out = macular_degeneration(img.clone(), 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
@@ -1567,7 +1591,9 @@ fn shader_equiv_macular_degeneration_strength_1_0_psnr() {
 fn shader_equiv_macular_degeneration_strength_0_5_psnr() {
     let img = color_chart_32();
     let u = macular_degeneration_uniforms(0.5, 32, 32);
-    let cpu_out = macular_degeneration(img.clone(), 0.5).unwrap().to_rgba8();
+    let cpu_out = macular_degeneration(img.clone(), 0.5, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_macular_degeneration(&img.to_rgba8(), u.strength);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
@@ -1580,7 +1606,9 @@ fn shader_equiv_macular_degeneration_strength_0_5_psnr() {
 fn shader_equiv_hemianopia_right_strength_1_0_psnr() {
     let img = gradient_32();
     let u = hemianopia_uniforms(1.0, 1.0); // 右側欠損
-    let cpu_out = hemianopia(img.clone(), 1.0, 1.0).unwrap().to_rgba8();
+    let cpu_out = hemianopia(img.clone(), 1.0, 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_hemianopia(&img.to_rgba8(), u.strength, u.side);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
@@ -1594,7 +1622,9 @@ fn shader_equiv_hemianopia_left_strength_1_0_psnr() {
     let img = gradient_32();
     let u = hemianopia_uniforms(1.0, -1.0); // 左側欠損
                                             // vision::hemianopia は side=0.0 で左欠損
-    let cpu_out = hemianopia(img.clone(), 1.0, 0.0).unwrap().to_rgba8();
+    let cpu_out = hemianopia(img.clone(), 1.0, 0.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_hemianopia(&img.to_rgba8(), u.strength, u.side);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
@@ -1609,7 +1639,9 @@ fn shader_equiv_tunnel_vision_strength_1_0_psnr() {
     let u = tunnel_vision_uniforms(1.0, 32, 32);
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
-    let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
+    let cpu_out = tunnel_vision(img.clone(), 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
@@ -1624,7 +1656,9 @@ fn shader_equiv_tunnel_vision_strength_0_5_psnr() {
     let u = tunnel_vision_uniforms(0.5, 32, 32);
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
-    let cpu_out = tunnel_vision(img.clone(), 0.5).unwrap().to_rgba8();
+    let cpu_out = tunnel_vision(img.clone(), 0.5, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, 1.0);
     let db = psnr(&cpu_out, &gpu_sim);
     assert!(
@@ -2115,9 +2149,14 @@ fn shader_equiv_glaucoma_non_square_64x32_psnr() {
     let u = glaucoma_uniforms(1.0, 64, 32, GlaucomaMode::Vignette);
     let inner_r = 1.0 - u.strength * 0.7;
     let outer_r = (inner_r + 0.2_f32).min(1.0);
-    let cpu_out = glaucoma(img.clone(), 1.0, GlaucomaMode::Vignette)
-        .unwrap()
-        .to_rgba8();
+    let cpu_out = glaucoma(
+        img.clone(),
+        1.0,
+        GlaucomaMode::Vignette,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
     let aspect = 64.0_f32 / 32.0_f32; // 2.0
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, aspect);
     let db = psnr(&cpu_out, &gpu_sim);
@@ -2161,7 +2200,9 @@ fn shader_equiv_macular_degeneration_non_square_psnr() {
     // 64×32 の非正方形グラデーション画像で aspect 補正付きシミュレータを使う
     let img = gradient_64x32();
     let u = macular_degeneration_uniforms(1.0, 64, 32);
-    let cpu_out = macular_degeneration(img.clone(), 1.0).unwrap().to_rgba8();
+    let cpu_out = macular_degeneration(img.clone(), 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     // aspect 補正付きシミュレータで GPU 側の動作を再現
     let gpu_sim = sim_macular_degeneration_aspect(&img.to_rgba8(), u.strength, u.aspect);
     let db = psnr(&cpu_out, &gpu_sim);
@@ -2178,7 +2219,9 @@ fn shader_equiv_tunnel_vision_non_square_psnr() {
     let u = tunnel_vision_uniforms(1.0, 64, 32);
     let inner_r = (1.0 - u.strength) * 0.5;
     let outer_r = (inner_r + 0.05_f32).min(1.0);
-    let cpu_out = tunnel_vision(img.clone(), 1.0).unwrap().to_rgba8();
+    let cpu_out = tunnel_vision(img.clone(), 1.0, FieldLossMode::Darken)
+        .unwrap()
+        .to_rgba8();
     let aspect = 64.0_f32 / 32.0_f32; // 2.0
     let gpu_sim = sim_vignette_fov(&img.to_rgba8(), u.strength, inner_r, outer_r, aspect);
     let db = psnr(&cpu_out, &gpu_sim);
@@ -4238,7 +4281,9 @@ fn shader_equiv_glaucoma_arcuate_strength_1_0_psnr() {
     ] {
         let u = glaucoma_uniforms(1.0, 32, 32, mode);
         let (sup, inf) = arcuate_flags(mode);
-        let cpu_out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
+        let cpu_out = glaucoma(img.clone(), 1.0, mode, FieldLossMode::Darken)
+            .unwrap()
+            .to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         let db = psnr(&cpu_out, &gpu_sim);
         assert!(
@@ -4258,7 +4303,9 @@ fn shader_equiv_glaucoma_arcuate_strength_0_5_psnr() {
     ] {
         let u = glaucoma_uniforms(0.5, 32, 32, mode);
         let (sup, inf) = arcuate_flags(mode);
-        let cpu_out = glaucoma(img.clone(), 0.5, mode).unwrap().to_rgba8();
+        let cpu_out = glaucoma(img.clone(), 0.5, mode, FieldLossMode::Darken)
+            .unwrap()
+            .to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         let db = psnr(&cpu_out, &gpu_sim);
         assert!(
@@ -4279,7 +4326,9 @@ fn shader_equiv_glaucoma_arcuate_strength_0_0_identity_psnr() {
     ] {
         let u = glaucoma_uniforms(0.0, 32, 32, mode);
         let (sup, inf) = arcuate_flags(mode);
-        let cpu_out = glaucoma(img.clone(), 0.0, mode).unwrap().to_rgba8();
+        let cpu_out = glaucoma(img.clone(), 0.0, mode, FieldLossMode::Darken)
+            .unwrap()
+            .to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         // CPU は完全恒等、sim も完全恒等のはず → PSNR 無限大相当
         assert_eq!(
@@ -4306,7 +4355,9 @@ fn shader_equiv_glaucoma_arcuate_non_square_64x32_psnr() {
     ] {
         let u = glaucoma_uniforms(1.0, 64, 32, mode);
         let (sup, inf) = arcuate_flags(mode);
-        let cpu_out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
+        let cpu_out = glaucoma(img.clone(), 1.0, mode, FieldLossMode::Darken)
+            .unwrap()
+            .to_rgba8();
         let gpu_sim = sim_glaucoma_arcuate(&img.to_rgba8(), u.strength, u.aspect, sup, inf);
         let db = psnr(&cpu_out, &gpu_sim);
         assert!(
@@ -4325,7 +4376,9 @@ fn glaucoma_arcuate_modes_have_effect() {
         GlaucomaMode::ArcuateInferior,
         GlaucomaMode::Biarcuate,
     ] {
-        let out = glaucoma(img.clone(), 1.0, mode).unwrap().to_rgba8();
+        let out = glaucoma(img.clone(), 1.0, mode, FieldLossMode::Darken)
+            .unwrap()
+            .to_rgba8();
         let d = max_abs_rgb_diff(&out, &input);
         assert!(
             d >= 4,
@@ -4339,12 +4392,22 @@ fn glaucoma_arcuate_superior_inferior_differ() {
     // 上方弧状と下方弧状は異なる領域を暗化する（極座標マスクの上下非対称性）。
     // CPU・sim 両方で上下が反転することを確認する。
     let img = solid_rgba(64, 64, [180, 180, 180, 255]);
-    let sup = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateSuperior)
-        .unwrap()
-        .to_rgba8();
-    let inf = glaucoma(img.clone(), 1.0, GlaucomaMode::ArcuateInferior)
-        .unwrap()
-        .to_rgba8();
+    let sup = glaucoma(
+        img.clone(),
+        1.0,
+        GlaucomaMode::ArcuateSuperior,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
+    let inf = glaucoma(
+        img.clone(),
+        1.0,
+        GlaucomaMode::ArcuateInferior,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
     assert_ne!(
         sup.as_raw(),
         inf.as_raw(),
@@ -4370,9 +4433,14 @@ fn glaucoma_arcuate_superior_inferior_differ() {
 #[test]
 fn glaucoma_arcuate_strength_0_0_is_identity() {
     let img = solid_rgba(64, 64, [180, 180, 180, 255]);
-    let out = glaucoma(img.clone(), 0.0, GlaucomaMode::Biarcuate)
-        .unwrap()
-        .to_rgba8();
+    let out = glaucoma(
+        img.clone(),
+        0.0,
+        GlaucomaMode::Biarcuate,
+        FieldLossMode::Darken,
+    )
+    .unwrap()
+    .to_rgba8();
     assert_eq!(
         out.as_raw(),
         img.to_rgba8().as_raw(),

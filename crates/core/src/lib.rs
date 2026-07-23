@@ -51,16 +51,26 @@ pub enum Filter {
     },
     Presbyopia,
     // vision (Phase 3: visual field)
-    /// 緑内障。`mode` は [`vision::GlaucomaMode`] を参照。デフォルト: Vignette
+    /// 緑内障。`mode` は [`vision::GlaucomaMode`] を参照。デフォルト: Vignette。
+    /// `field_loss_mode` は [`vision::FieldLossMode`] を参照。デフォルト: Darken（#171）
     Glaucoma {
         mode: vision::GlaucomaMode,
+        field_loss_mode: vision::FieldLossMode,
     },
-    MacularDegeneration,
-    /// 半盲。`side`: 0.0 = 左視野消失, 1.0 = 右視野消失
+    /// 黄斑変性。`field_loss_mode` は [`vision::FieldLossMode`] を参照。デフォルト: Darken（#171）
+    MacularDegeneration {
+        field_loss_mode: vision::FieldLossMode,
+    },
+    /// 半盲。`side`: 0.0 = 左視野消失, 1.0 = 右視野消失。
+    /// `field_loss_mode` は [`vision::FieldLossMode`] を参照。デフォルト: Darken（#171）
     Hemianopia {
         side: f32,
+        field_loss_mode: vision::FieldLossMode,
     },
-    TunnelVision,
+    /// 視野狭窄。`field_loss_mode` は [`vision::FieldLossMode`] を参照。デフォルト: Darken（#171）
+    TunnelVision {
+        field_loss_mode: vision::FieldLossMode,
+    },
     // vision (Phase 3: light / transparency)
     /// 白内障。`seed`: 散乱グレア生成用ランダムシード。デフォルト: 0
     Cataract {
@@ -157,10 +167,20 @@ pub fn apply(
             gaze_x,
             gaze_y,
         } => vision::floaters(img, strength, density, seed, gaze_x, gaze_y, size),
-        Filter::Glaucoma { mode } => vision::glaucoma(img, strength, mode),
-        Filter::MacularDegeneration => vision::macular_degeneration(img, strength),
-        Filter::Hemianopia { side } => vision::hemianopia(img, strength, side),
-        Filter::TunnelVision => vision::tunnel_vision(img, strength),
+        Filter::Glaucoma {
+            mode,
+            field_loss_mode,
+        } => vision::glaucoma(img, strength, mode, field_loss_mode),
+        Filter::MacularDegeneration { field_loss_mode } => {
+            vision::macular_degeneration(img, strength, field_loss_mode)
+        }
+        Filter::Hemianopia {
+            side,
+            field_loss_mode,
+        } => vision::hemianopia(img, strength, side, field_loss_mode),
+        Filter::TunnelVision { field_loss_mode } => {
+            vision::tunnel_vision(img, strength, field_loss_mode)
+        }
         Filter::Tetrachromacy => vision::tetrachromacy(img, strength),
         // 静止画では時間を持てないため、効果がピークになる代表位相で 1 フレームを描く
         // （アニメーションは GLSL シェーダ側の time uniform が担当する）。

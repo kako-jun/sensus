@@ -95,7 +95,9 @@ mod phenomena;
 // 全公開アイテムを vision 直下へ再エクスポートし、`crate::vision::<name>` を不変に保つ。
 pub use color::{achromatopsia, deuteranopia, protanopia, tetrachromacy, tritanopia};
 pub use fatigue::{dry_eye, eye_strain};
-pub use field::{glaucoma, hemianopia, macular_degeneration, tunnel_vision, GlaucomaMode};
+pub use field::{
+    glaucoma, hemianopia, macular_degeneration, tunnel_vision, FieldLossMode, GlaucomaMode,
+};
 pub use light::{cataract, floaters, floaters_mask, nyctalopia, photophobia};
 pub use motion::{
     bppv_rotation, diplopia, nystagmus, starbursts, vertigo, vestibular_neuritis,
@@ -116,8 +118,9 @@ pub use common::{linear_to_srgb, srgb_to_linear};
 // テスト参照（分割前と同一）もそのまま解決する。
 pub(crate) use color::{LUMA_B, LUMA_G, LUMA_R};
 pub(crate) use common::{
-    ellipse_blur, isotropic_disk_blur_image, lerp, linear_planes_to_rgba, normalize_strength,
-    pack_u8, radius_from_strength, rgba_to_linear_planes, sample_bilinear, MIN_BLUR_RADIUS_PX,
+    ellipse_blur, isotropic_disk_blur_image, lerp, linear_planes_to_rgba,
+    mask_mapped_blur_desaturate, normalize_strength, pack_u8, radius_from_strength,
+    rgba_to_linear_planes, sample_bilinear, MIN_BLUR_RADIUS_PX,
 };
 
 #[cfg(test)]
