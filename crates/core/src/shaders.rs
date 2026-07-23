@@ -1070,6 +1070,13 @@ mod tests {
         // GLSL uniform 側の実効軸 (正規化後 - 90°) が CPU 側の
         // crate::vision::normalize_axis_deg と byte-exact で一致することを、
         // NaN / 負値 / 360° 超の代表値で直接クロスチェックする。
+        //
+        // このテストが固定するのは「配線」（astigmatism_uniforms が実際に共有
+        // ヘルパー normalize_axis_deg を通ること）であり、正規化ロジック自体の
+        // 正しさ（NaN→90°、rem_euclid(180.0) の具体的な期待値）はリテラル期待値
+        // を持つ兄弟テスト astigmatism_uniforms_nan_axis_matches_cpu_normalization /
+        // astigmatism_uniforms_axis_is_180_periodic が担う。両者が両方欠けると
+        // 「両実装が同じ間違いを共有する」退行を検出できないため、意図的に分離している。
         for axis in [f32::NAN, -45.0, 0.0, 90.0, 179.9, 360.0, 405.0] {
             let u = astigmatism_uniforms(1.0, 1000, axis);
             let expected_cpu_norm = crate::vision::normalize_axis_deg(axis);

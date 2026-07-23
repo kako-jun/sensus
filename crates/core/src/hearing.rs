@@ -85,17 +85,27 @@ impl BiquadFilter {
 // フィルタ係数計算
 // ---------------------------------------------------------------
 
+/// `sample_rate == 0` を 44100 Hz にフォールバックした実効サンプルレートを返す。
+///
+/// biquad 系フィルタ (`low_pass_biquad` / `high_pass_biquad` /
+/// `band_reject_biquad`)、`auditory_processing_disorder` の gap 埋め、
+/// `tinnitus` の時間軸・周波数 clamp が共有するフォールバック規約
+/// （Issue #169: 個別に `sample_rate as f32` を使うと sr=0 で `0.0/0.0 = NaN`
+/// になる問題があった。呼び出し側ごとの重複定義も一元化する）。
+fn effective_sample_rate(sample_rate: u32) -> f32 {
+    if sample_rate == 0 {
+        44100.0
+    } else {
+        sample_rate as f32
+    }
+}
+
 /// Butterworth 近似の 2 次ローパスフィルタ係数を返す。
 ///
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    // sample_rate=0 の場合はフォールバックとして 44100 Hz を使用する。
-    let fs = if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    };
+    let fs = effective_sample_rate(sample_rate);
     // バイリニア変換による Butterworth 2 次 LP
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
@@ -126,11 +136,7 @@ pub fn low_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `freq_hz`: カットオフ周波数 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    };
+    let fs = effective_sample_rate(sample_rate);
     let f0 = freq_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let q = std::f32::consts::FRAC_1_SQRT_2;
@@ -161,11 +167,7 @@ pub fn high_pass_biquad(freq_hz: f32, sample_rate: u32) -> BiquadFilter {
 /// `bandwidth_hz`: 帯域幅 (Hz)
 /// `sample_rate`: サンプルレート (Hz)
 pub fn band_reject_biquad(center_hz: f32, bandwidth_hz: f32, sample_rate: u32) -> BiquadFilter {
-    let fs = if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    };
+    let fs = effective_sample_rate(sample_rate);
     let f0 = center_hz.clamp(1.0, fs * 0.4999);
     let w0 = 2.0 * PI * f0 / fs;
     let bw = bandwidth_hz.max(1.0);
@@ -275,21 +277,6 @@ pub fn noise_induced_hearing_loss(buf: AudioBuffer, strength: f32) -> AudioBuffe
     // 中心 4 kHz。帯域幅は strength 比例で、sudden_hearing_loss と同じ `50 + s*950` Hz
     // （最大 1000 Hz ≒ ±500 Hz）。
     sudden_hearing_loss(buf, strength, 4000.0)
-}
-
-/// `sample_rate == 0` を 44100 Hz にフォールバックした実効サンプルレートを返す。
-///
-/// `low_pass_biquad` 等の biquad 系フィルタ (hearing.rs:97, 132, 167) と同じ
-/// フォールバック規約。tinnitus はこれを一度だけ解決し、時間軸 (`t`) と
-/// 周波数 clamp (`tinnitus_clamped_freq_hz`) の両方に同じ値を使う
-/// （Issue #169: 個別に `sample_rate as f32` を使うと sr=0 で `t` が
-/// `0.0/0.0 = NaN` になる問題があった）。
-fn effective_sample_rate(sample_rate: u32) -> f32 {
-    if sample_rate == 0 {
-        44100.0
-    } else {
-        sample_rate as f32
-    }
 }
 
 /// tinnitus の正弦波周波数を Nyquist 未満に clamp する。
@@ -664,13 +651,8 @@ pub fn auditory_processing_disorder(buf: AudioBuffer, strength: f32) -> AudioBuf
     noisy = smeared;
 
     // Step 3: gap 埋め（< 5 ms の無音区間を前後の値で補間）
-    // sample_rate=0 は 44100 Hz として扱う
-    let sr = if buf.sample_rate == 0 {
-        44100
-    } else {
-        buf.sample_rate
-    };
-    let gap_frames = ((sr as f32 * 0.005) as usize).max(1); // 5 ms
+    let fs = effective_sample_rate(buf.sample_rate);
+    let gap_frames = ((fs * 0.005) as usize).max(1); // 5 ms
     let silence_threshold = 0.01_f32;
 
     let frames = n / ch;
