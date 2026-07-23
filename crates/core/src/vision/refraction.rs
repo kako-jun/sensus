@@ -62,7 +62,8 @@ const ASTIGMATISM_MAX_RADIUS_RATIO: f32 = 0.011;
 
 /// Myopia (近視) シミュレーション。
 ///
-/// strength=1.0 で約 -6D 相当の defocus blur (disk 半径 ≈ 5% × min(W,H))。
+/// strength=1.0 で約 -6D 相当の defocus blur (disk 半径 ≈ 2.3% × min(W,H)、
+/// `MYOPIA_MAX_RADIUS_RATIO` の導出は同定数の doc コメント参照)。
 /// 2D 画像には深度情報がないため、本実装は画面全体の uniform blur となる
 /// (現実の myopia は遠方ほどボケが強い)。alpha は保持。
 pub fn myopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
@@ -90,6 +91,24 @@ pub fn presbyopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
     isotropic_disk_blur_image(img, r)
 }
 
+/// 乱視軸 `axis_deg` の正規化（180° 周期のシャープ方向角度）。
+///
+/// NaN は既定値 90° (with-the-rule) にフォールバックし、有限値は
+/// `rem_euclid(180.0)` で 180° 周期に正規化する
+/// (`360.0` → `0.0`、`-45.0` → `135.0`)。
+///
+/// CPU 側 [`astigmatism`] と GLSL uniform 計算
+/// (`crate::shaders::astigmatism_uniforms`) が同じ正規化ロジックを共有する
+/// ための共通ヘルパー（Issue #169: GLSL 側が正規化なしで NaN を素通しすると
+/// cos/sin=NaN で全 tap 不採用となり黒画像になる分岐を防ぐ）。
+pub(crate) fn normalize_axis_deg(axis_deg: f32) -> f32 {
+    if axis_deg.is_nan() {
+        90.0
+    } else {
+        axis_deg.rem_euclid(180.0)
+    }
+}
+
 /// Astigmatism (乱視) シミュレーション。軸 `axis_deg` (0.0..=180.0) は
 /// **シャープに見える経線方向** (cylinder lens の柱方向) を指す医学的慣習。
 /// 実装上、楕円カーネルの **長軸 (ボケ方向)** は `axis_deg + 90°` 方向となる。
@@ -100,9 +119,7 @@ pub fn presbyopia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// 短軸は `MIN_BLUR_RADIUS_PX` (0.5 px) で sub-pixel に縮退するため、
 /// 楕円カーネルは事実上ボケ方向の 1D box フィルタとして動作する。
 ///
-/// `axis_deg` は `rem_euclid(180.0)` で 180° 周期に正規化される
-/// (`360.0` → `0.0`、`-45.0` → `135.0`)。NaN の場合のみ既定値 90°
-/// (with-the-rule) にフォールバックする。alpha は保持。
+/// `axis_deg` の正規化ルールは [`normalize_axis_deg`] を参照。alpha は保持。
 pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<DynamicImage> {
     let s = normalize_strength(strength);
     let rgba = img.to_rgba8();
@@ -110,12 +127,7 @@ pub fn astigmatism(img: DynamicImage, strength: f32, axis_deg: f32) -> Result<Dy
     let height = rgba.height();
     let min_dim = width.min(height) as f32;
 
-    // 軸の正規化: NaN は 90° にフォールバック、有限値は 180° 周期で正規化。
-    let axis_norm = if axis_deg.is_nan() {
-        90.0
-    } else {
-        axis_deg.rem_euclid(180.0)
-    };
+    let axis_norm = normalize_axis_deg(axis_deg);
 
     let a_radius = s * ASTIGMATISM_MAX_RADIUS_RATIO * min_dim;
     let b_radius = MIN_BLUR_RADIUS_PX; // short axis (sharp side)
@@ -207,7 +219,11 @@ pub fn depth_aware_blur(
     // 各ビンの中心深度と radius_px を計算
     let mut bin_radius: [f32; N_BINS] = [0.0; N_BINS];
     for (bin, radius) in bin_radius.iter_mut().enumerate().take(N_BINS) {
-        let bin_center = (bin as f32 + 0.5) / N_BINS as f32; // 0.0625..0.9375
+        // ビン中心は補間側の scaled = d * (N_BINS - 1) と定義域を揃える
+        // （0.0..=1.0 の両端を含む）。旧実装は (bin+0.5)/N_BINS で
+        // 0.0625..0.9375 に収まっており、補間の 0.0..=1.0 と定義域がズレて
+        // 焦点面が focus_depth から最大 ~0.09 ずれていた（#166）。
+        let bin_center = bin as f32 / (N_BINS - 1) as f32; // 0.0..=1.0
         let delta = bin_center - focus_depth;
         *radius = match kind {
             DepthBlurKind::Myopia => {

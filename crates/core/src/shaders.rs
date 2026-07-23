@@ -19,21 +19,38 @@ const EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH: f32 = 1.5;
 
 /// Machado 2009 severity = 1.0 行列（行優先: row0col0, row0col1, row0col2, ...）。
 /// vision/color.rs の PROTANOPIA 定数と同じ値。
+///
+/// #165 以降、`protanopia_uniforms()` はこの定数を直接使わず、severity 別
+/// 11 段テーブル（`vision::color::PROTANOMALY_TABLE`）を strength で補間した
+/// 解決済み行列を返す（severity=1.0 では本定数と同値になる）。この定数自体は
+/// severity=1.0 専用の参照用 pub API として維持する。
 pub const PROTANOPIA_MATRIX: [f32; 9] = [
     0.152286, 1.052583, -0.204868, 0.114503, 0.786281, 0.099216, -0.003882, -0.048116, 1.051998,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
 /// vision/color.rs の DEUTERANOPIA 定数と同じ値。
+///
+/// severity 別解決との関係は [`PROTANOPIA_MATRIX`] と同じ（#165）。
 pub const DEUTERANOPIA_MATRIX: [f32; 9] = [
     0.367322, 0.860646, -0.227968, 0.280085, 0.672501, 0.047413, -0.011820, 0.042940, 0.968881,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
 /// vision/color.rs の TRITANOPIA 定数と同じ値。
+///
+/// severity 別解決との関係は [`PROTANOPIA_MATRIX`] と同じ（#165）。
 pub const TRITANOPIA_MATRIX: [f32; 9] = [
     1.255528, -0.076749, -0.178779, -0.078411, 0.930809, 0.147602, 0.004733, 0.691367, 0.303900,
 ];
+
+/// `resolve_severity_matrix` が返す行優先ではない `[[f32; 3]; 3]`（行×列）を
+/// GLSL uniform 用の行優先 `[f32; 9]` へ平坦化する。
+fn flatten_row_major(m: [[f32; 3]; 3]) -> [f32; 9] {
+    [
+        m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2],
+    ]
+}
 
 // ---------------------------------------------------------------------------
 // シェーダ文字列取得
@@ -346,9 +363,12 @@ pub fn tunnel_vision_glsl() -> &'static str {
 /// 色覚フィルタ（Machado LMS 行列）の uniform。
 #[derive(Debug, Clone)]
 pub struct ColorMatrixUniforms {
-    /// severity (0.0..=1.0)
+    /// severity (0.0..=1.0)。#165 以降、行列自体に severity が解決済みのため
+    /// シェーダの計算では使われない（参考値として保持）。
     pub strength: f32,
-    /// 3x3 行列（行優先）
+    /// 3x3 解決済み行列（行優先）。severity 別 11 段テーブルを `strength` で
+    /// 補間済み（#165）。`strength=0.0` で単位行列、`strength=1.0` で
+    /// 従来通りの severity=1.0 dichromacy 行列になる。
     pub matrix: [f32; 9],
 }
 
@@ -392,29 +412,39 @@ pub struct AstigmatismUniforms {
 // ---------------------------------------------------------------------------
 
 /// protanopia の uniform を計算する。
+///
+/// #165: `strength` を severity として 11 段テーブル（CPU 実装と同一の
+/// `vision::color::PROTANOMALY_TABLE`）から解決した行列を返す。
+/// `strength=0.0` は単位行列、`strength=1.0` は [`PROTANOPIA_MATRIX`] と同値。
 pub fn protanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
     let strength = crate::vision::normalize_strength(strength);
+    let matrix =
+        crate::vision::resolve_severity_matrix(&crate::vision::PROTANOMALY_TABLE, strength);
     ColorMatrixUniforms {
         strength,
-        matrix: PROTANOPIA_MATRIX,
+        matrix: flatten_row_major(matrix),
     }
 }
 
-/// deuteranopia の uniform を計算する。
+/// deuteranopia の uniform を計算する。severity 解決は [`protanopia_uniforms`] と同じ（#165）。
 pub fn deuteranopia_uniforms(strength: f32) -> ColorMatrixUniforms {
     let strength = crate::vision::normalize_strength(strength);
+    let matrix =
+        crate::vision::resolve_severity_matrix(&crate::vision::DEUTERANOMALY_TABLE, strength);
     ColorMatrixUniforms {
         strength,
-        matrix: DEUTERANOPIA_MATRIX,
+        matrix: flatten_row_major(matrix),
     }
 }
 
-/// tritanopia の uniform を計算する。
+/// tritanopia の uniform を計算する。severity 解決は [`protanopia_uniforms`] と同じ（#165）。
 pub fn tritanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
     let strength = crate::vision::normalize_strength(strength);
+    let matrix =
+        crate::vision::resolve_severity_matrix(&crate::vision::TRITANOMALY_TABLE, strength);
     ColorMatrixUniforms {
         strength,
-        matrix: TRITANOPIA_MATRIX,
+        matrix: flatten_row_major(matrix),
     }
 }
 
@@ -480,7 +510,10 @@ pub fn astigmatism_uniforms(
     let strength = crate::vision::normalize_strength(strength);
     let radius_px = strength.clamp(0.0, 1.0) * ASTIGMATISM_MAX_RADIUS_RATIO * image_min_dim as f32;
     // vision/refraction.rs と同じ規約: axis_deg はシャープ方向。ぼかし方向は +90°。
-    let blur_axis_deg = axis_deg + 90.0;
+    // normalize_axis_deg で NaN→90°フォールバック・rem_euclid(180.0) 正規化してから
+    // +90° する（Issue #169: 正規化なしで NaN を素通しすると cos/sin=NaN で全 tap
+    // 不採用 = 黒画像になり、CPU 側の 90° フォールバックと分岐してしまう）。
+    let blur_axis_deg = crate::vision::normalize_axis_deg(axis_deg) + 90.0;
     AstigmatismUniforms {
         strength,
         radius_px,
@@ -975,11 +1008,27 @@ mod tests {
         assert!(!astigmatism_glsl().is_empty());
     }
 
+    /// #165: strength=0.0 は severity テーブル[0]（単位行列）に解決される。
+    /// 旧実装は strength に関わらず severity=1.0 行列を返し、blend は
+    /// シェーダ側 (`uStrength`) に委ねていたが、新方式では行列自体に
+    /// severity が解決済みになる。
     #[test]
-    fn protanopia_uniforms_has_correct_matrix() {
+    fn protanopia_uniforms_strength_zero_is_identity_matrix() {
         let u = protanopia_uniforms(0.0);
         assert_eq!(u.strength, 0.0);
+        assert_eq!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn protanopia_uniforms_strength_one_matches_severity1_matrix() {
+        let u = protanopia_uniforms(1.0);
         assert_eq!(u.matrix, PROTANOPIA_MATRIX);
+    }
+
+    #[test]
+    fn deuteranopia_uniforms_strength_zero_is_identity_matrix() {
+        let u = deuteranopia_uniforms(0.0);
+        assert_eq!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -989,9 +1038,29 @@ mod tests {
     }
 
     #[test]
+    fn tritanopia_uniforms_strength_zero_is_identity_matrix() {
+        let u = tritanopia_uniforms(0.0);
+        assert_eq!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
     fn tritanopia_uniforms_has_correct_matrix() {
         let u = tritanopia_uniforms(1.0);
         assert_eq!(u.matrix, TRITANOPIA_MATRIX);
+    }
+
+    /// #165: severity=0.5 はグリッド上（補間なし）で解決されるため、
+    /// CPU 実装 (`vision::color::PROTANOMALY_TABLE[5]` 相当) と一致する。
+    /// ここでは重複管理を避けるため CPU の `protanopia()` 出力と突き合わせる
+    /// （矛盾なく resolve される回帰確認。KAT の非トートロジー検証は
+    /// `tests/color_kat.rs` 側が担う）。
+    #[test]
+    fn protanopia_uniforms_strength_half_is_not_severity1_matrix() {
+        // 旧実装は strength に関わらず severity=1.0 行列を返していたため、
+        // 誤って旧設計に戻ると本テストが失敗する（regression guard）。
+        let u = protanopia_uniforms(0.5);
+        assert_ne!(u.matrix, PROTANOPIA_MATRIX);
+        assert_ne!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -1046,6 +1115,61 @@ mod tests {
     fn astigmatism_uniforms_strength_zero_has_zero_radius() {
         let u = astigmatism_uniforms(0.0, 1000, 90.0);
         assert!(u.radius_px < 0.001);
+    }
+
+    #[test]
+    fn astigmatism_uniforms_nan_axis_matches_cpu_normalization() {
+        // Issue #169: NaN 軸は CPU 側 (vision::refraction::normalize_axis_deg) と同じ
+        // 90° フォールバックを経て +90° されるべき（= 180.0）。正規化せず NaN を
+        // 素通しすると GLSL 側は cos/sin=NaN で黒画像になり CPU (90° フォールバック)
+        // と分岐してしまう。
+        let u = astigmatism_uniforms(1.0, 1000, f32::NAN);
+        assert!(
+            (u.axis_deg - 180.0).abs() < 1e-4,
+            "NaN axis should fall back to 90° sharp → 180° blur, got {}",
+            u.axis_deg
+        );
+    }
+
+    #[test]
+    fn astigmatism_uniforms_matches_cpu_normalize_axis_deg() {
+        // GLSL uniform 側の実効軸 (正規化後 - 90°) が CPU 側の
+        // crate::vision::normalize_axis_deg と byte-exact で一致することを、
+        // NaN / 負値 / 360° 超の代表値で直接クロスチェックする。
+        //
+        // このテストが固定するのは「配線」（astigmatism_uniforms が実際に共有
+        // ヘルパー normalize_axis_deg を通ること）であり、正規化ロジック自体の
+        // 正しさ（NaN→90°、rem_euclid(180.0) の具体的な期待値）はリテラル期待値
+        // を持つ兄弟テスト astigmatism_uniforms_nan_axis_matches_cpu_normalization /
+        // astigmatism_uniforms_axis_is_180_periodic が担う。両者が両方欠けると
+        // 「両実装が同じ間違いを共有する」退行を検出できないため、意図的に分離している。
+        for axis in [f32::NAN, -45.0, 0.0, 90.0, 179.9, 360.0, 405.0] {
+            let u = astigmatism_uniforms(1.0, 1000, axis);
+            let expected_cpu_norm = crate::vision::normalize_axis_deg(axis);
+            assert_eq!(
+                u.axis_deg - 90.0,
+                expected_cpu_norm,
+                "axis_deg={axis}: GLSL effective axis must equal CPU normalize_axis_deg()"
+            );
+        }
+    }
+
+    #[test]
+    fn astigmatism_uniforms_axis_is_180_periodic() {
+        // 負値 / 360° 超も CPU 側 rem_euclid(180.0) と同じ結果になること。
+        let u_neg = astigmatism_uniforms(1.0, 1000, -45.0); // -45 rem_euclid 180 = 135
+        assert!(
+            (u_neg.axis_deg - 225.0).abs() < 1e-4,
+            "axis=-45° should normalize to 135° sharp → 225° blur, got {}",
+            u_neg.axis_deg
+        );
+
+        let u_over = astigmatism_uniforms(1.0, 1000, 405.0); // 405 rem_euclid 180 = 45
+        assert!(
+            (u_over.axis_deg - 135.0).abs() < 1e-4,
+            "axis=405° should normalize to 45° sharp → 135° blur, got {}",
+            u_over.axis_deg
+        );
     }
 
     #[test]
