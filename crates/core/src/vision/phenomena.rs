@@ -369,7 +369,11 @@ pub fn teichopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
             } else if (0.2..=0.5).contains(&dist) {
                 // ジグザグリング
                 let angle = uy.atan2(ux);
-                let saw = (angle / PI * 8.0).fract(); // saw wave 0..1
+                // atan2 は -π..π を返すため angle/PI*8 は負にもなる。f32::fract() は
+                // 負入力に負を返す（truncation）ため、そのままでは saw ∈ (-1,1) になり
+                // uy<0 側で加算光のはずが暗化する（#168）。GLSL の fract()（x - floor(x)）
+                // と同じ「常に非負」の saw wave にするため rem_euclid(1.0) で正規化する。
+                let saw = (angle / PI * 8.0).rem_euclid(1.0); // saw wave 0..1（常に非負）
                 let ring_t = (dist - 0.2) / 0.3; // 0..1 in ring
                 let fade = (ring_t * (1.0 - ring_t) * 4.0).clamp(0.0, 1.0); // 中央強調
                 let brightness = saw * s * fade * 0.6;
