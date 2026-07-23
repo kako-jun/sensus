@@ -46,7 +46,13 @@ use sensus_core::vision::{
 
 /// 色覚フィルタシェーダ（protanopia.frag / deuteranopia.frag / tritanopia.frag）を
 /// ソフトウェアシミュレートする。
-fn sim_color_matrix(img: &RgbaImage, matrix: &[f32; 9], strength: f32) -> RgbaImage {
+///
+/// #165: `matrix` は CPU 側 (`*_uniforms`) が strength から severity テーブルを
+/// 補間して解決済みの行列。.frag もこれを直接適用するだけ（追加の strength
+/// blend はしない）ため、本シミュレータも `uStrength` に相当するブレンドを
+/// 行わない（旧実装は `nr = r + (sr - r) * strength` で severity=1.0 行列を
+/// blend していたが、その役割は今や行列解決側に移った）。
+fn sim_color_matrix(img: &RgbaImage, matrix: &[f32; 9]) -> RgbaImage {
     let (w, h) = img.dimensions();
     let mut out = img.clone();
     for y in 0..h {
@@ -56,21 +62,17 @@ fn sim_color_matrix(img: &RgbaImage, matrix: &[f32; 9], strength: f32) -> RgbaIm
             let g = srgb_to_linear(px[1] as f32 / 255.0);
             let b = srgb_to_linear(px[2] as f32 / 255.0);
 
-            let sr = matrix[0] * r + matrix[1] * g + matrix[2] * b;
-            let sg = matrix[3] * r + matrix[4] * g + matrix[5] * b;
-            let sb = matrix[6] * r + matrix[7] * g + matrix[8] * b;
-
-            let nr = (r + (sr - r) * strength).clamp(0.0, 1.0);
-            let ng = (g + (sg - g) * strength).clamp(0.0, 1.0);
-            let nb = (b + (sb - b) * strength).clamp(0.0, 1.0);
+            let sr = (matrix[0] * r + matrix[1] * g + matrix[2] * b).clamp(0.0, 1.0);
+            let sg = (matrix[3] * r + matrix[4] * g + matrix[5] * b).clamp(0.0, 1.0);
+            let sb = (matrix[6] * r + matrix[7] * g + matrix[8] * b).clamp(0.0, 1.0);
 
             out.put_pixel(
                 x,
                 y,
                 image::Rgba([
-                    (linear_to_srgb(nr) * 255.0).round() as u8,
-                    (linear_to_srgb(ng) * 255.0).round() as u8,
-                    (linear_to_srgb(nb) * 255.0).round() as u8,
+                    (linear_to_srgb(sr) * 255.0).round() as u8,
+                    (linear_to_srgb(sg) * 255.0).round() as u8,
+                    (linear_to_srgb(sb) * 255.0).round() as u8,
                     px[3],
                 ]),
             );
@@ -411,7 +413,7 @@ fn shader_equiv_protanopia_strength_1_0() {
     let img = color_chart_32();
     let uni = protanopia_uniforms(1.0);
     let cpu_out = protanopia(img.clone(), 1.0).unwrap().to_rgba8();
-    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix);
     let err = max_channel_error(&cpu_out, &gpu_sim);
     assert!(
         err <= 2,
@@ -424,7 +426,7 @@ fn shader_equiv_protanopia_strength_0_5() {
     let img = gradient_32();
     let uni = protanopia_uniforms(0.5);
     let cpu_out = protanopia(img.clone(), 0.5).unwrap().to_rgba8();
-    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix);
     let err = max_channel_error(&cpu_out, &gpu_sim);
     assert!(
         err <= 2,
@@ -437,7 +439,7 @@ fn shader_equiv_deuteranopia_strength_1_0() {
     let img = color_chart_32();
     let uni = deuteranopia_uniforms(1.0);
     let cpu_out = deuteranopia(img.clone(), 1.0).unwrap().to_rgba8();
-    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix);
     let err = max_channel_error(&cpu_out, &gpu_sim);
     assert!(
         err <= 2,
@@ -450,7 +452,7 @@ fn shader_equiv_tritanopia_strength_1_0() {
     let img = color_chart_32();
     let uni = tritanopia_uniforms(1.0);
     let cpu_out = tritanopia(img.clone(), 1.0).unwrap().to_rgba8();
-    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix, uni.strength);
+    let gpu_sim = sim_color_matrix(&img.to_rgba8(), &uni.matrix);
     let err = max_channel_error(&cpu_out, &gpu_sim);
     assert!(
         err <= 2,
@@ -4240,8 +4242,11 @@ fn shader_equiv_starbursts_non_square() {
 
 // ---------------------------------------------------------------------------
 // cataract（白内障）— #125 で白濁ノイズを #99 と同じ 32bit spatial hash に
-// CPU/GLSL 両方統一した。黄変マトリクス（Pokorny 1987）に加えてノイズ項も
-// CPU↔.frag↔sim が bit 一致する。
+// CPU/GLSL 両方統一した。黄変マトリクス（Pokorny 1987）に加え、ノイズ項の
+// 32bit 整数ハッシュ系列も CPU↔.frag↔sim で bit 一致する。ただし最終画素値は
+// sRGB↔linear の `pow()` が CPU/GPU で last-ULP 一致を保証されないため、
+// 完全な bit 一致は主張しない——このため以下のテストは exact 等価でなく
+// PSNR/許容差ベースで判定する（#170）。
 //
 // 旧実装（#100 時点）は CPU が 64bit Knuth LCG の高位ビット抽出
 // `(lcg >> 32)/u32::MAX`、.frag が同定数の下位 32bit 切り詰めで別系列であり、
@@ -4249,7 +4254,7 @@ fn shader_equiv_starbursts_non_square() {
 // の 0.5px オフセットで食い違っていた（PSNR 19.6dB）。#125 で:
 //   - ノイズハッシュを metamorphopsia/dry_eye と同一の 32bit spatial hash に統一
 //   - 格子規約を整数ピクセル座標 (top-left) に統一（.frag は uv*res-0.5 で復元）
-// した結果、CPU↔GLSL が等価になった。
+// した結果、CPU↔GLSL が高精度で一致するようになった（PSNR ベースで検証）。
 // ---------------------------------------------------------------------------
 
 /// cataract.frag の gridNoise を Rust で再現する（CPU `grid_hash` と bit 一致）。

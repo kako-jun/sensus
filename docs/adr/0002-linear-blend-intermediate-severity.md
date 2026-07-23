@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Superseded by [0008](0008-machado-per-severity-table.md) for protanopia /
+deuteranopia / tritanopia. Still governs `achromatopsia`, which has no
+published per-severity matrix table and continues to use the linear blend
+described below unchanged.
 
 ## Context
 
