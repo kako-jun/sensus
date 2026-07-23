@@ -85,6 +85,45 @@ const SRC_TRITANOPIA: [[f64; 3]; 3] = [
     [0.004733, 0.691367, 0.303900],
 ];
 
+// =====================================================================
+// 出典行列リテラル (#165, per-severity 11 段テーブルの中間エントリ)
+//
+// Machado 2009 / VIP-Sim (myRecolour.cs, T_Protanomaly / T_Deuteranomaly /
+// T_Tritanomaly) の severity 別行列テーブルのうち、中間 strength の cross-check
+// に使うエントリだけを **独立に書き写す**。上記 severity=1.0 リテラルと同じ
+// トートロジー回避の方針: `vision::color::PROTANOMALY_TABLE` 等を import しない。
+// =====================================================================
+
+/// Protanomaly severity=0.5 (テーブル index=5) 行列。
+const SRC_PROTANOMALY_SEV_0_5: [[f64; 3]; 3] = [
+    [0.458064, 0.679578, -0.137642],
+    [0.092785, 0.846313, 0.060902],
+    [-0.007494, -0.016807, 1.024301],
+];
+
+/// Deuteranomaly severity=0.5 (テーブル index=5) 行列。
+const SRC_DEUTERANOMALY_SEV_0_5: [[f64; 3]; 3] = [
+    [0.547494, 0.607765, -0.155259],
+    [0.181692, 0.781742, 0.036566],
+    [-0.01041, 0.027275, 0.983136],
+];
+
+/// Tritanomaly severity=0.2 (テーブル index=2) 行列。severity=0.25 (非グリッド点)
+/// の補間元の下側エントリ。
+const SRC_TRITANOMALY_SEV_0_2: [[f64; 3]; 3] = [
+    [0.89572, 0.13333, -0.02905],
+    [0.029997, 0.9454, 0.024603],
+    [0.013027, 0.104707, 0.882266],
+];
+
+/// Tritanomaly severity=0.3 (テーブル index=3) 行列。severity=0.25 (非グリッド点)
+/// の補間元の上側エントリ。
+const SRC_TRITANOMALY_SEV_0_3: [[f64; 3]; 3] = [
+    [0.905871, 0.127791, -0.033662],
+    [0.026856, 0.941251, 0.031893],
+    [0.01341, 0.148296, 0.838294],
+];
+
 /// BT.709 / sRGB photopic luminance 係数 (CIE Y)。achromatopsia と nyctalopia で
 /// 使う。ITU-R BT.709 / sRGB 規格値であり、vision.rs の `LUMA_*` とは独立に
 /// このファイルへ書き写している。
@@ -146,6 +185,41 @@ fn reference_matrix_pixel(m: &[[f64; 3]; 3], rgb: [u8; 3], strength: f64) -> [u8
         pack_u8(linear_to_srgb(ng)),
         pack_u8(linear_to_srgb(nb)),
     ]
+}
+
+/// #165: severity テーブルが**既に解決済みの行列**を、blend なしで直接適用して
+/// 1 ピクセルの期待 u8 を計算する。severity=0.5 のようなグリッド点では、
+/// テーブルの該当エントリをそのまま `m` として渡す（`vision::color::
+/// apply_machado_matrix` は resolve 済み行列を直接適用するだけで、旧実装の
+/// ような追加の strength blend 段を持たない）。
+fn reference_matrix_pixel_direct(m: &[[f64; 3]; 3], rgb: [u8; 3]) -> [u8; 3] {
+    let r = srgb_to_linear(rgb[0] as f64 / 255.0);
+    let g = srgb_to_linear(rgb[1] as f64 / 255.0);
+    let b = srgb_to_linear(rgb[2] as f64 / 255.0);
+
+    let nr = m[0][0] * r + m[0][1] * g + m[0][2] * b;
+    let ng = m[1][0] * r + m[1][1] * g + m[1][2] * b;
+    let nb = m[2][0] * r + m[2][1] * g + m[2][2] * b;
+
+    [
+        pack_u8(linear_to_srgb(nr)),
+        pack_u8(linear_to_srgb(ng)),
+        pack_u8(linear_to_srgb(nb)),
+    ]
+}
+
+/// #165: 2 つの行列を要素空間で線形補間する。`vision::color::
+/// resolve_severity_matrix` と**独立に**再実装したもの（`w=0.5` は中点）。
+/// `crates/core/src/vision/color.rs` の実装を import せず、このファイル内で
+/// 完結させることでトートロジーを避ける。
+fn lerp_matrix_f64(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3], w: f64) -> [[f64; 3]; 3] {
+    let mut out = [[0.0f64; 3]; 3];
+    for (row, out_row) in out.iter_mut().enumerate() {
+        for (col, out_cell) in out_row.iter_mut().enumerate() {
+            *out_cell = a[row][col] + (b[row][col] - a[row][col]) * w;
+        }
+    }
+    out
 }
 
 /// achromatopsia の参照ピクセル: 行列の代わりに BT.709 luminance で grayscale blend。
@@ -499,15 +573,19 @@ fn cross_check_achromatopsia() {
     }
 }
 
-/// 中間 strength の cross-check 共通ルーチン (strength=0.5)。
+/// 中間 strength (severity=0.5) の cross-check 共通ルーチン。
 ///
-/// blend 段 `n = v + (s - v) * strength` は 4 色覚 (protanopia / deuteranopia /
-/// tritanopia / achromatopsia) で **共通のコードパス**。したがって本来は 1 種で
-/// blend の正しさは担保できるが、共通 blend が「別の行列」を通しても正しく効くこと
-/// を念のため 2 種 (protanopia / deuteranopia) で固定する。
-fn cross_check_mid_strength(name: &str, src: &[[f64; 3]; 3], apply: StrengthFilter) {
+/// #165 以降、protanopia / deuteranopia / tritanopia の severity 解決は
+/// 「severity=1.0 行列 + strength blend」(ADR-0002, superseded) ではなく
+/// 「per-severity 11 段テーブル (0.1 刻み) から strength に対応する行列を解決し、
+/// **直接適用**」(ADR-0008) に変わった。severity=0.5 はテーブルのグリッド点
+/// (index=5) に厳密一致するため、補間すら経由せずテーブル該当エントリを
+/// そのまま適用した結果になる。したがって期待値は
+/// `reference_matrix_pixel_direct(sev0.5 行列, color)` で計算する
+/// (`reference_matrix_pixel` の strength blend 版とは異なる関数)。
+fn cross_check_mid_strength(name: &str, sev_0_5: &[[f64; 3]; 3], apply: StrengthFilter) {
     for &c in COLORS {
-        let expected = reference_matrix_pixel(src, c, 0.5);
+        let expected = reference_matrix_pixel_direct(sev_0_5, c);
         let actual = out_pixel(apply(pixel_image(c), 0.5).unwrap());
         assert_close(
             actual[..3].try_into().unwrap(),
@@ -520,12 +598,34 @@ fn cross_check_mid_strength(name: &str, src: &[[f64; 3]; 3], apply: StrengthFilt
 
 #[test]
 fn cross_check_protanopia_mid_strength() {
-    cross_check_mid_strength("protanopia", &SRC_PROTANOPIA, protanopia);
+    cross_check_mid_strength("protanopia", &SRC_PROTANOMALY_SEV_0_5, protanopia);
 }
 
 #[test]
 fn cross_check_deuteranopia_mid_strength() {
-    cross_check_mid_strength("deuteranopia", &SRC_DEUTERANOPIA, deuteranopia);
+    cross_check_mid_strength("deuteranopia", &SRC_DEUTERANOMALY_SEV_0_5, deuteranopia);
+}
+
+/// #165: 非グリッド点 (severity=0.25) の cross-check。
+///
+/// severity=0.25 → `index = 0.25 * 10 = 2.5` → `i0=2, i1=3, frac=0.5`
+/// (`vision::color::resolve_severity_matrix` の式)。このテストは同じ式を
+/// このファイル内で独立に再実装した [`lerp_matrix_f64`] で
+/// `SRC_TRITANOMALY_SEV_0_2` と `SRC_TRITANOMALY_SEV_0_3` を中点補間し、
+/// その行列を [`reference_matrix_pixel_direct`] で直接適用した結果を期待値とする。
+#[test]
+fn cross_check_tritanopia_quarter_strength_interpolated() {
+    let interpolated = lerp_matrix_f64(&SRC_TRITANOMALY_SEV_0_2, &SRC_TRITANOMALY_SEV_0_3, 0.5);
+    for &c in COLORS {
+        let expected = reference_matrix_pixel_direct(&interpolated, c);
+        let actual = out_pixel(tritanopia(pixel_image(c), 0.25).unwrap());
+        assert_close(
+            actual[..3].try_into().unwrap(),
+            expected,
+            TOL,
+            &format!("tritanopia s=0.25 cross-check color {c:?}"),
+        );
+    }
 }
 
 /// alpha が色覚変換で保持されることを KAT 文脈でも確認する

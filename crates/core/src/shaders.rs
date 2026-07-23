@@ -19,21 +19,38 @@ const EYE_STRAIN_BLUR_RADIUS_PX_PER_STRENGTH: f32 = 1.5;
 
 /// Machado 2009 severity = 1.0 行列（行優先: row0col0, row0col1, row0col2, ...）。
 /// vision/color.rs の PROTANOPIA 定数と同じ値。
+///
+/// #165 以降、`protanopia_uniforms()` はこの定数を直接使わず、severity 別
+/// 11 段テーブル（`vision::color::PROTANOMALY_TABLE`）を strength で補間した
+/// 解決済み行列を返す（severity=1.0 では本定数と同値になる）。この定数自体は
+/// severity=1.0 専用の参照用 pub API として維持する。
 pub const PROTANOPIA_MATRIX: [f32; 9] = [
     0.152286, 1.052583, -0.204868, 0.114503, 0.786281, 0.099216, -0.003882, -0.048116, 1.051998,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
 /// vision/color.rs の DEUTERANOPIA 定数と同じ値。
+///
+/// severity 別解決との関係は [`PROTANOPIA_MATRIX`] と同じ（#165）。
 pub const DEUTERANOPIA_MATRIX: [f32; 9] = [
     0.367322, 0.860646, -0.227968, 0.280085, 0.672501, 0.047413, -0.011820, 0.042940, 0.968881,
 ];
 
 /// Machado 2009 severity = 1.0 行列（行優先）。
 /// vision/color.rs の TRITANOPIA 定数と同じ値。
+///
+/// severity 別解決との関係は [`PROTANOPIA_MATRIX`] と同じ（#165）。
 pub const TRITANOPIA_MATRIX: [f32; 9] = [
     1.255528, -0.076749, -0.178779, -0.078411, 0.930809, 0.147602, 0.004733, 0.691367, 0.303900,
 ];
+
+/// `resolve_severity_matrix` が返す行優先ではない `[[f32; 3]; 3]`（行×列）を
+/// GLSL uniform 用の行優先 `[f32; 9]` へ平坦化する。
+fn flatten_row_major(m: [[f32; 3]; 3]) -> [f32; 9] {
+    [
+        m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2],
+    ]
+}
 
 // ---------------------------------------------------------------------------
 // シェーダ文字列取得
@@ -346,9 +363,12 @@ pub fn tunnel_vision_glsl() -> &'static str {
 /// 色覚フィルタ（Machado LMS 行列）の uniform。
 #[derive(Debug, Clone)]
 pub struct ColorMatrixUniforms {
-    /// severity (0.0..=1.0)
+    /// severity (0.0..=1.0)。#165 以降、行列自体に severity が解決済みのため
+    /// シェーダの計算では使われない（参考値として保持）。
     pub strength: f32,
-    /// 3x3 行列（行優先）
+    /// 3x3 解決済み行列（行優先）。severity 別 11 段テーブルを `strength` で
+    /// 補間済み（#165）。`strength=0.0` で単位行列、`strength=1.0` で
+    /// 従来通りの severity=1.0 dichromacy 行列になる。
     pub matrix: [f32; 9],
 }
 
@@ -392,29 +412,39 @@ pub struct AstigmatismUniforms {
 // ---------------------------------------------------------------------------
 
 /// protanopia の uniform を計算する。
+///
+/// #165: `strength` を severity として 11 段テーブル（CPU 実装と同一の
+/// `vision::color::PROTANOMALY_TABLE`）から解決した行列を返す。
+/// `strength=0.0` は単位行列、`strength=1.0` は [`PROTANOPIA_MATRIX`] と同値。
 pub fn protanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
     let strength = crate::vision::normalize_strength(strength);
+    let matrix =
+        crate::vision::resolve_severity_matrix(&crate::vision::PROTANOMALY_TABLE, strength);
     ColorMatrixUniforms {
         strength,
-        matrix: PROTANOPIA_MATRIX,
+        matrix: flatten_row_major(matrix),
     }
 }
 
-/// deuteranopia の uniform を計算する。
+/// deuteranopia の uniform を計算する。severity 解決は [`protanopia_uniforms`] と同じ（#165）。
 pub fn deuteranopia_uniforms(strength: f32) -> ColorMatrixUniforms {
     let strength = crate::vision::normalize_strength(strength);
+    let matrix =
+        crate::vision::resolve_severity_matrix(&crate::vision::DEUTERANOMALY_TABLE, strength);
     ColorMatrixUniforms {
         strength,
-        matrix: DEUTERANOPIA_MATRIX,
+        matrix: flatten_row_major(matrix),
     }
 }
 
-/// tritanopia の uniform を計算する。
+/// tritanopia の uniform を計算する。severity 解決は [`protanopia_uniforms`] と同じ（#165）。
 pub fn tritanopia_uniforms(strength: f32) -> ColorMatrixUniforms {
     let strength = crate::vision::normalize_strength(strength);
+    let matrix =
+        crate::vision::resolve_severity_matrix(&crate::vision::TRITANOMALY_TABLE, strength);
     ColorMatrixUniforms {
         strength,
-        matrix: TRITANOPIA_MATRIX,
+        matrix: flatten_row_major(matrix),
     }
 }
 
@@ -978,11 +1008,27 @@ mod tests {
         assert!(!astigmatism_glsl().is_empty());
     }
 
+    /// #165: strength=0.0 は severity テーブル[0]（単位行列）に解決される。
+    /// 旧実装は strength に関わらず severity=1.0 行列を返し、blend は
+    /// シェーダ側 (`uStrength`) に委ねていたが、新方式では行列自体に
+    /// severity が解決済みになる。
     #[test]
-    fn protanopia_uniforms_has_correct_matrix() {
+    fn protanopia_uniforms_strength_zero_is_identity_matrix() {
         let u = protanopia_uniforms(0.0);
         assert_eq!(u.strength, 0.0);
+        assert_eq!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn protanopia_uniforms_strength_one_matches_severity1_matrix() {
+        let u = protanopia_uniforms(1.0);
         assert_eq!(u.matrix, PROTANOPIA_MATRIX);
+    }
+
+    #[test]
+    fn deuteranopia_uniforms_strength_zero_is_identity_matrix() {
+        let u = deuteranopia_uniforms(0.0);
+        assert_eq!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
@@ -992,9 +1038,29 @@ mod tests {
     }
 
     #[test]
+    fn tritanopia_uniforms_strength_zero_is_identity_matrix() {
+        let u = tritanopia_uniforms(0.0);
+        assert_eq!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
     fn tritanopia_uniforms_has_correct_matrix() {
         let u = tritanopia_uniforms(1.0);
         assert_eq!(u.matrix, TRITANOPIA_MATRIX);
+    }
+
+    /// #165: severity=0.5 はグリッド上（補間なし）で解決されるため、
+    /// CPU 実装 (`vision::color::PROTANOMALY_TABLE[5]` 相当) と一致する。
+    /// ここでは重複管理を避けるため CPU の `protanopia()` 出力と突き合わせる
+    /// （矛盾なく resolve される回帰確認。KAT の非トートロジー検証は
+    /// `tests/color_kat.rs` 側が担う）。
+    #[test]
+    fn protanopia_uniforms_strength_half_is_not_severity1_matrix() {
+        // 旧実装は strength に関わらず severity=1.0 行列を返していたため、
+        // 誤って旧設計に戻ると本テストが失敗する（regression guard）。
+        let u = protanopia_uniforms(0.5);
+        assert_ne!(u.matrix, PROTANOPIA_MATRIX);
+        assert_ne!(u.matrix, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
     }
 
     #[test]
