@@ -238,8 +238,15 @@ pub(crate) const TRITANOMALY_TABLE: [[[f32; 3]; 3]; 11] = [
 /// 一致する。
 ///
 /// `strength` は呼び出し元で 0.0..=1.0 に正規化済みであることを期待するが、
-/// 範囲外が来ても defensive に clamp する。
+/// 範囲外が来ても defensive に clamp する。**NaN は `table[0]`（単位行列 /
+/// identity）を返す**（`f32::clamp` は NaN を素通しするため、単純な
+/// `.clamp(0.0, 1.0)` だけでは NaN が `scaled`/`frac` に伝播し補間結果が
+/// NaN になってしまう。呼び出し元の [`normalize_strength`] と同じ
+/// 「NaN→identity」の流儀をここでも独立に守る）。
 pub(crate) fn resolve_severity_matrix(table: &[[[f32; 3]; 3]; 11], strength: f32) -> [[f32; 3]; 3] {
+    if strength.is_nan() {
+        return table[0];
+    }
     let strength = strength.clamp(0.0, 1.0);
     let scaled = strength * 10.0;
     let i0 = (scaled.floor() as usize).min(10);
@@ -332,7 +339,15 @@ pub fn achromatopsia(img: DynamicImage, strength: f32) -> Result<DynamicImage> {
 /// （[`resolve_severity_matrix`] 参照）。テーブル自体が severity=0.0 で
 /// 単位行列・severity=1.0 で完全 dichromacy 行列を持つため、旧実装のような
 /// 「severity=1.0 行列 + strength blend」という追加のブレンド段は不要
-/// （テーブル補間が数学的に同じ効果を担う。ADR-0008 参照）。
+/// （テーブル補間が実数演算としては同じ効果を担う。ADR-0008 参照）。
+///
+/// **注意（実数と f32 演算の違い）**: strength=1.0 での出力は旧実装
+/// （`n = v + (matrix·v - v) * 1.0`）と代数的には同一だが、f32 加減算は
+/// 非結合的なため bit 単位では稀に ±1 LSB 差が出る（256^3 全数実測:
+/// protanopia 28/16,777,216・deuteranopia 11/16,777,216・tritanopia
+/// 6/16,777,216 ピクセルで発生、いずれも最大 1 LSB。
+/// `tests/color_severity1_full_sweep.rs` 参照）。旧実装の除去でむしろ
+/// 丸め回数が1回減っており、精度が悪化したわけではない。
 fn apply_machado_matrix(
     img: DynamicImage,
     table: &[[[f32; 3]; 3]; 11],
@@ -557,5 +572,20 @@ mod tests {
             resolve_severity_matrix(&DEUTERANOMALY_TABLE, 2.0),
             DEUTERANOMALY_TABLE[10]
         );
+    }
+
+    /// #165 レビュー S1: `f32::clamp` は NaN を素通しするため、明示的な
+    /// `is_nan()` チェックがないと NaN が `scaled`/`frac` へ伝播し、
+    /// 補間結果が NaN 行列になってしまう。identity (`table[0]`) を返すこと
+    /// を固定する。
+    #[test]
+    fn resolve_severity_matrix_nan_strength_is_identity() {
+        let resolved = resolve_severity_matrix(&PROTANOMALY_TABLE, f32::NAN);
+        assert_eq!(resolved, PROTANOMALY_TABLE[0]);
+        for row in resolved {
+            for cell in row {
+                assert!(!cell.is_nan(), "resolved matrix must not contain NaN");
+            }
+        }
     }
 }
