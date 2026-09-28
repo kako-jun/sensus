@@ -130,7 +130,7 @@ pub enum Filter {
     },
     // vision (Phase N / #58: teichopsia)
     Teichopsia,
-    /// 閃輝暗点・光の星。`seed`: ランダムシード
+    /// 光視症（photopsia）。ランダムな光の点滅。`seed`: ランダムシード
     FlickeringStars {
         seed: u64,
     },
@@ -223,10 +223,13 @@ pub fn apply(
 
 /// フィルタ種別ごとの静的メタデータ（kako-jun/sensus#182）。
 ///
-/// 消費側（universal-experience）がフィルタ単位で「受診喚起・典型的な強度・出典・
-/// このシミュレーションで表現できないこと」を取得できるようにする API。値は
-/// payload（`axis_deg` 等）ではなく **バリアント種別だけ** で決まる（同じ
-/// `Filter::Astigmatism { axis_deg }` なら軸角度によらず同じメタデータを返す）。
+/// 消費側（universal-experience）がフィルタ単位で「受診喚起・条件付きの上振れ・
+/// 典型的な強度・出典・このシミュレーションで表現できないこと」を取得できるように
+/// する API（[`urgency`](Self::urgency) / [`urgency_escalation`](Self::urgency_escalation) /
+/// [`recommended_strength`](Self::recommended_strength) / [`citation`](Self::citation) /
+/// [`limitations`](Self::limitations)）。値は payload（`axis_deg` 等）ではなく
+/// **バリアント種別だけ** で決まる（同じ `Filter::Astigmatism { axis_deg }` なら
+/// 軸角度によらず同じメタデータを返す）。
 ///
 /// > **医療監修は入っていない。** 以下の値は公開されている医学文献・ガイドライン
 /// > から読み取れる一般的傾向、またはそれが無い場合は sensus の設計上の既定値
@@ -241,9 +244,13 @@ impl Filter {
     /// `filter_urgency_matches_experience_urgency` テストで保証する）。
     ///
     /// 根拠は `docs/overview.md` の "Medical notes (when to see a doctor)" 表を正本とする。
-    /// 同表が `None / ⚠️` のように両論併記しているフィルタ（`photophobia` / `dry_eye`）は、
-    /// 「典型的には良性」という表の記述に合わせて `Urgency::None` を返し、急変時の受診目安
-    /// は [`limitations`](Self::limitations) 側の注記に譲る。
+    /// 同表が `None / ⚠️` のように両論併記しているフィルタ（`photophobia` / `dry_eye` /
+    /// `bppv_rotation`）は、「典型的には」の分類として `Urgency::None` を返す。条件付きで
+    /// 緊急度が上がるケースは [`urgency_escalation`](Self::urgency_escalation) が返す。
+    /// 例外は `vertigo`: 表では `bppv_rotation` と同じ行に同居していたが、
+    /// [`Experience::MENIERE`] / [`Experience::LABYRINTHITIS`] がどちらも常に
+    /// `Urgency::EarlyConsultation` で `Filter::Vertigo` を使うため、両論併記とはせず常に
+    /// `EarlyConsultation` を返す（`docs/overview.md` の表もこの2行に分けてある）。
     pub fn urgency(&self) -> Urgency {
         use Urgency::{EarlyConsultation, Emergency, None as NoUrgency};
         match self {
@@ -266,11 +273,12 @@ impl Filter {
             Filter::Hemianopia { .. } => Emergency,
             Filter::Cataract { .. } => EarlyConsultation,
             Filter::Floaters { .. } => EarlyConsultation,
-            // 羞明は多くが良性 — overview.md "Often benign light sensitivity"。急変時の受診
-            // 目安は limitations() に記す
+            // 羞明は多くが良性 — overview.md "Often benign light sensitivity"。条件付きの
+            // 上振れは urgency_escalation() を参照
             Filter::Photophobia => NoUrgency,
             Filter::NightBlindness => EarlyConsultation,
-            // Experience::BPPV.urgency と同じ根拠（良性・聴力温存の前庭疾患）
+            // Experience::BPPV.urgency と同じ根拠（良性・聴力温存の前庭疾患）。条件付きの
+            // 上振れは urgency_escalation() を参照
             Filter::BppvRotation => NoUrgency,
             // Experience::MENIERE / Experience::LABYRINTHITIS がどちらも Filter::Vertigo を
             // EarlyConsultation で使うため、フィルタ単体でも同じ値を返す
@@ -284,7 +292,7 @@ impl Filter {
             Filter::Starbursts { .. } => EarlyConsultation,
             // 疲れ目・ドライアイ由来が大半 — overview.md "Often lighting/fatigue related"
             Filter::EyeStrain => NoUrgency,
-            // ドライアイも多くが良性。持続する痛み・視力変化があれば受診（limitations() 参照）
+            // ドライアイも多くが良性。条件付きの上振れは urgency_escalation() を参照
             Filter::DryEye => NoUrgency,
             Filter::Metamorphopsia { .. } => EarlyConsultation,
             Filter::ContrastSensitivity => NoUrgency,
@@ -293,6 +301,59 @@ impl Filter {
             // 光視症の急増は網膜剥離のサイン — overview.md "Surge of flashes + curtain →
             // retinal detachment"
             Filter::FlickeringStars { .. } => Emergency,
+        }
+    }
+
+    /// 条件付きで緊急度が上がる場合の `(上がった後の Urgency, どんな条件で上がるか（英語）)`。
+    ///
+    /// [`urgency`](Self::urgency) が返すのは「典型的には」の分類であり、
+    /// `docs/overview.md` の Medical notes 表で `None / ⚠️` のように両論併記されている
+    /// フィルタ（`photophobia` / `dry_eye` / `bppv_rotation`）には、特定の随伴症状・
+    /// 発症様式があれば実際にはもっと高い緊急度で受診すべきケースがある。この API は
+    /// その「どんな場合に上がるか」を消費側が機械的に取得できるようにする
+    /// （kako-jun/sensus#182）。両論併記でないフィルタ（`urgency()` の分類だけで十分、
+    /// またはすでに `Urgency::Emergency` が上限のフィルタ）は `None` を返す。
+    pub fn urgency_escalation(&self) -> Option<(Urgency, &'static str)> {
+        use Urgency::EarlyConsultation;
+        match self {
+            Filter::Protanopia
+            | Filter::Deuteranopia
+            | Filter::Tritanopia
+            | Filter::Achromatopsia
+            | Filter::Tetrachromacy
+            | Filter::Myopia
+            | Filter::Hyperopia
+            | Filter::Presbyopia
+            | Filter::Astigmatism { .. } => None,
+            Filter::Glaucoma { .. } | Filter::TunnelVision { .. } => None,
+            Filter::MacularDegeneration { .. } => None,
+            Filter::Hemianopia { .. } => None,
+            Filter::Cataract { .. } => None,
+            Filter::Floaters { .. } => None,
+            // overview.md "Often benign light sensitivity; sudden severe photophobia with
+            // eye pain / headache → evaluate (iritis, migraine)"
+            Filter::Photophobia => Some((
+                EarlyConsultation,
+                "sudden, severe photophobia with eye pain or a headache (e.g. iritis, migraine)",
+            )),
+            Filter::NightBlindness => None,
+            // overview.md "BPPV is benign positional; recurrent/severe → evaluate"
+            Filter::BppvRotation => Some((EarlyConsultation, "recurrent or severe episodes")),
+            // vertigo は常に EarlyConsultation（urgency() 参照）なので escalation path を
+            // 持たない
+            Filter::Vertigo => None,
+            Filter::VestibularNeuritis => None,
+            Filter::Diplopia { .. } => None,
+            Filter::Nystagmus { .. } => None,
+            Filter::Starbursts { .. } => None,
+            Filter::EyeStrain => None,
+            // overview.md "Usually benign; persistent pain or vision change → consult"
+            Filter::DryEye => Some((EarlyConsultation, "persistent pain or a change in vision")),
+            Filter::Metamorphopsia { .. } => None,
+            Filter::ContrastSensitivity => None,
+            Filter::DetailLoss { .. } => None,
+            Filter::Teichopsia => None,
+            Filter::FlickeringStars { .. } => None,
         }
     }
 
@@ -306,13 +367,19 @@ impl Filter {
     /// 医学文献に典型値の記載がある場合はそれを、無い場合は各モジュールの
     /// `strength = 1.0` の定義（何 D 相当か等）から見て「よくある軽〜中等度」に収まる
     /// sensus の設計上の既定値をコメント付きで返す。
+    ///
+    /// 例外は `protanopia` / `deuteranopia` / `tritanopia`: フィルタ名自体が二色覚
+    /// （dichromacy = Machado severity 1.0）を指すため、この3つだけは `1.0` が定義どおりの
+    /// 典型値になる（詳細は各 match アームのコメント参照）。
     pub fn recommended_strength(&self) -> f32 {
         match self {
-            // Machado 2009 の severity テーブルは 0.0(正常)〜1.0(完全2色覚) の連続量。人口の
-            // 多くを占める色覚異常は完全な2色覚(dichromacy)ではなく軽度の異常3色覚(-omaly)
-            // なので、テーブル中央値 0.5（moderate anomalous trichromacy）を典型値とする。
-            // 1.0（完全2色覚）は color.rs の regression anchor であって典型例ではない。
-            Filter::Protanopia | Filter::Deuteranopia | Filter::Tritanopia => 0.5,
+            // フィルタ名（Protanopia/Deuteranopia/Tritanopia）は二色覚(dichromacy)を指す
+            // ので、典型値は定義どおり severity 1.0（Machado severity テーブルの末端、
+            // color.rs の regression anchor と同じ値）。軽度の異常三色覚(-omaly)を表現
+            // したい場合は、同じフィルタに中間 severity（strength）を渡すことで表す
+            // （消費側の責務。`apply(Filter::Protanopia, img, 0.3)` のように strength
+            // 自体が severity として resolve_severity_matrix に渡る）。
+            Filter::Protanopia | Filter::Deuteranopia | Filter::Tritanopia => 1.0,
             // 全色盲は"程度"を持たない全か無かの錐体機能不全なので、フル効果がそのまま典型像
             Filter::Achromatopsia => 1.0,
             // 四色型色覚は疾患ではなく「4種類目の錐体による弁別」の可視化なので、部分効果に
@@ -332,6 +399,9 @@ impl Filter {
             Filter::Astigmatism { .. } => 0.4,
             // 緑内障は早期〜中期で発見されることが多く、末期の広範な暗点化は典型例ではない
             Filter::Glaucoma { .. } => 0.4,
+            // sensus design default: mid-range of the strength=1.0 definition (inner_r=0.25 /
+            // outer_r=0.4 の半径比、中心視野の一部を覆う中等度の中心暗点)。臨床的な重症度
+            // 分布の出典はない
             Filter::MacularDegeneration { .. } => 0.4,
             // 同名半盲は「視野の半分が完全に見えない」という all-or-nothing に近い所見なので、
             // 部分的な弱いフィルタは典型像を薄める。フル効果を典型値とする
@@ -342,24 +412,56 @@ impl Filter {
             Filter::TunnelVision { .. } => 0.5,
             // 加齢性白内障は進行がゆっくりで、軽度〜中等度の混濁期間が長い
             Filter::Cataract { .. } => 0.5,
+            // sensus design default: mid-range of the strength=1.0 definition (floaters_mask
+            // が全不透明でブレンドされる状態)。軽度〜中等度の飛蚊症は視野の一部にしか
+            // 見えないことが多いため、フルブレンドより低い値を典型とする
             Filter::Floaters { .. } => 0.4,
+            // sensus design default: mid-range of the strength=1.0 definition (bloom 半径最大
+            // ・ハイライトのフルブレンド)
             Filter::Photophobia => 0.4,
+            // sensus design default: mid-range of the strength=1.0 definition (30%まで暗化・
+            // 完全な photopic→scotopic ブレンド)
             Filter::NightBlindness => 0.5,
             // BPPV は発作時のみ強い回転性めまいが出るが、発作自体はこの強度が典型
             Filter::BppvRotation => 0.6,
+            // sensus design default: mid-range of the strength=1.0 definition (最大回転角
+            // 15° + 周辺 blur)
             Filter::Vertigo => 0.6,
             // 前庭神経炎は「突然の激しい」めまいが臨床的な特徴そのものなので、他の前庭系
             // フィルタより強めの値を典型とする
             Filter::VestibularNeuritis => 0.7,
-            Filter::Diplopia { .. } => 0.5,
+            // 実効的なゴースト濃さ（ghost_alpha = ghost_strength × strength、diplopia()
+            // 実装）は strength 単体では決まらない。ghost_strength を典型的な既定値
+            // （~0.7 程度）とすると、strength=0.7 で実効 alpha ≈ 0.5 相当になる
+            Filter::Diplopia { .. } => 0.7,
+            // sensus design default: mid-range of the strength=1.0 definition (radius_px は
+            // strength × amplitude payload に線形比例)
             Filter::Nystagmus { .. } => 0.5,
+            // sensus design default: mid-range of the strength=1.0 definition (光芒の輝度・
+            // 長さは strength に線形比例)
             Filter::Starbursts { .. } => 0.5,
+            // sensus design default: mid-range of the strength=1.0 definition (コントラスト
+            // 15%圧縮 + 軽い vignette + 1.5px blur)
             Filter::EyeStrain => 0.5,
+            // sensus design default: mid-range of the strength=1.0 definition (タイルごとの
+            // blur 半径が最大 3px まで、パッチ状に発生する)
             Filter::DryEye => 0.4,
+            // sensus design default: mid-range of the strength=1.0 definition (最大変位
+            // 8px)
             Filter::Metamorphopsia { .. } => 0.5,
+            // sensus design default: mid-range of the strength=1.0 definition (コントラスト
+            // を linear 空間で 50% まで圧縮)
             Filter::ContrastSensitivity => 0.4,
-            Filter::DetailLoss { .. } => 0.4,
+            // DetailLoss の「程度」は strength ではなく cell_size（タイルサイズ）で表現される
+            // 設計（strength は original↔pixelated 間の単純なブレンド係数でしかない）。
+            // したがって典型値は 1.0（＝渡された cell_size でのタイル化をそのまま見せる）
+            // とし、"どれくらい荒いか" は呼び出し側が渡す cell_size で調整する
+            Filter::DetailLoss { .. } => 1.0,
+            // sensus design default: mid-range of the strength=1.0 definition (最大の閃輝
+            // 暗点効果)
             Filter::Teichopsia => 0.5,
+            // sensus design default: mid-range of the strength=1.0 definition (最大200点の
+            // 光点)
             Filter::FlickeringStars { .. } => 0.5,
         }
     }
@@ -401,9 +503,8 @@ impl Filter {
             // light.rs の doc comment が正本。水晶体黄変マトリクスの係数の出典
             Filter::Cataract { .. } => Some(
                 "Pokorny et al. (1987), \"Aging of the human lens\", Applied Optics 26(8): \
-                 1437-1440; van Norren & Vos (1974), \"Spectral transmission of the human \
-                 ocular media\", Vision Research 14(11): 1237-1244 (lens-yellowing \
-                 coefficients, reinterpreted — see light.rs doc comment)",
+                 1437-1440 (approximate lens-yellowing matrix; contrast/brightness loss is a \
+                 reinterpretation of VIP-Sim — see light.rs)",
             ),
             Filter::Floaters { .. } => None,
             Filter::Photophobia => None,
@@ -436,13 +537,14 @@ impl Filter {
     pub fn limitations(&self) -> &'static str {
         match self {
             Filter::Protanopia | Filter::Deuteranopia | Filter::Tritanopia => {
-                "Represents one point on the Machado severity table (population-typical \
-                 anomalous trichromacy), not an anomaloscope-calibrated measurement of any \
-                 individual's color vision."
+                "Uses the Machado et al. (2009) average-observer model; it does not measure \
+                 any individual's cone shift, and intermediate strengths approximate anomalous \
+                 trichromacy rather than a clinically graded severity."
             }
             Filter::Achromatopsia => {
-                "Collapses color to a single achromatic axis; does not model the photophobia, \
-                 nystagmus, and reduced visual acuity that usually accompany real achromatopsia."
+                "Collapses color to a single achromatic axis using photopic weights, not rod \
+                 spectral sensitivity; does not model the photophobia, nystagmus, and reduced \
+                 visual acuity that usually accompany real achromatopsia."
             }
             Filter::Tetrachromacy => {
                 "A heuristic visualization of 'a fourth cone type might separate these colors,' \
@@ -461,22 +563,36 @@ impl Filter {
             Filter::Glaucoma { .. } => {
                 "Uses an idealized static field-defect pattern (vignette or arcuate scotoma); \
                  real glaucomatous field loss is irregular and progresses gradually over years, \
-                 which a single still-image strength cannot convey."
+                 which a single still-image strength cannot convey. The default \
+                 `FieldLossMode::Darken` also renders the lost field as a dark void, which \
+                 overstates the effect compared to how the brain fills in missing regions; \
+                 `FieldLossMode::Blur` is closer to typically reported experience."
             }
             Filter::MacularDegeneration { .. } => {
                 "Models the central scotoma as a smooth radial gradient; real AMD scotomas are \
                  often patchy and irregular, and this filter does not include the distortion \
-                 covered separately by the metamorphopsia filter."
+                 covered separately by the metamorphopsia filter. The default \
+                 `FieldLossMode::Darken` also renders the scotoma as a dark void, which \
+                 overstates the effect compared to how the brain fills in missing central \
+                 vision; `FieldLossMode::Blur` is closer to typically reported experience."
             }
             Filter::Hemianopia { .. } => {
-                "Draws a clean, softly-blurred vertical boundary; real hemianopic field cuts can \
-                 be irregular, sometimes macular-sparing, and appear instantly rather than as a \
-                 gradual effect."
+                "Splits the field at the image's horizontal centre rather than at the viewer's \
+                 point of fixation, with a fixed soft edge; real field cuts may be incomplete, \
+                 quadrantic, or macular-sparing. The default `FieldLossMode::Darken` also \
+                 renders the lost half as a dark void, which overstates the effect compared to \
+                 how the brain fills in a missing hemifield; `FieldLossMode::Blur` is closer to \
+                 typically reported experience."
             }
             Filter::TunnelVision { .. } => {
                 "Represents a static snapshot of a condition that usually develops gradually \
                  over years and is often worse in low light, neither of which a single strength \
-                 value on a still image can show."
+                 value on a still image can show. `strength` simultaneously controls both the \
+                 remaining field radius and how dark the lost periphery becomes, so it cannot \
+                 vary the two independently. The default `FieldLossMode::Darken` also renders \
+                 the lost periphery as a dark void, which overstates the effect compared to how \
+                 the brain fills in missing peripheral vision; `FieldLossMode::Blur` is closer \
+                 to typically reported experience."
             }
             Filter::Cataract { .. } => {
                 "Combines lens-yellowing and scatter glare into one strength axis; does not \
@@ -494,18 +610,20 @@ impl Filter {
                  that often accompanies clinically significant photophobia."
             }
             Filter::NightBlindness => {
-                "Approximates the photopic-to-scotopic luminance shift and desaturation; does \
-                 not model the loss of visual acuity or the longer dark-adaptation time that \
-                 real night blindness involves."
+                "Approximates the photopic-to-scotopic luminance shift and desaturation of \
+                 healthy scotopic vision (Purkinje shift), not rod-function loss; does not \
+                 model the loss of visual acuity or the longer dark-adaptation time that real \
+                 night blindness involves."
             }
             Filter::BppvRotation => {
-                "Renders one representative phase of a rotational still image; real BPPV \
-                 attacks are brief, triggered by specific head movements, and accompanied by \
-                 nystagmus that a static image cannot fully convey."
+                "Shows a continuous periodic rotation (or one representative phase on the CPU \
+                 still-image path); real BPPV attacks are brief (under a minute), triggered by \
+                 specific head positions, and accompanied by nystagmus."
             }
             Filter::Vertigo => {
-                "Renders one representative phase of a continuous rotational sensation on a \
-                 still image; the felt motion and any accompanying nausea are not represented."
+                "Shows a continuous periodic rotation (or one representative phase on the CPU \
+                 still-image path); real vertigo is a felt sensation of motion, often \
+                 accompanied by nausea, that this animation only approximates visually."
             }
             Filter::VestibularNeuritis => {
                 "Approximates the visual sway with a horizontal shift and motion blur; does not \
@@ -632,6 +750,41 @@ pub fn apply_hearing(
         HearingFilter::Labyrinthitis => hearing::labyrinthitis(buf, strength),
     };
     Ok(out)
+}
+
+impl HearingFilter {
+    /// 条件付きで緊急度が上がる場合の `(上がった後の Urgency, どんな条件で上がるか（英語）)`。
+    ///
+    /// [`Filter::urgency_escalation`] と同じ考え方（kako-jun/sensus#182）。
+    /// `docs/overview.md` の Medical notes 表の hearing 側で `None / ⚠️` のように両論併記
+    /// されている行（`hearing_loss` / `noise_induced_hearing_loss` / `tinnitus` /
+    /// `hyperacusis` / `misophonia` / `paracusis` / `amusia` / `dysmelodia` /
+    /// `pitch_shift` / `diplacusis` / auditory processing disorder）が対象。
+    /// `sudden_hearing_loss`（既に 🚨 が上限）や `meniere` / `labyrinthitis`（固定の
+    /// ⚠️、`Experience::MENIERE` / `Experience::LABYRINTHITIS` 側で管理）は両論併記では
+    /// ないので `None`。
+    pub fn urgency_escalation(&self) -> Option<(Urgency, &'static str)> {
+        match self {
+            // overview.md "Often chronic/benign; sudden onset or one-sided → consult"
+            HearingFilter::HearingLoss
+            | HearingFilter::NoiseInducedHearingLoss
+            | HearingFilter::Tinnitus { .. }
+            | HearingFilter::Hyperacusis
+            | HearingFilter::Misophonia { .. }
+            | HearingFilter::Paracusis
+            | HearingFilter::Amusia
+            | HearingFilter::Dysmelodia
+            | HearingFilter::PitchShift { .. }
+            | HearingFilter::Diplacusis
+            | HearingFilter::AuditoryProcessingDisorder => Some((
+                Urgency::EarlyConsultation,
+                "sudden onset or a one-sided change",
+            )),
+            HearingFilter::SuddenHearingLoss { .. } => None,
+            HearingFilter::Meniere => None,
+            HearingFilter::Labyrinthitis => None,
+        }
+    }
 }
 
 /// 受診喚起の緊急度分類（仕様リーフの「緊急度分類」に対応）。
@@ -1018,22 +1171,126 @@ mod tests {
         );
     }
 
+    /// `Experience` に定義済みの全定数（現時点で4つ）を横断し、
+    /// vision 側フィルタを持つものは `Filter::urgency()` が `Experience::urgency` と
+    /// 矛盾しないことを保証する。Experience の定数が増えても個別に assert を書き足す
+    /// 必要がないよう、列挙を固定配列にして毎回全件を検査する（このズレが #182 の背景
+    /// そのもの）。
     #[test]
     fn filter_urgency_matches_experience_urgency() {
-        // BPPV: 良性・聴力温存の前庭疾患。Experience と Filter が矛盾した結論を出さないこと
-        // （このズレが #182 の背景そのもの）。
-        assert_eq!(Filter::BppvRotation.urgency(), Experience::BPPV.urgency);
+        let experiences = [
+            Experience::MENIERE,
+            Experience::BPPV,
+            Experience::VESTIBULAR_NEURITIS,
+            Experience::LABYRINTHITIS,
+        ];
+        for experience in experiences {
+            if let Some(vision_filter) = experience.vision {
+                assert_eq!(
+                    vision_filter.urgency(),
+                    experience.urgency,
+                    "Experience::{}: Filter::urgency() disagrees with Experience::urgency",
+                    experience.id
+                );
+            }
+        }
+    }
 
-        // 前庭神経炎: 突然発症の激しいめまいは緊急。
+    /// `Filter::Protanopia` / `Deuteranopia` / `Tritanopia` は名前自体が二色覚
+    /// (dichromacy) を指すので、`recommended_strength()` は Machado severity=1.0
+    /// （定義どおりのフル効果）を固定で返す（kako-jun/sensus#182）。
+    #[test]
+    fn cvd_dichromacy_recommended_strength_is_full_severity() {
+        assert_eq!(Filter::Protanopia.recommended_strength(), 1.0);
+        assert_eq!(Filter::Deuteranopia.recommended_strength(), 1.0);
+        assert_eq!(Filter::Tritanopia.recommended_strength(), 1.0);
+    }
+
+    #[test]
+    fn urgency_escalation_matches_dual_marked_filters() {
+        // docs/overview.md Medical notes 表で `None / ⚠️` と両論併記されているのは
+        // photophobia / dry_eye / bppv_rotation の3つだけ。
+        for filter in [Filter::Photophobia, Filter::DryEye, Filter::BppvRotation] {
+            assert_eq!(
+                filter.urgency(),
+                Urgency::None,
+                "{filter:?}: base urgency() should be None for a dual-marked filter"
+            );
+            let (escalated, reason) = filter
+                .urgency_escalation()
+                .unwrap_or_else(|| panic!("{filter:?} should have an escalation path"));
+            assert_eq!(escalated, Urgency::EarlyConsultation);
+            assert!(!reason.is_empty());
+        }
+
+        // vertigo は bppv_rotation とは別扱いの特例: overview.md の表では両論併記の行に
+        // 同居していたが、フィルタ単体としては常に EarlyConsultation なので escalation
+        // path を持たない。
+        assert_eq!(Filter::Vertigo.urgency_escalation(), None);
+
+        // 既に Emergency（分類の上限）のフィルタは escalation path を持たない。
         assert_eq!(
-            Filter::VestibularNeuritis.urgency(),
-            Experience::VESTIBULAR_NEURITIS.urgency
+            Filter::Hemianopia {
+                side: 0.0,
+                field_loss_mode: vision::FieldLossMode::Darken,
+            }
+            .urgency_escalation(),
+            None
         );
 
-        // Vertigo は MENIERE / LABYRINTHITIS どちらの Experience からも参照される。
-        // フィルタ単体の urgency はどちらの Experience の urgency とも一致する必要がある。
-        assert_eq!(Filter::Vertigo.urgency(), Experience::MENIERE.urgency);
-        assert_eq!(Filter::Vertigo.urgency(), Experience::LABYRINTHITIS.urgency);
+        // None のまま固定で、両論併記でもないフィルタも escalation path を持たない。
+        assert_eq!(Filter::Protanopia.urgency_escalation(), None);
+    }
+
+    #[test]
+    fn hearing_filter_urgency_escalation_matches_dual_marked_rows() {
+        // docs/overview.md Medical notes 表の hearing 側で `None / ⚠️` と両論併記されて
+        // いる行に対応する HearingFilter バリアント。
+        let dual_marked = [
+            HearingFilter::HearingLoss,
+            HearingFilter::NoiseInducedHearingLoss,
+            HearingFilter::Tinnitus { freq_hz: 4000.0 },
+            HearingFilter::Hyperacusis,
+            HearingFilter::Misophonia { freq_hz: 4000.0 },
+            HearingFilter::Paracusis,
+            HearingFilter::Amusia,
+            HearingFilter::Dysmelodia,
+            HearingFilter::PitchShift { semitones: 0.0 },
+            HearingFilter::Diplacusis,
+            HearingFilter::AuditoryProcessingDisorder,
+        ];
+        for filter in dual_marked {
+            let (escalated, reason) = filter
+                .urgency_escalation()
+                .unwrap_or_else(|| panic!("{filter:?} should have an escalation path"));
+            assert_eq!(escalated, Urgency::EarlyConsultation);
+            assert!(!reason.is_empty());
+        }
+
+        // 単一の固定緊急度を持つフィルタ（両論併記ではない）は escalation path を持たない。
+        assert_eq!(
+            HearingFilter::SuddenHearingLoss { freq_hz: 4000.0 }.urgency_escalation(),
+            None
+        );
+        assert_eq!(HearingFilter::Meniere.urgency_escalation(), None);
+        assert_eq!(HearingFilter::Labyrinthitis.urgency_escalation(), None);
+    }
+
+    /// `Filter` の全30バリアントが `std::mem::discriminant` で相互に異なることを固定する
+    /// （`all_filter_variants()` が同じバリアントを重複列挙してしまい、他のメタデータ
+    /// 網羅テストが穴を見逃す事態を防ぐ）。
+    #[test]
+    fn all_filter_variants_have_distinct_discriminants() {
+        use std::collections::HashSet;
+        use std::mem::discriminant;
+
+        let variants = all_filter_variants();
+        let unique: HashSet<_> = variants.iter().map(discriminant).collect();
+        assert_eq!(
+            unique.len(),
+            variants.len(),
+            "all_filter_variants() must list 30 distinct Filter variants (by discriminant)"
+        );
     }
 
     #[test]

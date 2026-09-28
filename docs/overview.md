@@ -742,8 +742,16 @@ need to keep its own, potentially-drifting copy of this information:
 - `limitations() -> &'static str` — a one-to-two-sentence English statement of
   what the simulation does *not* capture (e.g. "a single uniform blur radius,
   not depth-dependent defocus" for the refractive filters).
+- `urgency_escalation() -> Option<(Urgency, &'static str)>` — for the rows
+  below marked `None / ⚠️` (`photophobia`, `dry_eye`, `bppv_rotation`, and the
+  same-shaped rows in the hearing table via `HearingFilter::urgency_escalation`),
+  `urgency()` returns the *typical* (benign) classification and this method
+  returns the escalated `Urgency` plus a short English description of the
+  condition that would justify it (e.g. "sudden, severe photophobia with eye
+  pain or a headache"). Filters that are not dual-marked in the table, or
+  that are already at `Urgency::Emergency`, return `None`.
 
-**None of these four methods has had medical review.** Values without an
+**None of these five methods has had medical review.** Values without an
 explicit citation are sensus's own engineering judgment calls, documented
 inline, not a clinician's assessment.
 
@@ -778,7 +786,8 @@ source of truth for `Filter::urgency()` above:
 | `floaters` | ⚠️ early consultation | A *sudden* surge with flashes → rule out retinal tear. |
 | `teichopsia` | ⚠️ early consultation | Usually migraine aura; first-ever episode → evaluate. |
 | `nystagmus` | ⚠️ early consultation | New-onset (non-congenital) involuntary motion → evaluate. |
-| `vertigo`, `bppv_rotation` | None / ⚠️ | BPPV is benign positional; recurrent/severe → evaluate. |
+| `bppv_rotation` | None / ⚠️ | Benign positional vertigo; recurrent or severe episodes → evaluate. |
+| `vertigo` | ⚠️ early consultation | Matches the urgency of `Experience::MENIERE` / `Experience::LABYRINTHITIS`, the composite experiences this filter is used in. |
 | `hemianopia` | 🚨 emergency | Sudden half-field loss is a stroke until proven otherwise. |
 | `diplopia` | 🚨 emergency | Sudden double vision → nerve palsy / brainstem stroke. |
 | `flickering_stars` (photopsia) | 🚨 emergency | Surge of flashes + curtain → retinal detachment. |

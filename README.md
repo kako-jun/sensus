@@ -218,23 +218,30 @@ strength, sourcing, or caveats:
 use sensus_core::Filter;
 
 fn describe(filter: Filter) {
-    let _urgency = filter.urgency();               // same scale as Experience::urgency
-    let _typical = filter.recommended_strength();   // typical severity, in (0.0, 1.0]
-    let _source  = filter.citation();                // Option<&'static str>, None if undocumented
-    let _caveat  = filter.limitations();             // what this simulation can't show
+    let _urgency    = filter.urgency();               // same scale as Experience::urgency
+    let _escalation = filter.urgency_escalation();     // Option<(Urgency, &'static str)>
+    let _typical    = filter.recommended_strength();   // typical severity, in (0.0, 1.0]
+    let _source     = filter.citation();                // Option<&'static str>, None if undocumented
+    let _caveat     = filter.limitations();             // what this simulation can't show
 }
 ```
 
 `recommended_strength()` is **not** the strongest effect the filter can
 produce — `strength = 1.0` is often an extreme (e.g. `tunnel_vision` at
 `1.0` is close to total field closure). It is the degree most consumers
-should default to when demonstrating "what this typically looks like".
+should default to when demonstrating "what this typically looks like" (the
+documented exception is `protanopia` / `deuteranopia` / `tritanopia`: the
+name itself denotes full-severity dichromacy, so `1.0` *is* typical there).
 `urgency()` matches `Experience::urgency` for any filter an `Experience`
 canonically pairs (e.g. `Filter::BppvRotation` and `Experience::BPPV` never
-disagree). See `docs/overview.md` "Medical notes" for the source table, and
-each filter's doc comment / `docs/adr/matrix-provenance.md` for the
-citations `citation()` returns. **None of this metadata has had medical
-review** — see the crate-level caveat in the API docs.
+disagree). For the filters `docs/overview.md`'s Medical notes table marks
+`None / ⚠️` (`photophobia`, `dry_eye`, `bppv_rotation`), `urgency_escalation()`
+returns the escalated `Urgency` plus a short English description of when it
+applies; `HearingFilter::urgency_escalation` covers the equivalent hearing-side
+rows. See `docs/overview.md` "Medical notes" for the source table, and each
+filter's doc comment / `docs/adr/matrix-provenance.md` for the citations
+`citation()` returns. **None of this metadata has had medical review** — see
+the `impl Filter` doc comment in the API docs.
 
 ### Hearing filters
 
