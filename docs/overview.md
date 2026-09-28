@@ -716,44 +716,66 @@ intrinsic limit of an 8-bit-output check.
 
 ## Per-filter metadata API (kako-jun/sensus#182)
 
-Every `Filter` variant implements four metadata methods so a host UI does not
-need to keep its own, potentially-drifting copy of this information:
+Every `Filter` variant implements four metadata methods, and `HearingFilter`
+implements two of the same shape, so a host UI does not need to keep its own,
+potentially-drifting copy of this information:
 
-- `urgency() -> Urgency` — same scale, same reasoning as `Experience::urgency`
-  (see the table below, which is this method's source of truth). Filters an
-  `Experience` canonically pairs with a vision filter (e.g. `Experience::BPPV`
-  ↔ `Filter::BppvRotation`) always report the same `Urgency` on both sides —
-  this is enforced by a test (`filter_urgency_matches_experience_urgency` in
+- `urgency() -> Urgency` (`Filter` and `HearingFilter`) — same scale, same
+  reasoning as `Experience::urgency` (see the table below, which is this
+  method's source of truth). Filters an `Experience` canonically pairs with a
+  vision or hearing filter (e.g. `Experience::BPPV` ↔ `Filter::BppvRotation`,
+  `Experience::MENIERE` ↔ `HearingFilter::Meniere`) always report the same
+  `Urgency` on both sides — this is enforced by a test
+  (`filter_urgency_matches_experience_urgency` /
+  `hearing_filter_urgency_matches_experience_urgency` in
   `crates/core/src/lib.rs`).
-- `recommended_strength() -> f32` — a typical/representative severity in
-  `(0.0, 1.0]`, **not** the strongest effect the filter can produce.
-  `strength = 1.0` is frequently an extreme (e.g. `tunnel_vision` at `1.0` is
-  close to total field closure), so a host that always starts a demo at
-  `1.0` overstates the everyday experience of the condition. Each value's
+- `urgency_escalation() -> &'static [(Urgency, &'static str)]` (`Filter` and
+  `HearingFilter`) — for the rows below marked `None (🚨/⚠️ if ...)`
+  (`photophobia`, `dry_eye`, `bppv_rotation` on the vision side; the
+  hearing-loss family — `hearing_loss`, `noise_induced_hearing_loss`,
+  `tinnitus`, `diplacusis`, `paracusis` — on the hearing side), `urgency()`
+  returns the *typical* (benign) classification and this method returns the
+  ordered list of `(escalated Urgency, short English condition)` pairs that
+  would justify it. It is a slice rather than a single `Option` because the
+  hearing-loss family has **two** escalation steps (a sudden, especially
+  one-sided, drop is `Urgency::Emergency`; a gradual or one-sided change is
+  still `Urgency::EarlyConsultation`). Filters that are not dual-marked in
+  the table, or that are already at `Urgency::Emergency`, return `&[]`.
+  Congenital or psychological hearing symptoms (`amusia`, `dysmelodia`,
+  `misophonia`) are deliberately **not** given a "one-sided change" condition
+  — that framing only makes sense for symptoms of unilateral hearing-organ
+  damage — and return `&[]` rather than a fabricated one.
+- `recommended_strength() -> f32` (`Filter` only) — a typical/representative
+  severity in `(0.0, 1.0]`, **not** the strongest effect the filter can
+  produce. `strength = 1.0` is frequently an extreme (e.g. `tunnel_vision` at
+  `1.0` is close to total field closure), so a host that always starts a demo
+  at `1.0` overstates the everyday experience of the condition — except
+  `protanopia`/`deuteranopia`/`tritanopia`, whose name *is* the full-severity
+  dichromacy definition, so `1.0` is the typical value there. Each value's
   reasoning (a documented clinical range, or an explicit "sensus design
   default" when no such range exists) is a code comment on the match arm in
   `crates/core/src/lib.rs`.
-- `citation() -> Option<&'static str>` — the model name and source backing the
-  filter's algorithm (e.g. Machado 2009 for the color-vision-deficiency
-  matrices), or `None` when no such source is documented elsewhere in this
-  repository. No citation is invented for this API; it only surfaces sources
-  already recorded in `docs/adr/matrix-provenance.md` or a module's doc
-  comment.
-- `limitations() -> &'static str` — a one-to-two-sentence English statement of
-  what the simulation does *not* capture (e.g. "a single uniform blur radius,
-  not depth-dependent defocus" for the refractive filters).
-- `urgency_escalation() -> Option<(Urgency, &'static str)>` — for the rows
-  below marked `None / ⚠️` (`photophobia`, `dry_eye`, `bppv_rotation`, and the
-  same-shaped rows in the hearing table via `HearingFilter::urgency_escalation`),
-  `urgency()` returns the *typical* (benign) classification and this method
-  returns the escalated `Urgency` plus a short English description of the
-  condition that would justify it (e.g. "sudden, severe photophobia with eye
-  pain or a headache"). Filters that are not dual-marked in the table, or
-  that are already at `Urgency::Emergency`, return `None`.
+- `citation() -> Option<&'static str>` (`Filter` only) — the model name and
+  source backing the filter's algorithm (e.g. Machado 2009 for the
+  color-vision-deficiency matrices), or `None` when no such source is
+  documented elsewhere in this repository. No citation is invented for this
+  API; it only surfaces sources already recorded in
+  `docs/adr/matrix-provenance.md` or a module's doc comment. Where a source
+  can't yet be fully cross-checked against the code (`cataract`'s
+  `van Norren & Vos (1974)` reference — see `light.rs`), `citation()`
+  conservatively omits it rather than assert an unverified match; tracked in
+  kako-jun/sensus#184.
+- `limitations() -> &'static str` (`Filter` only) — a one-to-two-sentence
+  English statement of what the simulation does *not* capture (e.g. "a single
+  uniform blur radius, not depth-dependent defocus" for the refractive
+  filters).
 
-**None of these five methods has had medical review.** Values without an
-explicit citation are sensus's own engineering judgment calls, documented
-inline, not a clinician's assessment.
+**None of this metadata has had medical review.** Values without an explicit
+citation are sensus's own engineering judgment calls, documented inline, not
+a clinician's assessment. Whether `photophobia`'s escalation condition should
+be `Urgency::Emergency` rather than `Urgency::EarlyConsultation` is an open
+question tracked in kako-jun/sensus#184, pending medical review — this PR
+keeps it as `EarlyConsultation`.
 
 ## Medical notes (when to see a doctor)
 
@@ -779,7 +801,7 @@ source of truth for `Filter::urgency()` above:
 | `dry_eye` | None / ⚠️ | Usually benign; persistent pain or vision change → consult. |
 | `starbursts` | ⚠️ early consultation | New night-time halos can accompany cataract or refractive error. |
 | `glaucoma`, `tunnel_vision` | ⚠️ early consultation | Painless peripheral / tunnel field loss; early detection (glaucoma, retinitis pigmentosa) preserves the field. |
-| `photophobia` | None / ⚠️ | Often benign light sensitivity; sudden severe photophobia with eye pain / headache → evaluate (iritis, migraine). |
+| `photophobia` | None / ⚠️ | Often benign light sensitivity; sudden severe photophobia with eye pain or a headache → evaluate (e.g. iritis). |
 | `macular_degeneration`, `metamorphopsia` | ⚠️ early consultation | Central distortion/blur; early treatment slows progression. |
 | `cataract` | ⚠️ early consultation | Progressive clouding; rapid change warrants an exam. |
 | `night-blindness` (`nyctalopia`) | ⚠️ early consultation | Rapid worsening may mean vitamin-A deficiency / RP. |
@@ -794,7 +816,8 @@ source of truth for `Filter::urgency()` above:
 | `vestibular_neuritis` | 🚨 emergency | Sudden severe vertigo needs stroke differentiation. |
 | `sudden_hearing_loss` | 🚨 emergency | Sudden sensorineural loss is an otologic emergency. |
 | `meniere`, `labyrinthitis` | ⚠️ early consultation | Vertigo + hearing change → ENT evaluation. |
-| `tinnitus`, `hyperacusis`, `misophonia`, `paracusis`, `amusia`, `dysmelodia`, `pitch_shift`, `diplacusis`, APD, `noise_induced_hearing_loss`, `hearing_loss` | None / ⚠️ | Often chronic/benign; sudden onset or one-sided → consult. |
+| `hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`, `diplacusis`, `paracusis` | None (🚨 if sudden, especially one-sided) | Often chronic; a sudden drop in hearing — especially in one ear — may be sudden sensorineural hearing loss (an otologic emergency, same as `sudden_hearing_loss` above); a gradual or one-sided change should still be evaluated. |
+| `hyperacusis`, `misophonia`, `amusia`, `dysmelodia`, `pitch_shift`, `auditory_processing_disorder` | None | Often chronic, developmental, or psychological; no specific acute warning sign is established for these on their own. |
 
 ## Out of scope / Non-goals
 

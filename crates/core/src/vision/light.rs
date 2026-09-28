@@ -21,6 +21,12 @@ use image::DynamicImage;
 /// 1437–1440 および van Norren & Vos (1974) "Spectral transmission of the human ocular
 /// media" *Vision Research* 14(11): 1237–1244 に基づく水晶体黄変の近似。
 ///
+/// > **出典の照合状況**: `Filter::citation()`（`crates/core/src/lib.rs`）は現状
+/// > Pokorny (1987) だけを返し、van Norren & Vos (1974) は挙げていない。この2つの
+/// > 係数の対応関係（どちらがどの係数の根拠か）を数値レベルで再照合できていないため、
+/// > 確認が取れるまで保守的に絞ってある。照合と citation() の更新は kako-jun/sensus#184
+/// > で扱う（このモジュールの行列自体・挙動は変更しない）。
+///
 /// ```text
 /// R' = R * 1.00 + G * 0.05 + B * (-0.05)
 /// G' = R * 0.02 + G * 1.00 + B * (-0.02)

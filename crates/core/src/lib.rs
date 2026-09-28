@@ -304,7 +304,8 @@ impl Filter {
         }
     }
 
-    /// 条件付きで緊急度が上がる場合の `(上がった後の Urgency, どんな条件で上がるか（英語）)`。
+    /// 条件付きで緊急度が上がる場合の `(上がった後の Urgency, どんな条件で上がるか（英語）)`
+    /// のリスト。上がらないフィルタは空スライスを返す。
     ///
     /// [`urgency`](Self::urgency) が返すのは「典型的には」の分類であり、
     /// `docs/overview.md` の Medical notes 表で `None / ⚠️` のように両論併記されている
@@ -312,8 +313,11 @@ impl Filter {
     /// 発症様式があれば実際にはもっと高い緊急度で受診すべきケースがある。この API は
     /// その「どんな場合に上がるか」を消費側が機械的に取得できるようにする
     /// （kako-jun/sensus#182）。両論併記でないフィルタ（`urgency()` の分類だけで十分、
-    /// またはすでに `Urgency::Emergency` が上限のフィルタ）は `None` を返す。
-    pub fn urgency_escalation(&self) -> Option<(Urgency, &'static str)> {
+    /// またはすでに `Urgency::Emergency` が上限のフィルタ）は `&[]` を返す。
+    /// 戻り値は `&'static [(Urgency, &'static str)]`（0件・1件・複数件のいずれもあり得る。
+    /// `HearingFilter::urgency_escalation` の聴力低下系のように、症状に応じて複数段の
+    /// エスカレーション条件を持つフィルタがあるため `Option` ではなくスライスにしてある）。
+    pub fn urgency_escalation(&self) -> &'static [(Urgency, &'static str)] {
         use Urgency::EarlyConsultation;
         match self {
             Filter::Protanopia
@@ -324,36 +328,37 @@ impl Filter {
             | Filter::Myopia
             | Filter::Hyperopia
             | Filter::Presbyopia
-            | Filter::Astigmatism { .. } => None,
-            Filter::Glaucoma { .. } | Filter::TunnelVision { .. } => None,
-            Filter::MacularDegeneration { .. } => None,
-            Filter::Hemianopia { .. } => None,
-            Filter::Cataract { .. } => None,
-            Filter::Floaters { .. } => None,
+            | Filter::Astigmatism { .. } => &[],
+            Filter::Glaucoma { .. } | Filter::TunnelVision { .. } => &[],
+            Filter::MacularDegeneration { .. } => &[],
+            Filter::Hemianopia { .. } => &[],
+            Filter::Cataract { .. } => &[],
+            Filter::Floaters { .. } => &[],
             // overview.md "Often benign light sensitivity; sudden severe photophobia with
-            // eye pain / headache → evaluate (iritis, migraine)"
-            Filter::Photophobia => Some((
+            // eye pain / headache → evaluate (iritis)". Emergency 化するかどうかは
+            // 医療監修待ちの論点として kako-jun/sensus#184 に記録済み（このPRでは扱わない）。
+            Filter::Photophobia => &[(
                 EarlyConsultation,
-                "sudden, severe photophobia with eye pain or a headache (e.g. iritis, migraine)",
-            )),
-            Filter::NightBlindness => None,
+                "sudden, severe photophobia with eye pain or a headache (e.g. iritis)",
+            )],
+            Filter::NightBlindness => &[],
             // overview.md "BPPV is benign positional; recurrent/severe → evaluate"
-            Filter::BppvRotation => Some((EarlyConsultation, "recurrent or severe episodes")),
+            Filter::BppvRotation => &[(EarlyConsultation, "recurrent or severe episodes")],
             // vertigo は常に EarlyConsultation（urgency() 参照）なので escalation path を
             // 持たない
-            Filter::Vertigo => None,
-            Filter::VestibularNeuritis => None,
-            Filter::Diplopia { .. } => None,
-            Filter::Nystagmus { .. } => None,
-            Filter::Starbursts { .. } => None,
-            Filter::EyeStrain => None,
+            Filter::Vertigo => &[],
+            Filter::VestibularNeuritis => &[],
+            Filter::Diplopia { .. } => &[],
+            Filter::Nystagmus { .. } => &[],
+            Filter::Starbursts { .. } => &[],
+            Filter::EyeStrain => &[],
             // overview.md "Usually benign; persistent pain or vision change → consult"
-            Filter::DryEye => Some((EarlyConsultation, "persistent pain or a change in vision")),
-            Filter::Metamorphopsia { .. } => None,
-            Filter::ContrastSensitivity => None,
-            Filter::DetailLoss { .. } => None,
-            Filter::Teichopsia => None,
-            Filter::FlickeringStars { .. } => None,
+            Filter::DryEye => &[(EarlyConsultation, "persistent pain or a change in vision")],
+            Filter::Metamorphopsia { .. } => &[],
+            Filter::ContrastSensitivity => &[],
+            Filter::DetailLoss { .. } => &[],
+            Filter::Teichopsia => &[],
+            Filter::FlickeringStars { .. } => &[],
         }
     }
 
@@ -399,9 +404,9 @@ impl Filter {
             Filter::Astigmatism { .. } => 0.4,
             // 緑内障は早期〜中期で発見されることが多く、末期の広範な暗点化は典型例ではない
             Filter::Glaucoma { .. } => 0.4,
-            // sensus design default: mid-range of the strength=1.0 definition (inner_r=0.25 /
-            // outer_r=0.4 の半径比、中心視野の一部を覆う中等度の中心暗点)。臨床的な重症度
-            // 分布の出典はない
+            // sensus design default: a lower-to-mid default below the strength=1.0 definition
+            // (inner_r=0.25 / outer_r=0.4 の半径比、中心視野の一部を覆う中等度の中心暗点)。
+            // 臨床的な重症度分布の出典はない
             Filter::MacularDegeneration { .. } => 0.4,
             // 同名半盲は「視野の半分が完全に見えない」という all-or-nothing に近い所見なので、
             // 部分的な弱いフィルタは典型像を薄める。フル効果を典型値とする
@@ -412,12 +417,13 @@ impl Filter {
             Filter::TunnelVision { .. } => 0.5,
             // 加齢性白内障は進行がゆっくりで、軽度〜中等度の混濁期間が長い
             Filter::Cataract { .. } => 0.5,
-            // sensus design default: mid-range of the strength=1.0 definition (floaters_mask
-            // が全不透明でブレンドされる状態)。軽度〜中等度の飛蚊症は視野の一部にしか
-            // 見えないことが多いため、フルブレンドより低い値を典型とする
+            // strength は floaters_mask とのブレンド不透明度だけを制御し、飛蚊がどれだけ
+            // 視野を占めるか（密度・大きさ）は density/size payload の責務（strength 自体
+            // には占有範囲の意味がない）。0.4 は「はっきり見えるが完全に不透明ではない、
+            // 半透明の飛蚊」として見せるための sensus 設計上の既定値
             Filter::Floaters { .. } => 0.4,
-            // sensus design default: mid-range of the strength=1.0 definition (bloom 半径最大
-            // ・ハイライトのフルブレンド)
+            // sensus design default: a lower-to-mid default below the strength=1.0 definition
+            // (bloom 半径最大・ハイライトのフルブレンド)
             Filter::Photophobia => 0.4,
             // sensus design default: mid-range of the strength=1.0 definition (30%まで暗化・
             // 完全な photopic→scotopic ブレンド)
@@ -431,8 +437,9 @@ impl Filter {
             // フィルタより強めの値を典型とする
             Filter::VestibularNeuritis => 0.7,
             // 実効的なゴースト濃さ（ghost_alpha = ghost_strength × strength、diplopia()
-            // 実装）は strength 単体では決まらない。ghost_strength を典型的な既定値
-            // （~0.7 程度）とすると、strength=0.7 で実効 alpha ≈ 0.5 相当になる
+            // 実装）は strength 単体では決まらない。ghost_strength は CLI の既定値が 0.7
+            // （crates/cli/src/arguments.rs:196 の `ghost_strength` の `default_value`）
+            // なので、それを典型的な既定値とすると strength=0.7 で実効 alpha ≈ 0.5 相当になる
             Filter::Diplopia { .. } => 0.7,
             // sensus design default: mid-range of the strength=1.0 definition (radius_px は
             // strength × amplitude payload に線形比例)
@@ -443,22 +450,24 @@ impl Filter {
             // sensus design default: mid-range of the strength=1.0 definition (コントラスト
             // 15%圧縮 + 軽い vignette + 1.5px blur)
             Filter::EyeStrain => 0.5,
-            // sensus design default: mid-range of the strength=1.0 definition (タイルごとの
-            // blur 半径が最大 3px まで、パッチ状に発生する)
+            // sensus design default: a lower-to-mid default below the strength=1.0 definition
+            // (タイルごとの blur 半径が最大 3px まで、パッチ状に発生する)
             Filter::DryEye => 0.4,
             // sensus design default: mid-range of the strength=1.0 definition (最大変位
             // 8px)
             Filter::Metamorphopsia { .. } => 0.5,
-            // sensus design default: mid-range of the strength=1.0 definition (コントラスト
-            // を linear 空間で 50% まで圧縮)
+            // sensus design default: a lower-to-mid default below the strength=1.0 definition
+            // (コントラストを linear 空間で 50% まで圧縮)
             Filter::ContrastSensitivity => 0.4,
             // DetailLoss の「程度」は strength ではなく cell_size（タイルサイズ）で表現される
             // 設計（strength は original↔pixelated 間の単純なブレンド係数でしかない）。
             // したがって典型値は 1.0（＝渡された cell_size でのタイル化をそのまま見せる）
-            // とし、"どれくらい荒いか" は呼び出し側が渡す cell_size で調整する
+            // とし、"どれくらい荒いか" は呼び出し側が渡す cell_size で調整する。CLI の
+            // 既定値は 8px（crates/cli/src/arguments.rs:226 の `cell_size` の
+            // `default_value`）で、典型的な粗さの目安になる
             Filter::DetailLoss { .. } => 1.0,
-            // sensus design default: mid-range of the strength=1.0 definition (最大の閃輝
-            // 暗点効果)
+            // strength でリングの輝度と暗点の暗さがスケールする（phenomena.rs:355）。
+            // sensus design default: その中間点を典型値とする
             Filter::Teichopsia => 0.5,
             // sensus design default: mid-range of the strength=1.0 definition (最大200点の
             // 光点)
@@ -753,36 +762,77 @@ pub fn apply_hearing(
 }
 
 impl HearingFilter {
-    /// 条件付きで緊急度が上がる場合の `(上がった後の Urgency, どんな条件で上がるか（英語）)`。
+    /// 受診喚起の緊急度。[`Filter::urgency`] と同じ尺度・同じ考え方（kako-jun/sensus#182）。
     ///
-    /// [`Filter::urgency_escalation`] と同じ考え方（kako-jun/sensus#182）。
-    /// `docs/overview.md` の Medical notes 表の hearing 側で `None / ⚠️` のように両論併記
-    /// されている行（`hearing_loss` / `noise_induced_hearing_loss` / `tinnitus` /
-    /// `hyperacusis` / `misophonia` / `paracusis` / `amusia` / `dysmelodia` /
-    /// `pitch_shift` / `diplacusis` / auditory processing disorder）が対象。
-    /// `sudden_hearing_loss`（既に 🚨 が上限）や `meniere` / `labyrinthitis`（固定の
-    /// ⚠️、`Experience::MENIERE` / `Experience::LABYRINTHITIS` 側で管理）は両論併記では
-    /// ないので `None`。
-    pub fn urgency_escalation(&self) -> Option<(Urgency, &'static str)> {
+    /// 根拠は `docs/overview.md` の Medical notes 表の hearing 側を正本とする。
+    /// `Experience::MENIERE` / `Experience::LABYRINTHITIS` が固定で参照する `Meniere` /
+    /// `Labyrinthitis` は、それらの `Experience::urgency` と矛盾しない値を返す
+    /// （`hearing_filter_urgency_matches_experience_urgency` テストで保証する）。
+    pub fn urgency(&self) -> Urgency {
+        use Urgency::{EarlyConsultation, Emergency, None as NoUrgency};
         match self {
-            // overview.md "Often chronic/benign; sudden onset or one-sided → consult"
+            // overview.md: 聴力低下の系統。突発性・片側性の変化があれば
+            // urgency_escalation() が Emergency を返す
             HearingFilter::HearingLoss
             | HearingFilter::NoiseInducedHearingLoss
             | HearingFilter::Tinnitus { .. }
-            | HearingFilter::Hyperacusis
+            | HearingFilter::Diplacusis
+            | HearingFilter::Paracusis => NoUrgency,
+            // overview.md: 慢性・発達性・心理的な症状で、単独では確立した急性警告サイン
+            // がない
+            HearingFilter::Hyperacusis
             | HearingFilter::Misophonia { .. }
-            | HearingFilter::Paracusis
             | HearingFilter::Amusia
             | HearingFilter::Dysmelodia
             | HearingFilter::PitchShift { .. }
+            | HearingFilter::AuditoryProcessingDisorder => NoUrgency,
+            // overview.md "Sudden sensorineural loss is an otologic emergency"
+            HearingFilter::SuddenHearingLoss { .. } => Emergency,
+            // Experience::MENIERE.urgency と同じ根拠
+            HearingFilter::Meniere => EarlyConsultation,
+            // Experience::LABYRINTHITIS.urgency と同じ根拠
+            HearingFilter::Labyrinthitis => EarlyConsultation,
+        }
+    }
+
+    /// 条件付きで緊急度が上がる場合の `(上がった後の Urgency, どんな条件で上がるか（英語）)`
+    /// のリスト。上がらないフィルタは空スライスを返す（[`Filter::urgency_escalation`] と
+    /// 同じ考え方、kako-jun/sensus#182）。
+    ///
+    /// 聴力低下の系統（`hearing_loss` / `noise_induced_hearing_loss`、および突発性の片側
+    /// 変化が突発性難聴（SSNHL）を示唆しうる `tinnitus` / `diplacusis` / `paracusis`）は
+    /// 2段のエスカレーション（突発・片側なら Emergency、緩徐な変化でも
+    /// EarlyConsultation）を返す。`amusia` / `dysmelodia` / `misophonia` のような先天性・
+    /// 心理的な症状には「片側性の変化」という枠組み自体が意味を持たないため、無理に
+    /// 紐付けず空スライスを返す。`hyperacusis` / `pitch_shift` /
+    /// auditory processing disorder も、単独では確立した急性警告サインがないため空。
+    pub fn urgency_escalation(&self) -> &'static [(Urgency, &'static str)] {
+        use Urgency::{EarlyConsultation, Emergency};
+        match self {
+            // overview.md: 突発性・片側性の聴力変化は突発性難聴(SSNHL)を示唆しうる。
+            // 耳鳴り(tinnitus)・左右で異なる音程に聞こえるダイプラクシス(diplacusis)・
+            // 変音(paracusis)は SSNHL の随伴症状として臨床的に知られる
+            HearingFilter::HearingLoss
+            | HearingFilter::NoiseInducedHearingLoss
+            | HearingFilter::Tinnitus { .. }
             | HearingFilter::Diplacusis
-            | HearingFilter::AuditoryProcessingDisorder => Some((
-                Urgency::EarlyConsultation,
-                "sudden onset or a one-sided change",
-            )),
-            HearingFilter::SuddenHearingLoss { .. } => None,
-            HearingFilter::Meniere => None,
-            HearingFilter::Labyrinthitis => None,
+            | HearingFilter::Paracusis => &[
+                (
+                    Emergency,
+                    "a sudden drop in hearing, especially in one ear (possible sudden \
+                     sensorineural hearing loss)",
+                ),
+                (EarlyConsultation, "a gradual or one-sided change"),
+            ],
+            HearingFilter::Hyperacusis
+            | HearingFilter::PitchShift { .. }
+            | HearingFilter::AuditoryProcessingDisorder => &[],
+            HearingFilter::Misophonia { .. }
+            | HearingFilter::Amusia
+            | HearingFilter::Dysmelodia => &[],
+            HearingFilter::SuddenHearingLoss { .. } => &[],
+            HearingFilter::Meniere => &[],
+            HearingFilter::Labyrinthitis => &[],
         }
     }
 }
@@ -1134,8 +1184,10 @@ mod tests {
     #[test]
     fn every_filter_variant_has_metadata() {
         for filter in all_filter_variants() {
-            // urgency() / citation() / limitations() は全バリアントで呼べる(パニックしない)。
+            // urgency() / urgency_escalation() / citation() / limitations() は全バリアント
+            // で呼べる(パニックしない)。
             let _ = filter.urgency();
+            let _ = filter.urgency_escalation();
             let _ = filter.citation();
             assert!(
                 !filter.limitations().is_empty(),
@@ -1206,48 +1258,12 @@ mod tests {
         assert_eq!(Filter::Tritanopia.recommended_strength(), 1.0);
     }
 
-    #[test]
-    fn urgency_escalation_matches_dual_marked_filters() {
-        // docs/overview.md Medical notes 表で `None / ⚠️` と両論併記されているのは
-        // photophobia / dry_eye / bppv_rotation の3つだけ。
-        for filter in [Filter::Photophobia, Filter::DryEye, Filter::BppvRotation] {
-            assert_eq!(
-                filter.urgency(),
-                Urgency::None,
-                "{filter:?}: base urgency() should be None for a dual-marked filter"
-            );
-            let (escalated, reason) = filter
-                .urgency_escalation()
-                .unwrap_or_else(|| panic!("{filter:?} should have an escalation path"));
-            assert_eq!(escalated, Urgency::EarlyConsultation);
-            assert!(!reason.is_empty());
-        }
-
-        // vertigo は bppv_rotation とは別扱いの特例: overview.md の表では両論併記の行に
-        // 同居していたが、フィルタ単体としては常に EarlyConsultation なので escalation
-        // path を持たない。
-        assert_eq!(Filter::Vertigo.urgency_escalation(), None);
-
-        // 既に Emergency（分類の上限）のフィルタは escalation path を持たない。
-        assert_eq!(
-            Filter::Hemianopia {
-                side: 0.0,
-                field_loss_mode: vision::FieldLossMode::Darken,
-            }
-            .urgency_escalation(),
-            None
-        );
-
-        // None のまま固定で、両論併記でもないフィルタも escalation path を持たない。
-        assert_eq!(Filter::Protanopia.urgency_escalation(), None);
-    }
-
-    #[test]
-    fn hearing_filter_urgency_escalation_matches_dual_marked_rows() {
-        // docs/overview.md Medical notes 表の hearing 側で `None / ⚠️` と両論併記されて
-        // いる行に対応する HearingFilter バリアント。
-        let dual_marked = [
+    /// `HearingFilter` の全14バリアントを網羅する固定リスト（`all_filter_variants()` の
+    /// hearing 版）。
+    fn all_hearing_filter_variants() -> Vec<HearingFilter> {
+        vec![
             HearingFilter::HearingLoss,
+            HearingFilter::SuddenHearingLoss { freq_hz: 4000.0 },
             HearingFilter::NoiseInducedHearingLoss,
             HearingFilter::Tinnitus { freq_hz: 4000.0 },
             HearingFilter::Hyperacusis,
@@ -1258,22 +1274,168 @@ mod tests {
             HearingFilter::PitchShift { semitones: 0.0 },
             HearingFilter::Diplacusis,
             HearingFilter::AuditoryProcessingDisorder,
-        ];
-        for filter in dual_marked {
-            let (escalated, reason) = filter
-                .urgency_escalation()
-                .unwrap_or_else(|| panic!("{filter:?} should have an escalation path"));
+            HearingFilter::Meniere,
+            HearingFilter::Labyrinthitis,
+        ]
+    }
+
+    #[test]
+    fn urgency_escalation_matches_dual_marked_filters() {
+        // docs/overview.md Medical notes 表で `None / ⚠️` と両論併記されているのは
+        // photophobia / dry_eye / bppv_rotation の3つだけ。
+        for filter in [Filter::Photophobia, Filter::DryEye, Filter::BppvRotation] {
+            assert_eq!(
+                filter.urgency(),
+                Urgency::None,
+                "{filter:?}: base urgency() should be None for a dual-marked filter"
+            );
+            let escalations = filter.urgency_escalation();
+            assert_eq!(
+                escalations.len(),
+                1,
+                "{filter:?}: should have exactly one escalation entry"
+            );
+            let (escalated, reason) = escalations[0];
             assert_eq!(escalated, Urgency::EarlyConsultation);
             assert!(!reason.is_empty());
         }
 
-        // 単一の固定緊急度を持つフィルタ（両論併記ではない）は escalation path を持たない。
+        // vertigo は bppv_rotation とは別扱いの特例: overview.md の表では両論併記の行に
+        // 同居していたが、フィルタ単体としては常に EarlyConsultation なので escalation
+        // path を持たない。
+        assert!(Filter::Vertigo.urgency_escalation().is_empty());
+
+        // 既に Emergency（分類の上限）のフィルタは escalation path を持たない。
+        assert!(Filter::Hemianopia {
+            side: 0.0,
+            field_loss_mode: vision::FieldLossMode::Darken,
+        }
+        .urgency_escalation()
+        .is_empty());
+
+        // None のまま固定で、両論併記でもないフィルタも escalation path を持たない。
+        assert!(Filter::Protanopia.urgency_escalation().is_empty());
+    }
+
+    /// `all_filter_variants()` を全件走査し、`urgency_escalation()` が非空を返すのは
+    /// photophobia / dry_eye / bppv_rotation の3種だけであることを固定する
+    /// （kako-jun/sensus#182）。
+    #[test]
+    fn only_three_filter_variants_have_urgency_escalation() {
+        let non_empty: Vec<Filter> = all_filter_variants()
+            .into_iter()
+            .filter(|f| !f.urgency_escalation().is_empty())
+            .collect();
         assert_eq!(
-            HearingFilter::SuddenHearingLoss { freq_hz: 4000.0 }.urgency_escalation(),
-            None
+            non_empty.len(),
+            3,
+            "expected exactly 3 Filter variants with a non-empty urgency_escalation(), got \
+             {non_empty:?}"
         );
-        assert_eq!(HearingFilter::Meniere.urgency_escalation(), None);
-        assert_eq!(HearingFilter::Labyrinthitis.urgency_escalation(), None);
+        for filter in non_empty {
+            assert!(
+                matches!(
+                    filter,
+                    Filter::Photophobia | Filter::DryEye | Filter::BppvRotation
+                ),
+                "unexpected Filter variant with a non-empty urgency_escalation(): {filter:?}"
+            );
+        }
+    }
+
+    /// 聴力低下の系統（hearing_loss / noise_induced_hearing_loss / tinnitus /
+    /// diplacusis / paracusis）は、突発・片側なら Emergency、緩徐な変化でも
+    /// EarlyConsultation という2段のエスカレーションを返す。
+    #[test]
+    fn hearing_filter_urgency_escalation_matches_hearing_loss_family() {
+        let hearing_loss_family = [
+            HearingFilter::HearingLoss,
+            HearingFilter::NoiseInducedHearingLoss,
+            HearingFilter::Tinnitus { freq_hz: 4000.0 },
+            HearingFilter::Diplacusis,
+            HearingFilter::Paracusis,
+        ];
+        for filter in hearing_loss_family {
+            let escalations = filter.urgency_escalation();
+            assert_eq!(
+                escalations.len(),
+                2,
+                "{filter:?}: should have exactly two escalation entries"
+            );
+            assert_eq!(escalations[0].0, Urgency::Emergency);
+            assert!(!escalations[0].1.is_empty());
+            assert_eq!(escalations[1].0, Urgency::EarlyConsultation);
+            assert!(!escalations[1].1.is_empty());
+        }
+    }
+
+    /// `all_hearing_filter_variants()` を全件走査し、`urgency_escalation()` が非空を
+    /// 返すのは聴力低下の系統5種（hearing_loss / noise_induced_hearing_loss / tinnitus /
+    /// diplacusis / paracusis）だけであることを固定する。congenital/psychological な
+    /// amusia/dysmelodia/misophonia、単独では急性警告サインが確立していない
+    /// hyperacusis/pitch_shift/APD、固定の緊急度を持つ sudden_hearing_loss/meniere/
+    /// labyrinthitis はいずれも escalation path を持たない。
+    #[test]
+    fn only_hearing_loss_family_has_urgency_escalation() {
+        let non_empty: Vec<HearingFilter> = all_hearing_filter_variants()
+            .into_iter()
+            .filter(|f| !f.urgency_escalation().is_empty())
+            .collect();
+        assert_eq!(
+            non_empty.len(),
+            5,
+            "expected exactly 5 HearingFilter variants with a non-empty urgency_escalation(), \
+             got {non_empty:?}"
+        );
+        for filter in non_empty {
+            assert!(
+                matches!(
+                    filter,
+                    HearingFilter::HearingLoss
+                        | HearingFilter::NoiseInducedHearingLoss
+                        | HearingFilter::Tinnitus { .. }
+                        | HearingFilter::Diplacusis
+                        | HearingFilter::Paracusis
+                ),
+                "unexpected HearingFilter variant with a non-empty urgency_escalation(): \
+                 {filter:?}"
+            );
+        }
+    }
+
+    /// `Experience` に定義済みの全定数を横断し、hearing 側フィルタを持つものは
+    /// `HearingFilter::urgency()` が `Experience::urgency` と矛盾しないことを保証する
+    /// （[`filter_urgency_matches_experience_urgency`] の hearing 版）。
+    #[test]
+    fn hearing_filter_urgency_matches_experience_urgency() {
+        let experiences = [
+            Experience::MENIERE,
+            Experience::BPPV,
+            Experience::VESTIBULAR_NEURITIS,
+            Experience::LABYRINTHITIS,
+        ];
+        for experience in experiences {
+            let urgency = experience.urgency;
+            let id = experience.id;
+            if let Some(hearing_filter) = experience.hearing {
+                assert_eq!(
+                    hearing_filter.urgency(),
+                    urgency,
+                    "Experience::{id}: HearingFilter::urgency() disagrees with \
+                     Experience::urgency"
+                );
+            }
+        }
+    }
+
+    /// `HearingFilter` の全14バリアントで `urgency()` / `urgency_escalation()` が呼べる
+    /// (パニックしない)ことを確認する。
+    #[test]
+    fn every_hearing_filter_variant_has_metadata() {
+        for filter in all_hearing_filter_variants() {
+            let _ = filter.urgency();
+            let _ = filter.urgency_escalation();
+        }
     }
 
     /// `Filter` の全30バリアントが `std::mem::discriminant` で相互に異なることを固定する
