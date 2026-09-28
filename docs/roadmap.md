@@ -54,7 +54,8 @@ universal-experience（Flutter）との接続のみで、これは Flutter 環�
 - [x] CHANGELOG.md 作成 — #1
 - [x] `cargo publish`（crates.io v0.1.0）— #12
 - [x] `cargo publish` v0.5.0 — 公開済み（crates.io で確認、2026-07-23 時点の記載が陳腐化していたため訂正）
-- [ ] `cargo publish` v0.6.0 — #164 監査キャンペーン（#165-171）反映版。`/publish` から手動
+- [x] `cargo publish` v0.6.0 — #164 監査キャンペーン（#165-171）反映版。公開済み
+- [ ] `cargo publish` v0.6.1 — #182/#183 フィルタ単位メタデータ API（urgency / urgency_escalation / recommended_strength / citation / limitations）反映版。`/publish` から手動
 - [ ] universal-experience 接続方針メモ — #11
 
 ## 関連リポジトリ
