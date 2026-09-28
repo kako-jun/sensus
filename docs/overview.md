@@ -730,21 +730,22 @@ potentially-drifting copy of this information:
   `hearing_filter_urgency_matches_experience_urgency` in
   `crates/core/src/lib.rs`).
 - `urgency_escalation() -> &'static [(Urgency, &'static str)]` (`Filter` and
-  `HearingFilter`) — for the rows below marked `None (🚨/⚠️ if ...)`
-  (`photophobia`, `dry_eye`, `bppv_rotation` on the vision side; the
-  hearing-loss family — `hearing_loss`, `noise_induced_hearing_loss`,
-  `tinnitus`, `diplacusis`, `paracusis` — on the hearing side), `urgency()`
-  returns the *typical* (benign) classification and this method returns the
-  ordered list of `(escalated Urgency, short English condition)` pairs that
-  would justify it. It is a slice rather than a single `Option` because the
-  hearing-loss family has **two** escalation steps (a sudden, especially
-  one-sided, drop is `Urgency::Emergency`; a gradual or one-sided change is
-  still `Urgency::EarlyConsultation`). Filters that are not dual-marked in
-  the table, or that are already at `Urgency::Emergency`, return `&[]`.
+  `HearingFilter`) — for the rows below marked `None / ⚠️`
+  (`photophobia`, `dry_eye`, `bppv_rotation` on the vision side) or
+  `None (🚨 if ...; ⚠️ if ...)` (the hearing-loss family — `hearing_loss`,
+  `noise_induced_hearing_loss`, `tinnitus`, `diplacusis`, `paracusis` — on the
+  hearing side), `urgency()` returns the *typical* (benign) classification
+  and this method returns the ordered list of `(escalated Urgency, short
+  English condition)` pairs that would justify it. It is a slice rather than
+  a single `Option` because the hearing-loss family has **two** escalation
+  steps (a sudden drop, especially in one ear, is `Urgency::Emergency`; a new
+  or worsening change, particularly in one ear, is still
+  `Urgency::EarlyConsultation`). Filters that are not dual-marked in the
+  table, or that are already at `Urgency::Emergency`, return `&[]`.
   Congenital or psychological hearing symptoms (`amusia`, `dysmelodia`,
-  `misophonia`) are deliberately **not** given a "one-sided change" condition
-  — that framing only makes sense for symptoms of unilateral hearing-organ
-  damage — and return `&[]` rather than a fabricated one.
+  `misophonia`) are deliberately **not** given a "particularly in one ear"
+  condition — that framing only makes sense for symptoms of unilateral
+  hearing-organ damage — and return `&[]` rather than a fabricated one.
 - `recommended_strength() -> f32` (`Filter` only) — a typical/representative
   severity in `(0.0, 1.0]`, **not** the strongest effect the filter can
   produce. `strength = 1.0` is frequently an extreme (e.g. `tunnel_vision` at
@@ -816,7 +817,7 @@ source of truth for `Filter::urgency()` above:
 | `vestibular_neuritis` | 🚨 emergency | Sudden severe vertigo needs stroke differentiation. |
 | `sudden_hearing_loss` | 🚨 emergency | Sudden sensorineural loss is an otologic emergency. |
 | `meniere`, `labyrinthitis` | ⚠️ early consultation | Vertigo + hearing change → ENT evaluation. |
-| `hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`, `diplacusis`, `paracusis` | None (🚨 if sudden, especially one-sided) | Often chronic; a sudden drop in hearing — especially in one ear — may be sudden sensorineural hearing loss (an otologic emergency, same as `sudden_hearing_loss` above); a gradual or one-sided change should still be evaluated. |
+| `hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`, `diplacusis`, `paracusis` | None (🚨 if sudden, especially in one ear; ⚠️ if new or worsening) | Often chronic; a sudden drop in hearing — especially in one ear — may be sudden sensorineural hearing loss (an otologic emergency, same as `sudden_hearing_loss` above); any other new or worsening change, particularly in one ear, should still be evaluated. |
 | `hyperacusis`, `misophonia`, `amusia`, `dysmelodia`, `pitch_shift`, `auditory_processing_disorder` | None | Often chronic, developmental, or psychological; no specific acute warning sign is established for these on their own. |
 
 ## Out of scope / Non-goals

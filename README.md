@@ -240,17 +240,18 @@ typical there). `urgency()` matches `Experience::urgency` for any filter an
 `Experience` canonically pairs (e.g. `Filter::BppvRotation` and
 `Experience::BPPV`, or `HearingFilter::Meniere` and `Experience::MENIERE`,
 never disagree). For the filters `docs/overview.md`'s Medical notes table
-marks `None (🚨/⚠️ if ...)` (`photophobia`, `dry_eye`, `bppv_rotation` on the
-vision side; the hearing-loss family — `hearing_loss`,
-`noise_induced_hearing_loss`, `tinnitus`, `diplacusis`, `paracusis` — on the
-hearing side), `urgency_escalation()` returns an ordered list of
-`(escalated Urgency, short English condition)` pairs (the hearing-loss family
-has two steps: a sudden one-sided drop is `Emergency`, a gradual or
-one-sided change is `EarlyConsultation`); other filters return `&[]`. See
-`docs/overview.md` "Medical notes" for the source table, and each filter's
-doc comment / `docs/adr/matrix-provenance.md` for the citations `citation()`
-returns. **None of this metadata has had medical review** — see the
-`impl Filter` doc comment in the API docs.
+marks `None / ⚠️` (`photophobia`, `dry_eye`, `bppv_rotation` on the vision
+side) or `None (🚨 if ...; ⚠️ if ...)` (the hearing-loss family —
+`hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`, `diplacusis`,
+`paracusis` — on the hearing side), `urgency_escalation()` returns an ordered
+list of `(escalated Urgency, short English condition)` pairs (the
+hearing-loss family has two steps: a sudden drop, especially in one ear, is
+`Emergency`; a new or worsening change, particularly in one ear, is still
+`EarlyConsultation`); other filters return `&[]`. See `docs/overview.md`
+"Medical notes" for the source table, and each filter's doc comment /
+`docs/adr/matrix-provenance.md` for the citations `citation()` returns.
+**None of this metadata has had medical review** — see the `impl Filter` doc
+comment in the API docs.
 
 ### Hearing filters
 

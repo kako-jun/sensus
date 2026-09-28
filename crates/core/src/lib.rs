@@ -438,8 +438,9 @@ impl Filter {
             Filter::VestibularNeuritis => 0.7,
             // 実効的なゴースト濃さ（ghost_alpha = ghost_strength × strength、diplopia()
             // 実装）は strength 単体では決まらない。ghost_strength は CLI の既定値が 0.7
-            // （crates/cli/src/arguments.rs:196 の `ghost_strength` の `default_value`）
-            // なので、それを典型的な既定値とすると strength=0.7 で実効 alpha ≈ 0.5 相当になる
+            // （crates/cli/src/arguments.rs の `Cli::ghost_strength` フィールドの
+            // `default_value`）なので、それを典型的な既定値とすると strength=0.7 で
+            // 実効 alpha ≈ 0.5 相当になる
             Filter::Diplopia { .. } => 0.7,
             // sensus design default: mid-range of the strength=1.0 definition (radius_px は
             // strength × amplitude payload に線形比例)
@@ -463,10 +464,11 @@ impl Filter {
             // 設計（strength は original↔pixelated 間の単純なブレンド係数でしかない）。
             // したがって典型値は 1.0（＝渡された cell_size でのタイル化をそのまま見せる）
             // とし、"どれくらい荒いか" は呼び出し側が渡す cell_size で調整する。CLI の
-            // 既定値は 8px（crates/cli/src/arguments.rs:226 の `cell_size` の
+            // 既定値は 8px（crates/cli/src/arguments.rs の `Cli::cell_size` フィールドの
             // `default_value`）で、典型的な粗さの目安になる
             Filter::DetailLoss { .. } => 1.0,
-            // strength でリングの輝度と暗点の暗さがスケールする（phenomena.rs:355）。
+            // strength でリングの輝度と暗点の暗さがスケールする
+            // （`vision::phenomena::teichopsia` の doc comment のアルゴリズム欄を参照）。
             // sensus design default: その中間点を典型値とする
             Filter::Teichopsia => 0.5,
             // sensus design default: mid-range of the strength=1.0 definition (最大200点の
@@ -822,7 +824,10 @@ impl HearingFilter {
                     "a sudden drop in hearing, especially in one ear (possible sudden \
                      sensorineural hearing loss)",
                 ),
-                (EarlyConsultation, "a gradual or one-sided change"),
+                (
+                    EarlyConsultation,
+                    "a new or worsening change, particularly in one ear",
+                ),
             ],
             HearingFilter::Hyperacusis
             | HearingFilter::PitchShift { .. }
@@ -1438,6 +1443,46 @@ mod tests {
         }
     }
 
+    /// `HearingFilter::urgency()` の値を `docs/overview.md` の Medical notes 表（hearing
+    /// 側）に固定でピン留めする。表の該当行を書き換えたら、このテストも合わせて更新する。
+    #[test]
+    fn hearing_filter_urgency_matches_medical_notes_table() {
+        use Urgency::{EarlyConsultation, Emergency, None as NoUrgency};
+
+        let expected: [(HearingFilter, Urgency); 14] = [
+            // overview.md: 聴力低下の系統（None、突発・片側なら urgency_escalation() が
+            // Emergency を返す）
+            (HearingFilter::HearingLoss, NoUrgency),
+            (HearingFilter::NoiseInducedHearingLoss, NoUrgency),
+            (HearingFilter::Tinnitus { freq_hz: 4000.0 }, NoUrgency),
+            (HearingFilter::Diplacusis, NoUrgency),
+            (HearingFilter::Paracusis, NoUrgency),
+            // overview.md: 慢性・発達性・心理的な症状（None、escalation なし）
+            (HearingFilter::Hyperacusis, NoUrgency),
+            (HearingFilter::Misophonia { freq_hz: 4000.0 }, NoUrgency),
+            (HearingFilter::Amusia, NoUrgency),
+            (HearingFilter::Dysmelodia, NoUrgency),
+            (HearingFilter::PitchShift { semitones: 0.0 }, NoUrgency),
+            (HearingFilter::AuditoryProcessingDisorder, NoUrgency),
+            // overview.md "Sudden sensorineural loss is an otologic emergency"
+            (
+                HearingFilter::SuddenHearingLoss { freq_hz: 4000.0 },
+                Emergency,
+            ),
+            // overview.md "Vertigo + hearing change → ENT evaluation"
+            (HearingFilter::Meniere, EarlyConsultation),
+            (HearingFilter::Labyrinthitis, EarlyConsultation),
+        ];
+
+        for (filter, urgency) in expected {
+            assert_eq!(
+                filter.urgency(),
+                urgency,
+                "{filter:?}: urgency() does not match docs/overview.md Medical notes table"
+            );
+        }
+    }
+
     /// `Filter` の全30バリアントが `std::mem::discriminant` で相互に異なることを固定する
     /// （`all_filter_variants()` が同じバリアントを重複列挙してしまい、他のメタデータ
     /// 網羅テストが穴を見逃す事態を防ぐ）。
@@ -1452,6 +1497,24 @@ mod tests {
             unique.len(),
             variants.len(),
             "all_filter_variants() must list 30 distinct Filter variants (by discriminant)"
+        );
+    }
+
+    /// `HearingFilter` の全14バリアントが `std::mem::discriminant` で相互に異なることを
+    /// 固定する（`Filter` 側の `all_filter_variants_have_distinct_discriminants` の
+    /// hearing 版）。
+    #[test]
+    fn all_hearing_filter_variants_have_distinct_discriminants() {
+        use std::collections::HashSet;
+        use std::mem::discriminant;
+
+        let variants = all_hearing_filter_variants();
+        let unique: HashSet<_> = variants.iter().map(discriminant).collect();
+        assert_eq!(
+            unique.len(),
+            variants.len(),
+            "all_hearing_filter_variants() must list 14 distinct HearingFilter variants (by \
+             discriminant)"
         );
     }
 
