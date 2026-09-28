@@ -208,6 +208,51 @@ cylindrical lens / line spread function), not an elliptical disk — see
 The same function signatures can be applied frame-by-frame for video, or
 chained together via `sensus_core::pipeline`.
 
+### Filter metadata
+
+Every `Filter` variant exposes static metadata so a host UI does not have to
+maintain its own (potentially inconsistent) copy of urgency, typical
+strength, sourcing, or caveats. `HearingFilter` exposes the same `urgency()` /
+`urgency_escalation()` pair:
+
+```rust
+use sensus_core::{Filter, HearingFilter};
+
+fn describe(filter: Filter, hearing_filter: HearingFilter) {
+    let _urgency    = filter.urgency();               // same scale as Experience::urgency
+    let _escalation = filter.urgency_escalation();     // &'static [(Urgency, &'static str)]
+    let _typical    = filter.recommended_strength();   // typical severity, in (0.0, 1.0]
+    let _source     = filter.citation();                // Option<&'static str>, None if undocumented
+    let _caveat     = filter.limitations();             // what this simulation can't show
+
+    let _h_urgency    = hearing_filter.urgency();
+    let _h_escalation = hearing_filter.urgency_escalation();
+}
+```
+
+`recommended_strength()` (vision-only) is **not** the strongest effect the
+filter can produce — `strength = 1.0` is often an extreme (e.g.
+`tunnel_vision` at `1.0` is close to total field closure). It is the degree
+most consumers should default to when demonstrating "what this typically
+looks like" (the documented exception is `protanopia` / `deuteranopia` /
+`tritanopia`: the name itself denotes full-severity dichromacy, so `1.0` *is*
+typical there). `urgency()` matches `Experience::urgency` for any filter an
+`Experience` canonically pairs (e.g. `Filter::BppvRotation` and
+`Experience::BPPV`, or `HearingFilter::Meniere` and `Experience::MENIERE`,
+never disagree). For the filters `docs/overview.md`'s Medical notes table
+marks `None / ⚠️` (`photophobia`, `dry_eye`, `bppv_rotation` on the vision
+side) or `None (🚨 if ...; ⚠️ if ...)` (the hearing-loss family —
+`hearing_loss`, `noise_induced_hearing_loss`, `tinnitus`, `diplacusis`,
+`paracusis` — on the hearing side), `urgency_escalation()` returns an ordered
+list of `(escalated Urgency, short English condition)` pairs (the
+hearing-loss family has two steps: a sudden drop, especially in one ear, is
+`Emergency`; a new or worsening change, particularly in one ear, is still
+`EarlyConsultation`); other filters return `&[]`. See `docs/overview.md`
+"Medical notes" for the source table, and each filter's doc comment /
+`docs/adr/matrix-provenance.md` for the citations `citation()` returns.
+**None of this metadata has had medical review** — see the `impl Filter` doc
+comment in the API docs.
+
 ### Hearing filters
 
 Hearing filters live in `sensus_core::hearing` and are dispatched via
