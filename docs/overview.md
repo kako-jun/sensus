@@ -714,11 +714,45 @@ intrinsic limit of an 8-bit-output check.
 > only above ~1363 px). The CPU / CLI path is unaffected. A fixed-tap rewrite
 > of these two shaders is tracked as a follow-up.
 
+## Per-filter metadata API (kako-jun/sensus#182)
+
+Every `Filter` variant implements four metadata methods so a host UI does not
+need to keep its own, potentially-drifting copy of this information:
+
+- `urgency() -> Urgency` — same scale, same reasoning as `Experience::urgency`
+  (see the table below, which is this method's source of truth). Filters an
+  `Experience` canonically pairs with a vision filter (e.g. `Experience::BPPV`
+  ↔ `Filter::BppvRotation`) always report the same `Urgency` on both sides —
+  this is enforced by a test (`filter_urgency_matches_experience_urgency` in
+  `crates/core/src/lib.rs`).
+- `recommended_strength() -> f32` — a typical/representative severity in
+  `(0.0, 1.0]`, **not** the strongest effect the filter can produce.
+  `strength = 1.0` is frequently an extreme (e.g. `tunnel_vision` at `1.0` is
+  close to total field closure), so a host that always starts a demo at
+  `1.0` overstates the everyday experience of the condition. Each value's
+  reasoning (a documented clinical range, or an explicit "sensus design
+  default" when no such range exists) is a code comment on the match arm in
+  `crates/core/src/lib.rs`.
+- `citation() -> Option<&'static str>` — the model name and source backing the
+  filter's algorithm (e.g. Machado 2009 for the color-vision-deficiency
+  matrices), or `None` when no such source is documented elsewhere in this
+  repository. No citation is invented for this API; it only surfaces sources
+  already recorded in `docs/adr/matrix-provenance.md` or a module's doc
+  comment.
+- `limitations() -> &'static str` — a one-to-two-sentence English statement of
+  what the simulation does *not* capture (e.g. "a single uniform blur radius,
+  not depth-dependent defocus" for the refractive filters).
+
+**None of these four methods has had medical review.** Values without an
+explicit citation are sensus's own engineering judgment calls, documented
+inline, not a clinician's assessment.
+
 ## Medical notes (when to see a doctor)
 
 sensus pairs each filter with a "when to see a doctor" note so the simulation
 doubles as an early-warning primer. The urgency vocabulary matches the
-[`Urgency`](../crates/core/src/lib.rs) enum used by `Experience`:
+[`Urgency`](../crates/core/src/lib.rs) enum used by `Experience`, and is the
+source of truth for `Filter::urgency()` above:
 
 - **Emergency** (🚨) — possible stroke / retinal-detachment / acute sign; seek
   care immediately.

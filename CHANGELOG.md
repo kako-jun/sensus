@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **feat: per-`Filter`-variant metadata API — `urgency()` / `recommended_strength()` / `citation()` / `limitations()`**: consumers (universal-experience) previously maintained their own urgency classification per filter, which could disagree with `Experience::urgency` for the same condition (e.g. BPPV: `Experience::BPPV.urgency` is `None`, but a consumer-side table said "early consultation"), and defaulted every filter's demo `strength` to `1.0`, which for filters like `tunnel_vision` renders a near-total field closure rather than a typical case. `Filter` now exposes: `urgency() -> Urgency` (same scale and reasoning as `Experience::urgency`, and consistent with it for every filter an `Experience` canonically pairs — enforced by a test); `recommended_strength() -> f32` (a typical/representative severity in `(0.0, 1.0]`, not the strongest effect the filter can produce); `citation() -> Option<&'static str>` (model name + source, `None` when no source is documented — no citation is invented for this API); `limitations() -> &'static str` (a short English statement of what the simulation can't show). All 30 `Filter` variants are covered by an exhaustive match (no wildcard arm) and by tests. **None of this metadata has had medical review**, which is stated on the `impl Filter` doc comment (kako-jun/sensus#182).
+
 ## [0.6.0] - 2026-07-23
 
 ### Fixed
