@@ -766,10 +766,10 @@ potentially-drifting copy of this information:
   `van Norren & Vos (1974)` reference — see `light.rs`), `citation()`
   conservatively omits it rather than assert an unverified match; tracked in
   kako-jun/sensus#184.
-- `limitations() -> &'static str` (`Filter` only) — a one-to-two-sentence
-  English statement of what the simulation does *not* capture (e.g. "a single
-  uniform blur radius, not depth-dependent defocus" for the refractive
-  filters).
+- `limitations() -> &'static str` (`Filter` only) — a short
+  plain-English statement of what the simulation does *not* capture (e.g. "a
+  single uniform blur radius, not depth-dependent defocus" for the refractive
+  filters); no `::` paths or backticks (enforced by a test).
 
 **None of this metadata has had medical review.** Values without an explicit
 citation are sensus's own engineering judgment calls, documented inline, not
