@@ -599,11 +599,11 @@ impl Filter {
                 "Represents a static snapshot of a condition that usually develops gradually \
                  over years and is often worse in low light, neither of which a single strength \
                  value on a still image can show. The strength setting simultaneously \
-                 controls both the remaining field radius and how dark the lost periphery becomes, so it cannot \
-                 vary the two independently. When the lost periphery is rendered as a dark \
-                 void, this overstates the effect compared to how the brain fills in missing \
-                 peripheral vision; real experience is usually closer to a blurred, faded, \
-                 or unnoticed region."
+                 controls both the remaining field radius and how dark the lost periphery \
+                 becomes, so it cannot vary the two independently. When the lost periphery \
+                 is rendered as a dark void, this overstates the effect compared to how the \
+                 brain fills in missing peripheral vision; real experience is usually closer \
+                 to a blurred, faded, or unnoticed region."
             }
             Filter::Cataract { .. } => {
                 "Combines lens-yellowing and scatter glare into one strength axis; does not \
