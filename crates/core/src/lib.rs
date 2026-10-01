@@ -574,34 +574,36 @@ impl Filter {
             Filter::Glaucoma { .. } => {
                 "Uses an idealized static field-defect pattern (vignette or arcuate scotoma); \
                  real glaucomatous field loss is irregular and progresses gradually over years, \
-                 which a single still-image strength cannot convey. This simulation renders \
-                 the lost field as a dark void, which overstates the effect compared to how \
-                 the brain fills in missing regions; real experience is usually closer to a \
-                 soft blur."
+                 which a single still-image strength cannot convey. When the lost field is \
+                 rendered as a dark void, this overstates the effect compared to how the \
+                 brain fills in missing regions; real experience is usually closer to a \
+                 blurred, faded, or unnoticed region."
             }
             Filter::MacularDegeneration { .. } => {
                 "Models the central scotoma as a smooth radial gradient; real AMD scotomas are \
                  often patchy and irregular, and this filter does not include the distortion \
-                 covered separately by the metamorphopsia filter. This simulation renders \
-                 the scotoma as a dark void, which overstates the effect compared to how the \
-                 brain fills in missing central vision; real experience is usually closer to \
-                 a soft blur."
+                 covered separately by the metamorphopsia filter. When the scotoma is \
+                 rendered as a dark void, this overstates the effect compared to how the \
+                 brain fills in missing central vision; real experience is usually closer \
+                 to a blurred, faded, or unnoticed region."
             }
             Filter::Hemianopia { .. } => {
                 "Splits the field at the image's horizontal centre rather than at the viewer's \
                  point of fixation, with a fixed soft edge; real field cuts may be incomplete, \
-                 quadrantic, or macular-sparing. This simulation renders the lost half as \
-                 a dark void, which overstates the effect compared to how the brain fills in \
-                 a missing hemifield; real experience is usually closer to a soft blur."
+                 quadrantic, or macular-sparing. When the lost half is rendered as a dark \
+                 void, this overstates the effect compared to how the brain fills in a \
+                 missing hemifield; real experience is usually closer to a blurred, faded, \
+                 or unnoticed region."
             }
             Filter::TunnelVision { .. } => {
                 "Represents a static snapshot of a condition that usually develops gradually \
                  over years and is often worse in low light, neither of which a single strength \
-                 value on a still image can show. The strength setting simultaneously controls both the \
-                 remaining field radius and how dark the lost periphery becomes, so it cannot \
-                 vary the two independently. This simulation renders the lost periphery as \
-                 a dark void, which overstates the effect compared to how the brain fills in \
-                 missing peripheral vision; real experience is usually closer to a soft blur."
+                 value on a still image can show. The strength setting simultaneously \
+                 controls both the remaining field radius and how dark the lost periphery becomes, so it cannot \
+                 vary the two independently. When the lost periphery is rendered as a dark \
+                 void, this overstates the effect compared to how the brain fills in missing \
+                 peripheral vision; real experience is usually closer to a blurred, faded, \
+                 or unnoticed region."
             }
             Filter::Cataract { .. } => {
                 "Combines lens-yellowing and scatter glare into one strength axis; does not \

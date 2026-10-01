@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **fix: `Filter::limitations()` no longer leaks Rust identifiers into user-facing text**: the Glaucoma / MacularDegeneration / Hemianopia / TunnelVision entries mentioned `FieldLossMode::Darken` / `FieldLossMode::Blur` (in backticks) and "the default", which is meaningless to end users who see this text in an app UI. They now say in plain English that the simulation renders the lost field as a dark void, which overstates the effect compared to real experience (usually closer to a soft blur). A test now asserts no `limitations()` text contains `::` or backticks (kako-jun/sensus#192).
+- **fix: `Filter::limitations()` no longer leaks Rust identifiers into user-facing text**: the Glaucoma / MacularDegeneration / Hemianopia / TunnelVision entries mentioned `FieldLossMode::Darken` / `FieldLossMode::Blur` (in backticks) and "the default", which is meaningless to end users who see this text in an app UI. They now say in plain English, conditionally ("When the lost field is rendered as a dark void ..."), that a dark-void rendering overstates the effect compared to real experience (usually closer to a blurred, faded, or unnoticed region); the wording holds for either `FieldLossMode`. A test now asserts no `limitations()` text contains `::` or backticks (kako-jun/sensus#192).
 
 ## [0.6.1] - 2026-09-28
 
