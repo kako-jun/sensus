@@ -574,36 +574,34 @@ impl Filter {
             Filter::Glaucoma { .. } => {
                 "Uses an idealized static field-defect pattern (vignette or arcuate scotoma); \
                  real glaucomatous field loss is irregular and progresses gradually over years, \
-                 which a single still-image strength cannot convey. The default \
-                 `FieldLossMode::Darken` also renders the lost field as a dark void, which \
-                 overstates the effect compared to how the brain fills in missing regions; \
-                 `FieldLossMode::Blur` is closer to typically reported experience."
+                 which a single still-image strength cannot convey. This simulation renders \
+                 the lost field as a dark void, which overstates the effect compared to how \
+                 the brain fills in missing regions; real experience is usually closer to a \
+                 soft blur."
             }
             Filter::MacularDegeneration { .. } => {
                 "Models the central scotoma as a smooth radial gradient; real AMD scotomas are \
                  often patchy and irregular, and this filter does not include the distortion \
-                 covered separately by the metamorphopsia filter. The default \
-                 `FieldLossMode::Darken` also renders the scotoma as a dark void, which \
-                 overstates the effect compared to how the brain fills in missing central \
-                 vision; `FieldLossMode::Blur` is closer to typically reported experience."
+                 covered separately by the metamorphopsia filter. This simulation renders \
+                 the scotoma as a dark void, which overstates the effect compared to how the \
+                 brain fills in missing central vision; real experience is usually closer to \
+                 a soft blur."
             }
             Filter::Hemianopia { .. } => {
                 "Splits the field at the image's horizontal centre rather than at the viewer's \
                  point of fixation, with a fixed soft edge; real field cuts may be incomplete, \
-                 quadrantic, or macular-sparing. The default `FieldLossMode::Darken` also \
-                 renders the lost half as a dark void, which overstates the effect compared to \
-                 how the brain fills in a missing hemifield; `FieldLossMode::Blur` is closer to \
-                 typically reported experience."
+                 quadrantic, or macular-sparing. This simulation renders the lost half as \
+                 a dark void, which overstates the effect compared to how the brain fills in \
+                 a missing hemifield; real experience is usually closer to a soft blur."
             }
             Filter::TunnelVision { .. } => {
                 "Represents a static snapshot of a condition that usually develops gradually \
                  over years and is often worse in low light, neither of which a single strength \
-                 value on a still image can show. `strength` simultaneously controls both the \
+                 value on a still image can show. The strength setting simultaneously controls both the \
                  remaining field radius and how dark the lost periphery becomes, so it cannot \
-                 vary the two independently. The default `FieldLossMode::Darken` also renders \
-                 the lost periphery as a dark void, which overstates the effect compared to how \
-                 the brain fills in missing peripheral vision; `FieldLossMode::Blur` is closer \
-                 to typically reported experience."
+                 vary the two independently. This simulation renders the lost periphery as \
+                 a dark void, which overstates the effect compared to how the brain fills in \
+                 missing peripheral vision; real experience is usually closer to a soft blur."
             }
             Filter::Cataract { .. } => {
                 "Combines lens-yellowing and scatter glare into one strength axis; does not \
@@ -1197,6 +1195,19 @@ mod tests {
             assert!(
                 !filter.limitations().is_empty(),
                 "{filter:?}: limitations() must not be empty"
+            );
+        }
+    }
+
+    #[test]
+    fn limitations_text_has_no_rust_identifiers() {
+        // limitations() は利用者向け UI にそのまま表示されるので、Rust の識別子
+        // (`FieldLossMode::Darken` 等)やバッククォートを含めない。
+        for filter in all_filter_variants() {
+            let text = filter.limitations();
+            assert!(
+                !text.contains("::") && !text.contains('`'),
+                "{filter:?}: limitations() must not contain Rust identifiers: {text}"
             );
         }
     }
