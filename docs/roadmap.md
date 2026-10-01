@@ -56,7 +56,7 @@ universal-experience（Flutter）との接続のみで、これは Flutter 環�
 - [x] `cargo publish` v0.5.0 — 公開済み（crates.io で確認、2026-07-23 時点の記載が陳腐化していたため訂正）
 - [x] `cargo publish` v0.6.0 — #164 監査キャンペーン（#165-171）反映版。公開済み
 - [x] `cargo publish` v0.6.1 — #182/#183 フィルタ単位メタデータ API（urgency / urgency_escalation / recommended_strength / citation / limitations）反映版。公開済み
-- [ ] `cargo publish` v0.6.2 — #192/#193 limitations() の文言から Rust 識別子を除去。`/publish` から手動
+- [x] `cargo publish` v0.6.2 — #192/#193 limitations() の文言から Rust 識別子を除去。公開済み（crates.io の sensus-core / sensus 0.6.2、GitHub Release v0.6.2）
 - [ ] universal-experience 接続方針メモ — #11
 
 ## 関連リポジトリ
