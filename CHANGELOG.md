@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-01
+
 ### Fixed
 
-- **fix: `Filter::limitations()` no longer leaks Rust identifiers into user-facing text**: the Glaucoma / MacularDegeneration / Hemianopia / TunnelVision entries mentioned `FieldLossMode::Darken` / `FieldLossMode::Blur` (in backticks) and "the default", which is meaningless to end users who see this text in an app UI. They now say in plain English, conditionally ("When the lost field is rendered as a dark void ..."), that a dark-void rendering overstates the effect compared to real experience (usually closer to a blurred, faded, or unnoticed region); the wording holds for either `FieldLossMode`. A test now asserts no `limitations()` text contains `::` or backticks TunnelVision's text additionally says "The strength setting" instead of the bare identifier `strength`, and its "how dark the lost periphery becomes" was corrected to "how strongly the lost periphery is affected (darkened or blurred)", since the old wording only held for Darken (kako-jun/sensus#192).
+- **fix: `Filter::limitations()` no longer leaks Rust identifiers into user-facing text**: the Glaucoma / MacularDegeneration / Hemianopia / TunnelVision entries mentioned `FieldLossMode::Darken` / `FieldLossMode::Blur` (in backticks) and "the default", which is meaningless to end users who see this text in an app UI. They now say in plain English, conditionally ("When the lost field is rendered as a dark void ..."), that a dark-void rendering overstates the effect compared to real experience (usually closer to a blurred, faded, or unnoticed region); the wording holds for either `FieldLossMode`. A test now asserts no `limitations()` text contains `::` or backticks. TunnelVision's text additionally says "The strength setting" instead of the bare identifier `strength`, and its "how dark the lost periphery becomes" was corrected to "how strongly the lost periphery is affected (darkened or blurred)", since the old wording only held for Darken (kako-jun/sensus#192).
 
 ## [0.6.1] - 2026-09-28
 
@@ -581,7 +583,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLAUDE.md` (Japanese, AI-facing internal notes). (#1)
 - MIT license. (#1)
 
-[Unreleased]: https://github.com/kako-jun/sensus/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/kako-jun/sensus/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/kako-jun/sensus/releases/tag/v0.6.2
 [0.6.1]: https://github.com/kako-jun/sensus/releases/tag/v0.6.1
 [0.6.0]: https://github.com/kako-jun/sensus/releases/tag/v0.6.0
 [0.5.0]: https://github.com/kako-jun/sensus/releases/tag/v0.5.0
